@@ -27,7 +27,7 @@ except ImportError:  # pragma: no cover - tqdm is optional.
 INPUT_DIR = r"D:\\01仕事\\05 ETC2.0分析\\生データ\\R7年2月_OUT1-2"  # folder with ZIPs
 OUTPUT_DIR = r"D:\\01仕事\\05 ETC2.0分析\\生データ\\out(1st)"       # output folder
 TERM_NAME = "R7_2"                                            # prefix for output
-ZIP_DIGIT_KEYS = ["523337", "523347", "523357", "523367"]     # substrings to match
+ZIP_DIGIT_KEYS = ["523357", "523347", "523450", "523440"]     # substrings to match
 INNER_CSV = "data.csv"                                        # CSV inside each ZIP
 ENC = "utf-8"                                                 # change to "cp932" if needed
 DELIM = ","                                                   # input CSV delimiter
