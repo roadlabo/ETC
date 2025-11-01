@@ -49,8 +49,6 @@ MIN_LON, MAX_LON = 120.0, 150.0
 MIN_LAT, MAX_LAT = 20.0, 50.0
 
 # Marker appearance
-START_MARKER = dict(color="red", fill_color="white", fill_opacity=1.0, radius=9, weight=3)
-END_MARKER = dict(color="blue", fill_color="blue", fill_opacity=1.0, radius=9, weight=2)
 PASS_MARKER = dict(color="black", fill_color="black", fill_opacity=1.0, radius=4, weight=1)
 LINE_STYLE = dict(color="black", weight=2, opacity=1.0)
 
@@ -131,6 +129,62 @@ def fmt_tooltip(time_value: object, speed_value: object) -> str:
         pass
 
     return f"GPS時刻: {time_text}\n速度: {speed_text}"
+
+
+def _add_start_marker(m: folium.Map, lat: float, lon: float, tooltip: str) -> None:
+    """Add start marker with red outlined circle and 'S' label."""
+
+    folium.CircleMarker(
+        location=(lat, lon),
+        radius=8,
+        color="red",
+        weight=2,
+        fill=True,
+        fill_color="white",
+        fill_opacity=1.0,
+        tooltip=tooltip,
+    ).add_to(m)
+    folium.Marker(
+        location=(lat, lon),
+        icon=folium.DivIcon(
+            icon_size=(20, 20),
+            icon_anchor=(10, 10),
+            html=(
+                '<div style="width:20px;height:20px;'
+                "line-height:20px;text-align:center;"
+                "font-weight:700;font-size:12px;"
+                'color:red;">S</div>'
+            ),
+        ),
+    ).add_to(m)
+
+
+def _add_goal_marker(m: folium.Map, lat: float, lon: float, tooltip: str) -> None:
+    """Add goal marker with blue outlined circle and 'G' label."""
+
+    folium.CircleMarker(
+        location=(lat, lon),
+        radius=8,
+        color="blue",
+        weight=2,
+        fill=True,
+        fill_color="white",
+        fill_opacity=1.0,
+        tooltip=tooltip,
+    ).add_to(m)
+    folium.Marker(
+        location=(lat, lon),
+        icon=folium.DivIcon(
+            icon_size=(20, 20),
+            icon_anchor=(10, 10),
+            html=(
+                '<div style="width:20px;height:20px;'
+                "line-height:20px;text-align:center;"
+                "font-weight:700;font-size:12px;"
+                'color:blue;">G</div>'
+            ),
+        ),
+    ).add_to(m)
 
 
 def discover_csv_files(directory: Path, pattern: str) -> List[Path]:
@@ -374,17 +428,17 @@ class RouteMapperApp:
         fmap = folium.Map(location=start_location, zoom_start=12, tiles="OpenStreetMap")
 
         for row in df.itertuples(index=False):
+            tooltip = fmt_tooltip(row.time, row.speed)
             if row.flag == 0:
-                style = dict(START_MARKER)
+                _add_start_marker(fmap, row.lat, row.lon, tooltip)
             elif row.flag == 1:
-                style = dict(END_MARKER)
+                _add_goal_marker(fmap, row.lat, row.lon, tooltip)
             else:
-                style = dict(PASS_MARKER)
-            folium.CircleMarker(
-                location=(row.lat, row.lon),
-                tooltip=fmt_tooltip(row.time, row.speed),
-                **style,
-            ).add_to(fmap)
+                folium.CircleMarker(
+                    location=(row.lat, row.lon),
+                    tooltip=tooltip,
+                    **PASS_MARKER,
+                ).add_to(fmap)
 
         for segment in chunk_route_points(
             df[["lon", "lat", "flag"]].itertuples(index=False, name=None)
