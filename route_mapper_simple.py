@@ -240,8 +240,8 @@ class RouteMapperApp:
 
         self.lbl_count = tk.Label(right, text="点数: -")
         self.lbl_range = tk.Label(right, text="GPS時刻: -")
-        self.lbl_type = tk.Label(right, text="種別: -")
-        self.lbl_use = tk.Label(right, text="用途: -")
+        self.lbl_type = tk.Label(right, text="自動車の種別: -")
+        self.lbl_use = tk.Label(right, text="自動車の用途: -")
 
         for widget in (self.lbl_count, self.lbl_range, self.lbl_type, self.lbl_use):
             widget.pack(anchor="w", pady=2)
@@ -273,10 +273,10 @@ class RouteMapperApp:
             self.on_select()
 
     def _set_info_defaults(self) -> None:
-        self.lbl_count.config(text="点数: 0")
+        self.lbl_count.config(text="データ点数: 0")
         self.lbl_range.config(text="GPS時刻: -")
-        self.lbl_type.config(text="種別: -")
-        self.lbl_use.config(text="用途: -")
+        self.lbl_type.config(text="自動車の種別: -")
+        self.lbl_use.config(text="自動車の用途: -")
 
     def update_info(self, csv_path: Optional[Path]) -> None:
         if not csv_path:
@@ -305,8 +305,8 @@ class RouteMapperApp:
         else:
             self.lbl_range.config(text="GPS時刻: -")
 
-        self.lbl_type.config(text=f"種別: {summarize_series(df.iloc[:, 0], TYPE_MAP)}")
-        self.lbl_use.config(text=f"用途: {summarize_series(df.iloc[:, 1], USE_MAP)}")
+        self.lbl_type.config(text=f"自動車の種別: {summarize_series(df.iloc[:, 0], TYPE_MAP)}")
+        self.lbl_use.config(text=f"自動車の用途: {summarize_series(df.iloc[:, 1], USE_MAP)}")
 
     def move_up(self) -> None:
         selection = self.listbox.curselection()
