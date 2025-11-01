@@ -16,7 +16,6 @@ import sys
 import time
 import zipfile
 from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -43,18 +42,54 @@ CSV_DIALECT = {
 }
 # ---------------------------------------------------------------------------
 
+class OpidWriterManager:
+    """Manage a single writable CSV handle for the current operation ID."""
 
-@dataclass
-class WriterHandle:
-    file_obj: io.TextIOWrapper
-    writer: csv.writer
-    header_written: bool
+    def __init__(self, output_dir: Path):
+        self._output_dir = output_dir
+        self._current_opid: Optional[str] = None
+        self._file_obj: Optional[io.TextIOWrapper] = None
+        self._writer: Optional[csv.writer] = None
 
-    def close(self) -> None:
-        try:
-            self.file_obj.close()
-        except Exception:
-            pass
+    def write_row(self, opid: str, header: List[str], row: List[str]) -> None:
+        if self._current_opid != opid:
+            self._switch_writer(opid, header)
+
+        if self._writer is None:
+            raise RuntimeError("Writer not initialized for operation ID")
+
+        self._writer.writerow(row)
+
+    def close_current(self) -> None:
+        if self._file_obj is not None:
+            try:
+                self._file_obj.close()
+            finally:
+                self._file_obj = None
+                self._writer = None
+                self._current_opid = None
+
+    def _switch_writer(self, opid: str, header: List[str]) -> None:
+        self.close_current()
+
+        output_path = self._output_dir / f"{TERM_NAME}_{opid}.csv"
+        file_size = output_path.stat().st_size if output_path.exists() else 0
+
+        file_obj = open(
+            output_path,
+            mode="a",
+            encoding=CSV_ENCODING,
+            newline="",
+            buffering=BUFFER_SIZE,
+        )
+        writer = csv.writer(file_obj, **CSV_DIALECT)
+
+        if WRITE_HEADER_PER_FILE and file_size == 0:
+            writer.writerow(header)
+
+        self._file_obj = file_obj
+        self._writer = writer
+        self._current_opid = opid
 
 
 def ensure_output_dir(path: Path) -> None:
@@ -76,44 +111,10 @@ def discover_zip_files(directory: Path, digit_keys: Iterable[str]) -> List[Path]
     return matching
 
 
-def get_writer(
-    opid: str,
-    header: List[str],
-    writers: Dict[str, WriterHandle],
-    output_dir: Path,
-) -> WriterHandle:
-    """Retrieve or create a CSV writer for the provided operation ID."""
-    if opid in writers:
-        return writers[opid]
-
-    output_path = output_dir / f"{TERM_NAME}_{opid}.csv"
-    file_exists = output_path.exists()
-    file_obj = open(
-        output_path,
-        mode="a",
-        encoding=CSV_ENCODING,
-        newline="",
-        buffering=BUFFER_SIZE,
-    )
-    writer = csv.writer(file_obj, **CSV_DIALECT)
-
-    handle = WriterHandle(file_obj=file_obj, writer=writer, header_written=file_exists)
-    if WRITE_HEADER_PER_FILE and not handle.header_written:
-        writer.writerow(header)
-        handle.header_written = True
-    writers[opid] = handle
-    return handle
-
-
-def close_writers(writers: Dict[str, WriterHandle]) -> None:
-    for handle in writers.values():
-        handle.close()
-
-
 def process_zip_file(
     zip_path: Path,
     output_dir: Path,
-    writers: Dict[str, WriterHandle],
+    writer_manager: OpidWriterManager,
     counters: Dict[str, int],
 ) -> Tuple[int, List[str]]:
     """Process a single ZIP file and return the number of rows processed and logs."""
@@ -178,8 +179,7 @@ def process_zip_file(
                         continue
 
                     try:
-                        writer_handle = get_writer(opid, header, writers, output_dir)
-                        writer_handle.writer.writerow(row)
+                        writer_manager.write_row(opid, header, row)
                     except Exception as exc:
                         log_messages.append(
                             f"ERROR: Failed writing row {row_number} for opid '{opid}' from {zip_path.name}: {exc}"
@@ -188,6 +188,7 @@ def process_zip_file(
 
                     row_count += 1
                     counters[opid] += 1
+            writer_manager.close_current()
     except zipfile.BadZipFile as exc:
         log_messages.append(f"ERROR: Unable to read ZIP {zip_path.name}: {exc}")
     return row_count, log_messages
@@ -212,7 +213,7 @@ def main() -> None:
     print(f"Discovered {total_zips} matching ZIP files in {input_dir}")
 
     start_time = time.time()
-    writers: Dict[str, WriterHandle] = {}
+    writer_manager = OpidWriterManager(output_dir)
     opid_counts: Dict[str, int] = defaultdict(int)
     total_rows = 0
 
@@ -235,7 +236,12 @@ def main() -> None:
             else:
                 print(message)
 
-            rows_processed, logs = process_zip_file(zip_path, output_dir, writers, opid_counts)
+            rows_processed, logs = process_zip_file(
+                zip_path,
+                output_dir,
+                writer_manager,
+                opid_counts,
+            )
             total_rows += rows_processed
 
             if progress_bar is not None:
@@ -266,7 +272,7 @@ def main() -> None:
     finally:
         if progress_bar is not None:
             progress_bar.close()
-        close_writers(writers)
+        writer_manager.close_current()
 
 
 if __name__ == "__main__":
