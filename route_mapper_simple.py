@@ -7,9 +7,9 @@ saved as ``map.html`` in the same directory. The HTML file is opened in
 the default web browser and refreshed on each selection.
 
 Usage:
-    python route_mapper_simple.py [directory] [pattern]
+    python route_mapper_simple.py [pattern]
 
-* ``directory`` defaults to the script's directory.
+* A folder selection dialog will prompt for the CSV directory.
 * ``pattern`` defaults to ``*.csv``.
 
 Dependencies: pandas, folium
@@ -25,7 +25,7 @@ from typing import Iterable, List, Optional, Tuple
 import pandas as pd
 import folium
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import Tk, filedialog, messagebox
 
 # CSV column indices (0-based)
 LON_COL = 1
@@ -227,8 +227,22 @@ class RouteMapperApp:
 
 
 def main(argv: Sequence[str]) -> None:
-    directory = Path(argv[1]).expanduser() if len(argv) > 1 else Path(__file__).resolve().parent
-    pattern = argv[2] if len(argv) > 2 else "*.csv"
+    pattern = argv[1] if len(argv) > 1 else "*.csv"
+
+    root = Tk()
+    root.withdraw()
+    selected = filedialog.askdirectory(
+        title="CSVフォルダを選択してください",
+        initialdir=r"D:\01仕事\05 ETC2.0分析\生データ",
+    )
+    root.destroy()
+
+    if not selected:
+        print("キャンセルされました。処理を終了します。")
+        sys.exit()
+
+    directory = Path(selected)
+    print(f"選択されたフォルダ: {directory}")
     directory = directory.resolve()
 
     if not directory.exists():
