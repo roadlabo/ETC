@@ -28,7 +28,7 @@ ETC2.0 解析のためのスクリプト集です。
    INPUT_DIR = r"D:\...\R7年2月_OUT1-2"
    OUTPUT_DIR = r"D:\...\out(1st)"
    TERM_NAME = "R7_2"
-   ZIP_DIGIT_KEYS = ["523337","523347","523357","523367"]
+   ZIP_DIGIT_KEYS = ["523357","523347","523450","523440"]
 ````
 
 2. 実行：
@@ -136,17 +136,4 @@ ETC/
 MIT License（予定）
 © RoadLabo
 
-```
-
----
-
-### 💡これをGitHubに反映するには
-1. GitHub のトップページで **「README.md」** をクリック  
-2. 右上の ✏️（Edit）を押す  
-3. 上記全文を貼り付けて **「Commit changes」**
-
----
-
-希望があれば、このREADMEの最初に**プロジェクトロゴ（例：ETC2.0 MAPPERアイコン）**を追加したMarkdown版も作成します。  
-つけますか？
 ```
