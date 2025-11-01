@@ -28,8 +28,8 @@ import tkinter as tk
 from tkinter import Tk, filedialog, messagebox
 
 # CSV column indices (0-based)
-LON_COL = 1
-LAT_COL = 2
+LON_COL = 15
+LAT_COL = 16
 FLAG_COL = 12
 
 # Geographic filter for Japan
