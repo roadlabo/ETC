@@ -16,7 +16,7 @@ INPUT_DIR = r"D:\\...\\R7年2月_OUT1-2"    # ZIP群の場所
 OUTPUT_DIR = r"D:\\...\\out(1st)"          # 出力先
 TERM_NAME = "R7_2"
 INNER_CSV = "data.csv"                  # ZIP内部の対象CSV名
-ZIP_DIGIT_KEYS = ["523337", "523347", "523357", "523367"]  # ZIP名フィルタ
+ZIP_DIGIT_KEYS = ["523357", "523347", "523450", "523440"]  # ZIP名フィルタ
 
 # CSV I/O
 ENCODING = "utf-8"    # 日本語CSVなら cp932 でも可
