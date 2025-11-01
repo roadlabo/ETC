@@ -163,11 +163,6 @@ def read_route_data(csv_path: Path) -> pd.DataFrame:
     df["flag"] = pd.to_numeric(df["flag"], errors="coerce")
     df["speed"] = pd.to_numeric(df["speed"], errors="coerce")
 
-    print("[DEBUG]", csv_path.name)
-    print("lon/lat head:", df["lon"].head().tolist(), df["lat"].head().tolist())
-    print("lon range:", df["lon"].min(), "→", df["lon"].max())
-    print("lat range:", df["lat"].min(), "→", df["lat"].max())
-
     if (
         df["lon"].between(20, 50).mean() > 0.8
         and df["lat"].between(120, 150).mean() > 0.8
