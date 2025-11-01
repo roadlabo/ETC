@@ -51,9 +51,9 @@ class OpidWriterManager:
         self._file_obj: Optional[io.TextIOWrapper] = None
         self._writer: Optional[csv.writer] = None
 
-    def write_row(self, opid: str, header: List[str], row: List[str]) -> None:
+    def write_row(self, opid: str, row: List[str]) -> None:
         if self._current_opid != opid:
-            self._switch_writer(opid, header)
+            self._switch_writer(opid)
 
         if self._writer is None:
             raise RuntimeError("Writer not initialized for operation ID")
@@ -69,11 +69,10 @@ class OpidWriterManager:
                 self._writer = None
                 self._current_opid = None
 
-    def _switch_writer(self, opid: str, header: List[str]) -> None:
+    def _switch_writer(self, opid: str) -> None:
         self.close_current()
 
         output_path = self._output_dir / f"{TERM_NAME}_{opid}.csv"
-        file_size = output_path.stat().st_size if output_path.exists() else 0
 
         file_obj = open(
             output_path,
@@ -84,9 +83,7 @@ class OpidWriterManager:
         )
         writer = csv.writer(file_obj, **CSV_DIALECT)
 
-        if WRITE_HEADER_PER_FILE and file_size == 0:
-            writer.writerow(header)
-
+        # ``data.csv`` does not contain a header row, so no header is written here.
         self._file_obj = file_obj
         self._writer = writer
         self._current_opid = opid
@@ -138,7 +135,6 @@ def process_zip_file(
                     errors="strict",
                 )
                 reader = csv.reader(text_stream, **CSV_DIALECT)
-                header: Optional[List[str]] = None
                 row_number = 0
 
                 while True:
@@ -160,16 +156,6 @@ def process_zip_file(
                         continue
 
                     row_number += 1
-                    if row_number == 1:
-                        header = row
-                        continue
-
-                    if header is None:
-                        log_messages.append(
-                            f"ERROR: Missing header in {zip_path.name}; skipping remaining rows."
-                        )
-                        break
-
                     try:
                         opid = row[3].strip()
                     except IndexError:
@@ -179,7 +165,7 @@ def process_zip_file(
                         continue
 
                     try:
-                        writer_manager.write_row(opid, header, row)
+                        writer_manager.write_row(opid, row)
                     except Exception as exc:
                         log_messages.append(
                             f"ERROR: Failed writing row {row_number} for opid '{opid}' from {zip_path.name}: {exc}"
