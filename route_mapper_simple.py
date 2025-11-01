@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import math
 import sys
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
@@ -31,7 +30,7 @@ import webbrowser
 from tkinter import Tk, filedialog, messagebox, ttk
 
 BROWSER_OPENED = False
-AUTO_REFRESH_SECONDS = 2  # 0 to disable auto reload in map.html
+AUTO_REFRESH_SECONDS = 0  # disable periodic auto refresh
 
 # CSV column indices (0-based)
 LON_COL = 15    # 16列目（経度）
@@ -199,32 +198,8 @@ def chunk_route_points(points: Iterable[Tuple[float, float, int]]) -> Iterable[L
 
 
 def ensure_auto_refresh(out_path: Path) -> None:
-    """Ensure map HTML contains a meta refresh tag when enabled."""
-
-    if AUTO_REFRESH_SECONDS <= 0:
-        return
-
-    try:
-        html = out_path.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return
-
-    tag = "<meta http-equiv='refresh' content='{}'>".format(AUTO_REFRESH_SECONDS)
-    refresh_re = re.compile(r'<meta[^>]*http-equiv=["\']refresh["\'][^>]*>', re.IGNORECASE)
-
-    if refresh_re.search(html):
-        html = refresh_re.sub(tag, html)
-    else:
-        head_close_re = re.compile(r"</head>", re.IGNORECASE)
-        if head_close_re.search(html):
-            html = head_close_re.sub(f"  {tag}\n</head>", html, count=1)
-        else:
-            html = f"{html}\n{tag}\n"
-
-    try:
-        out_path.write_text(html, encoding="utf-8")
-    except OSError:
-        pass
+    """Deprecated: auto-refresh disabled."""
+    return
 
 
 class RouteMapperApp:
@@ -418,17 +393,27 @@ class RouteMapperApp:
 
         out_path = Path(__file__).with_name("map.html")
         fmap.save(out_path.as_posix())
-        ensure_auto_refresh(out_path)
+
+        # disable old auto-refresh call
+        # ensure_auto_refresh(out_path)
+
         self.status_var.set(f"Saved map for {csv_path.name} -> {out_path.name}")
 
+        # ファイルの更新時刻をURLにクエリとして付与
+        version = int(out_path.stat().st_mtime)
+        url = out_path.as_uri() + f"?v={version}"
+
         global BROWSER_OPENED
-        if not BROWSER_OPENED:
-            try:
-                webbrowser.open(out_path.as_uri(), new=1)
-            except Exception:
-                messagebox.showwarning("Browser", "Could not open map in web browser.")
-            else:
+        try:
+            if not BROWSER_OPENED:
+                # 初回のみ新しいタブで開く
+                webbrowser.open(url, new=1)
                 BROWSER_OPENED = True
+            else:
+                # 以降は同じタブを再読み込み（新しいタブを作らない）
+                webbrowser.open(url, new=0)
+        except Exception:
+            messagebox.showwarning("Browser", "Could not open or refresh map in web browser.")
 
     # ------------------------------------------------------------------
     # Tk mainloop
