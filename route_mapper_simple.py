@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import math
 import sys
-from collections import Counter
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
@@ -28,9 +28,10 @@ import folium
 import pandas as pd
 import tkinter as tk
 import webbrowser
-from tkinter import Tk, filedialog, messagebox
+from tkinter import Tk, filedialog, messagebox, ttk
 
 BROWSER_OPENED = False
+AUTO_REFRESH_SECONDS = 2  # 0 to disable auto reload in map.html
 
 # CSV column indices (0-based)
 LON_COL = 15    # 16列目（経度）
@@ -89,10 +90,10 @@ def fmt_range(dmin: Optional[datetime], dmax: Optional[datetime]) -> str:
     )
 
 
-def summarize_series(series: Iterable[object], mapping: dict[int, str]) -> str:
-    """Summarize categorical series values with mapping."""
+def summarize_set(series: Iterable[object], mapping: dict[int, str]) -> str:
+    """Return comma-separated unique labels mapped from ``series``."""
 
-    counts: Counter[str] = Counter()
+    labels: set[str] = set()
     for value in series:
         label = "その他"
         try:
@@ -101,12 +102,12 @@ def summarize_series(series: Iterable[object], mapping: dict[int, str]) -> str:
             ivalue = None
         if ivalue in mapping:
             label = mapping[ivalue]
-        counts[label] += 1
+        labels.add(label)
 
-    if not counts:
+    if not labels:
         return "-"
 
-    return "、".join(f"{label}:{counts[label]}" for label in sorted(counts))
+    return ", ".join(sorted(labels))
 
 
 def fmt_tooltip(time_value: object, speed_value: object) -> str:
@@ -202,53 +203,95 @@ def chunk_route_points(points: Iterable[Tuple[float, float, int]]) -> Iterable[L
         yield segment
 
 
+def ensure_auto_refresh(out_path: Path) -> None:
+    """Ensure map HTML contains a meta refresh tag when enabled."""
+
+    if AUTO_REFRESH_SECONDS <= 0:
+        return
+
+    try:
+        html = out_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return
+
+    tag = "<meta http-equiv='refresh' content='{}'>".format(AUTO_REFRESH_SECONDS)
+    refresh_re = re.compile(r'<meta[^>]*http-equiv=["\']refresh["\'][^>]*>', re.IGNORECASE)
+
+    if refresh_re.search(html):
+        html = refresh_re.sub(tag, html)
+    else:
+        head_close_re = re.compile(r"</head>", re.IGNORECASE)
+        if head_close_re.search(html):
+            html = head_close_re.sub(f"  {tag}\n</head>", html, count=1)
+        else:
+            html = f"{html}\n{tag}\n"
+
+    try:
+        out_path.write_text(html, encoding="utf-8")
+    except OSError:
+        pass
+
+
 class RouteMapperApp:
     def __init__(self, directory: Path, pattern: str = "*.csv") -> None:
         self.directory = directory
         self.pattern = pattern
         self.root = tk.Tk()
         self.root.title("CSV選択")
+        self.root.columnconfigure(0, weight=0)
+        self.root.columnconfigure(1, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        self.root.rowconfigure(1, weight=0)
 
-        left = tk.Frame(self.root)
-        left.pack(side="left", fill="both", expand=False)
-
-        right = tk.Frame(self.root, padx=8, pady=8)
-        right.pack(side="right", fill="both", expand=True)
+        left = tk.Frame(self.root, padx=6, pady=6)
+        left.grid(row=0, column=0, sticky="nsew")
+        left.columnconfigure(0, weight=1)
+        left.rowconfigure(0, weight=1)
 
         list_frame = tk.Frame(left)
-        list_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        list_frame.grid(row=0, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
 
-        self.listbox = tk.Listbox(list_frame, width=50, height=20, exportselection=False)
-        self.listbox.pack(side="left", fill="both", expand=True)
+        self.listbox = tk.Listbox(list_frame, width=32, height=20, exportselection=False)
+        self.listbox.grid(row=0, column=0, sticky="nsew")
         self.listbox.bind("<<ListboxSelect>>", self.on_select)
 
         scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.listbox.yview)
-        scrollbar.pack(side="right", fill="y")
+        scrollbar.grid(row=0, column=1, sticky="ns")
         self.listbox.configure(yscrollcommand=scrollbar.set)
 
-        btn_frame = tk.Frame(left)
-        btn_frame.pack(fill="x", padx=10, pady=(0, 10))
+        right = ttk.Frame(self.root, padding=(6, 6))
+        right.grid(row=0, column=1, sticky="nsew")
+        right.columnconfigure(0, weight=1)
 
-        self.up_button = tk.Button(btn_frame, text="▲上へ", command=self.move_up)
-        self.up_button.pack(side="left", fill="x", expand=True)
+        info_title = ttk.Label(right, text="選択中CSVの情報", font=("Segoe UI", 10, "bold"))
+        info_title.grid(row=0, column=0, sticky="w")
 
-        self.down_button = tk.Button(btn_frame, text="▼下へ", command=self.move_down)
-        self.down_button.pack(side="left", fill="x", expand=True, padx=(8, 0))
+        self.lbl_count = ttk.Label(right, text="点数: -")
+        self.lbl_range = ttk.Label(right, text="GPS時刻: -")
+        self.lbl_type = ttk.Label(right, text="種別: -")
+        self.lbl_use = ttk.Label(right, text="用途: -")
 
-        info_title = tk.Label(right, text="選択中CSVの情報", font=("Segoe UI", 10, "bold"))
-        info_title.pack(anchor="w")
+        for idx, widget in enumerate((self.lbl_count, self.lbl_range, self.lbl_type, self.lbl_use), start=1):
+            widget.grid(row=idx, column=0, sticky="w", pady=2)
 
-        self.lbl_count = tk.Label(right, text="点数: -")
-        self.lbl_range = tk.Label(right, text="GPS時刻: -")
-        self.lbl_type = tk.Label(right, text="自動車の種別: -")
-        self.lbl_use = tk.Label(right, text="自動車の用途: -")
-
-        for widget in (self.lbl_count, self.lbl_range, self.lbl_type, self.lbl_use):
-            widget.pack(anchor="w", pady=2)
+        right.rowconfigure(len((self.lbl_count, self.lbl_range, self.lbl_type, self.lbl_use)) + 1, weight=1)
 
         self.status_var = tk.StringVar(value="CSVファイルを選択してください。")
-        status_label = tk.Label(self.root, textvariable=self.status_var, anchor="w")
-        status_label.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
+        status_label = ttk.Label(right, textvariable=self.status_var, anchor="w")
+        status_label.grid(row=6, column=0, sticky="ew", pady=(8, 0))
+
+        btn_frame = tk.Frame(self.root, padx=6, pady=4)
+        btn_frame.grid(row=1, column=0, columnspan=2, sticky="ew")
+        btn_frame.columnconfigure(0, weight=1)
+        btn_frame.columnconfigure(1, weight=1)
+
+        self.up_button = tk.Button(btn_frame, text="▲上へ", command=self.move_up)
+        self.up_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+
+        self.down_button = tk.Button(btn_frame, text="▼下へ", command=self.move_down)
+        self.down_button.grid(row=0, column=1, sticky="ew")
 
         self.files: List[Path] = []
         self.refresh_files()
@@ -273,10 +316,10 @@ class RouteMapperApp:
             self.on_select()
 
     def _set_info_defaults(self) -> None:
-        self.lbl_count.config(text="データ点数: 0")
+        self.lbl_count.config(text="点数: 0")
         self.lbl_range.config(text="GPS時刻: -")
-        self.lbl_type.config(text="自動車の種別: -")
-        self.lbl_use.config(text="自動車の用途: -")
+        self.lbl_type.config(text="種別: -")
+        self.lbl_use.config(text="用途: -")
 
     def update_info(self, csv_path: Optional[Path]) -> None:
         if not csv_path:
@@ -305,8 +348,8 @@ class RouteMapperApp:
         else:
             self.lbl_range.config(text="GPS時刻: -")
 
-        self.lbl_type.config(text=f"自動車の種別: {summarize_series(df.iloc[:, 0], TYPE_MAP)}")
-        self.lbl_use.config(text=f"自動車の用途: {summarize_series(df.iloc[:, 1], USE_MAP)}")
+        self.lbl_type.config(text=f"種別: {summarize_set(df.iloc[:, 0], TYPE_MAP)}")
+        self.lbl_use.config(text=f"用途: {summarize_set(df.iloc[:, 1], USE_MAP)}")
 
     def move_up(self) -> None:
         selection = self.listbox.curselection()
@@ -380,6 +423,7 @@ class RouteMapperApp:
 
         out_path = Path(__file__).with_name("map.html")
         fmap.save(out_path.as_posix())
+        ensure_auto_refresh(out_path)
         self.status_var.set(f"Saved map for {csv_path.name} -> {out_path.name}")
 
         global BROWSER_OPENED
