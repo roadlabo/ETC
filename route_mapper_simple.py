@@ -28,9 +28,12 @@ import tkinter as tk
 from tkinter import Tk, filedialog, messagebox
 
 # CSV column indices (0-based)
-LON_COL = 15
-LAT_COL = 14
-FLAG_COL = 12
+LON_COL = 15   # 16列目（経度）
+LAT_COL = 14   # 15列目（緯度）
+FLAG_COL = 12  # 13列目（フラグ）
+
+# Delimiter for CSV files
+DELIM = ","
 
 # Geographic filter for Japan
 MIN_LON, MAX_LON = 120.0, 150.0
@@ -58,16 +61,27 @@ def read_route_data(csv_path: Path) -> pd.DataFrame:
         csv_path,
         header=None,
         usecols=[LON_COL, LAT_COL, FLAG_COL],
-        dtype=str,
+        dtype=float,
         engine="c",
+        sep=DELIM,
     )
+
+    # Ensure column order matches the original indices before naming
+    df = df[[LON_COL, LAT_COL, FLAG_COL]].copy()
     df.columns = ["lon", "lat", "flag"]
-    df[["lon", "lat"]] = df[["lon", "lat"]].apply(pd.to_numeric, errors="coerce")
+
     print("[DEBUG]", csv_path.name)
     print("lon/lat head:", df["lon"].head().tolist(), df["lat"].head().tolist())
     print("lon range:", df["lon"].min(), "→", df["lon"].max())
     print("lat range:", df["lat"].min(), "→", df["lat"].max())
-    df["flag"] = pd.to_numeric(df["flag"], errors="coerce")
+
+    # Swap lon/lat automatically if they appear reversed
+    if (
+        df["lon"].between(20, 50).mean() > 0.8
+        and df["lat"].between(120, 150).mean() > 0.8
+    ):
+        df[["lon", "lat"]] = df[["lat", "lon"]]
+
     df = df.dropna(subset=["lon", "lat", "flag"])
     # Filter to Japan bounds
     df = df[(df["lon"].between(MIN_LON, MAX_LON)) & (df["lat"].between(MIN_LAT, MAX_LAT))]
