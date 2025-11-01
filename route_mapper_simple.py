@@ -1,10 +1,10 @@
 """Simple standalone route mapper using Tkinter and Folium.
 
 This script scans a target directory for CSV files and lets the user
-select one via a minimal Tkinter listbox UI. When a file is selected,
-its route is rendered to a Folium map (OpenStreetMap background) and
-saved as ``map.html`` in the same directory. The HTML file is opened in
-the default web browser and refreshed on each selection.
+select one via a Tkinter listbox UI. When a file is selected, its route
+is rendered to a Folium map (OpenStreetMap background) and saved as
+``map.html`` beside this script. The browser tab is opened only once on
+the first render to avoid duplicate tabs.
 
 Usage:
     python route_mapper_simple.py [pattern]
@@ -17,20 +17,29 @@ Dependencies: pandas, folium
 
 from __future__ import annotations
 
+import math
 import sys
-import webbrowser
+from collections import Counter
+from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
-import pandas as pd
 import folium
+import pandas as pd
 import tkinter as tk
+import webbrowser
 from tkinter import Tk, filedialog, messagebox
 
+BROWSER_OPENED = False
+
 # CSV column indices (0-based)
-LON_COL = 15   # 16列目（経度）
-LAT_COL = 14   # 15列目（緯度）
-FLAG_COL = 12  # 13列目（フラグ）
+LON_COL = 15    # 16列目（経度）
+LAT_COL = 14    # 15列目（緯度）
+FLAG_COL = 12   # 13列目（フラグ）
+TYPE_COL = 4    # 種別
+USE_COL = 5     # 用途
+TIME_COL = 6    # GPS時刻
+SPEED_COL = 18  # 速度
 
 # Delimiter for CSV files
 DELIM = ","
@@ -46,6 +55,84 @@ PASS_MARKER = dict(color="black", fill_color="black", fill_opacity=1.0, radius=4
 LINE_STYLE = dict(color="black", weight=2, opacity=1.0)
 
 
+# Mapping tables for info panel
+TYPE_MAP = {0: "軽二輪", 1: "大型", 2: "普通", 3: "小型", 4: "軽自動車"}
+USE_MAP = {0: "未使用", 1: "乗用", 2: "貨物", 3: "特殊", 4: "乗合"}
+
+
+def parse_gps_time(val: object) -> Optional[datetime]:
+    """Parse GPS timestamp strings to :class:`datetime` objects."""
+
+    s = str(val).strip()
+    if not s or not s.isdigit():
+        return None
+    try:
+        if len(s) >= 14:
+            return datetime.strptime(s[:14], "%Y%m%d%H%M%S")
+        if len(s) >= 12:
+            return datetime.strptime(s[:12], "%Y%m%d%H%M")
+        if len(s) >= 10:
+            return datetime.strptime(s[:10], "%Y%m%d%H")
+    except ValueError:
+        return None
+    return None
+
+
+def fmt_range(dmin: Optional[datetime], dmax: Optional[datetime]) -> str:
+    """Return formatted range string for two datetimes."""
+
+    if not dmin or not dmax:
+        return "-"
+    return (
+        f"{dmin.year}年{dmin.month}月{dmin.day}日{dmin.hour}時{dmin.minute}分"
+        f"～{dmax.month}月{dmax.day}日{dmax.hour}時{dmax.minute}分"
+    )
+
+
+def summarize_series(series: Iterable[object], mapping: dict[int, str]) -> str:
+    """Summarize categorical series values with mapping."""
+
+    counts: Counter[str] = Counter()
+    for value in series:
+        label = "その他"
+        try:
+            ivalue = int(float(value))
+        except (TypeError, ValueError):
+            ivalue = None
+        if ivalue in mapping:
+            label = mapping[ivalue]
+        counts[label] += 1
+
+    if not counts:
+        return "-"
+
+    return "、".join(f"{label}:{counts[label]}" for label in sorted(counts))
+
+
+def fmt_tooltip(time_value: object, speed_value: object) -> str:
+    """Return tooltip text for folium markers."""
+
+    dt_obj = parse_gps_time(time_value)
+    if dt_obj:
+        time_text = (
+            f"{dt_obj.year}年{dt_obj.month}月{dt_obj.day}日"
+            f"{dt_obj.hour}時{dt_obj.minute}分"
+        )
+    else:
+        time_text = "-"
+
+    speed_text = "-"
+    try:
+        speed_float = float(speed_value)
+        if math.isnan(speed_float):
+            raise ValueError
+        speed_text = f"{int(round(speed_float))}km/h"
+    except (TypeError, ValueError):
+        pass
+
+    return f"GPS時刻: {time_text}\n速度: {speed_text}"
+
+
 def discover_csv_files(directory: Path, pattern: str) -> List[Path]:
     """Return a sorted list of CSV files matching ``pattern`` inside ``directory``."""
 
@@ -55,27 +142,31 @@ def discover_csv_files(directory: Path, pattern: str) -> List[Path]:
 
 
 def read_route_data(csv_path: Path) -> pd.DataFrame:
-    """Read lon/lat/flag columns from the given CSV path."""
+    """Read required columns from the given CSV path."""
 
+    usecols = [LON_COL, LAT_COL, FLAG_COL, TYPE_COL, USE_COL, TIME_COL, SPEED_COL]
     df = pd.read_csv(
         csv_path,
         header=None,
-        usecols=[LON_COL, LAT_COL, FLAG_COL],
-        dtype=float,
+        usecols=usecols,
+        dtype=str,
         engine="c",
         sep=DELIM,
     )
 
-    # Ensure column order matches the original indices before naming
-    df = df[[LON_COL, LAT_COL, FLAG_COL]].copy()
-    df.columns = ["lon", "lat", "flag"]
+    df = df[usecols].copy()
+    df.columns = ["lon", "lat", "flag", "type", "use", "time", "speed"]
+
+    df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
+    df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
+    df["flag"] = pd.to_numeric(df["flag"], errors="coerce")
+    df["speed"] = pd.to_numeric(df["speed"], errors="coerce")
 
     print("[DEBUG]", csv_path.name)
     print("lon/lat head:", df["lon"].head().tolist(), df["lat"].head().tolist())
     print("lon range:", df["lon"].min(), "→", df["lon"].max())
     print("lat range:", df["lat"].min(), "→", df["lat"].max())
 
-    # Swap lon/lat automatically if they appear reversed
     if (
         df["lon"].between(20, 50).mean() > 0.8
         and df["lat"].between(120, 150).mean() > 0.8
@@ -83,7 +174,6 @@ def read_route_data(csv_path: Path) -> pd.DataFrame:
         df[["lon", "lat"]] = df[["lat", "lon"]]
 
     df = df.dropna(subset=["lon", "lat", "flag"])
-    # Filter to Japan bounds
     df = df[(df["lon"].between(MIN_LON, MAX_LON)) & (df["lat"].between(MIN_LAT, MAX_LAT))]
     df["flag"] = df["flag"].astype(int)
     return df
@@ -117,35 +207,50 @@ class RouteMapperApp:
         self.directory = directory
         self.pattern = pattern
         self.root = tk.Tk()
-        self.root.title("Route Mapper")
-        self.root.resizable(False, False)
+        self.root.title("CSV選択")
 
-        self.listbox = tk.Listbox(self.root, width=50, height=20, exportselection=False)
-        self.listbox.grid(row=0, column=0, rowspan=3, sticky="nsew", padx=(10, 0), pady=10)
+        left = tk.Frame(self.root)
+        left.pack(side="left", fill="both", expand=False)
+
+        right = tk.Frame(self.root, padx=8, pady=8)
+        right.pack(side="right", fill="both", expand=True)
+
+        list_frame = tk.Frame(left)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self.listbox = tk.Listbox(list_frame, width=50, height=20, exportselection=False)
+        self.listbox.pack(side="left", fill="both", expand=True)
         self.listbox.bind("<<ListboxSelect>>", self.on_select)
 
-        scrollbar = tk.Scrollbar(self.root, orient=tk.VERTICAL, command=self.listbox.yview)
-        scrollbar.grid(row=0, column=1, rowspan=3, sticky="ns", pady=10)
+        scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.listbox.yview)
+        scrollbar.pack(side="right", fill="y")
         self.listbox.configure(yscrollcommand=scrollbar.set)
 
-        self.up_button = tk.Button(self.root, text="▲", width=4, command=self.move_up)
-        self.up_button.grid(row=0, column=2, sticky="ew", padx=10, pady=(10, 0))
+        btn_frame = tk.Frame(left)
+        btn_frame.pack(fill="x", padx=10, pady=(0, 10))
 
-        self.down_button = tk.Button(self.root, text="▼", width=4, command=self.move_down)
-        self.down_button.grid(row=1, column=2, sticky="ew", padx=10)
+        self.up_button = tk.Button(btn_frame, text="▲上へ", command=self.move_up)
+        self.up_button.pack(side="left", fill="x", expand=True)
 
-        self.refresh_button = tk.Button(self.root, text="🔄", width=4, command=self.refresh_files)
-        self.refresh_button.grid(row=2, column=2, sticky="ew", padx=10, pady=(0, 10))
+        self.down_button = tk.Button(btn_frame, text="▼下へ", command=self.move_down)
+        self.down_button.pack(side="left", fill="x", expand=True, padx=(8, 0))
 
-        self.status_var = tk.StringVar(value="Select a CSV file.")
+        info_title = tk.Label(right, text="選択中CSVの情報", font=("Segoe UI", 10, "bold"))
+        info_title.pack(anchor="w")
+
+        self.lbl_count = tk.Label(right, text="点数: -")
+        self.lbl_range = tk.Label(right, text="GPS時刻: -")
+        self.lbl_type = tk.Label(right, text="種別: -")
+        self.lbl_use = tk.Label(right, text="用途: -")
+
+        for widget in (self.lbl_count, self.lbl_range, self.lbl_type, self.lbl_use):
+            widget.pack(anchor="w", pady=2)
+
+        self.status_var = tk.StringVar(value="CSVファイルを選択してください。")
         status_label = tk.Label(self.root, textvariable=self.status_var, anchor="w")
-        status_label.grid(row=3, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 10))
-
-        self.root.grid_columnconfigure(0, weight=1)
-        self.root.grid_rowconfigure(0, weight=1)
+        status_label.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
 
         self.files: List[Path] = []
-        self.map_path = self.directory / "map.html"
         self.refresh_files()
 
     # ------------------------------------------------------------------
@@ -159,12 +264,49 @@ class RouteMapperApp:
 
         if not self.files:
             self.status_var.set("No CSV files found.")
+            self.update_info(None)
         else:
             self.status_var.set("Select a CSV file.")
             self.listbox.selection_clear(0, tk.END)
             self.listbox.activate(0)
             self.listbox.selection_set(0)
             self.on_select()
+
+    def _set_info_defaults(self) -> None:
+        self.lbl_count.config(text="点数: 0")
+        self.lbl_range.config(text="GPS時刻: -")
+        self.lbl_type.config(text="種別: -")
+        self.lbl_use.config(text="用途: -")
+
+    def update_info(self, csv_path: Optional[Path]) -> None:
+        if not csv_path:
+            self._set_info_defaults()
+            return
+
+        try:
+            df = pd.read_csv(
+                csv_path,
+                header=None,
+                sep=DELIM,
+                usecols=[TYPE_COL, USE_COL, TIME_COL],
+                engine="c",
+                dtype=str,
+            )
+        except Exception:
+            self._set_info_defaults()
+            return
+
+        self.lbl_count.config(text=f"点数: {len(df)}")
+
+        times = [parse_gps_time(value) for value in df.iloc[:, 2].tolist()]
+        times = [t for t in times if t]
+        if times:
+            self.lbl_range.config(text=f"GPS時刻: {fmt_range(min(times), max(times))}")
+        else:
+            self.lbl_range.config(text="GPS時刻: -")
+
+        self.lbl_type.config(text=f"種別: {summarize_series(df.iloc[:, 0], TYPE_MAP)}")
+        self.lbl_use.config(text=f"用途: {summarize_series(df.iloc[:, 1], USE_MAP)}")
 
     def move_up(self) -> None:
         selection = self.listbox.curselection()
@@ -194,13 +336,16 @@ class RouteMapperApp:
     def on_select(self, _event: Optional[tk.Event] = None) -> None:
         selection = self.listbox.curselection()
         if not selection:
+            self.update_info(None)
             return
         index = selection[0]
         csv_path = self.files[index]
+        self.update_info(csv_path)
         try:
             df = read_route_data(csv_path)
         except Exception as exc:  # GUI feedback only
             messagebox.showerror("Read error", f"Failed to load CSV:\n{csv_path}\n\n{exc}")
+            self.status_var.set(f"{csv_path.name}: failed to load")
             return
 
         if df.empty:
@@ -215,27 +360,36 @@ class RouteMapperApp:
         start_location = [df.iloc[0]["lat"], df.iloc[0]["lon"]]
         fmap = folium.Map(location=start_location, zoom_start=12, tiles="OpenStreetMap")
 
-        for lon, lat, flag in df[["lon", "lat", "flag"]].itertuples(index=False, name=None):
-            if flag == 0:
+        for row in df.itertuples(index=False):
+            if row.flag == 0:
                 style = dict(START_MARKER)
-            elif flag == 1:
+            elif row.flag == 1:
                 style = dict(END_MARKER)
             else:
                 style = dict(PASS_MARKER)
-            folium.CircleMarker(location=(lat, lon), **style).add_to(fmap)
+            folium.CircleMarker(
+                location=(row.lat, row.lon),
+                tooltip=fmt_tooltip(row.time, row.speed),
+                **style,
+            ).add_to(fmap)
 
-        for segment in chunk_route_points(df[["lon", "lat", "flag"]].itertuples(index=False, name=None)):
+        for segment in chunk_route_points(
+            df[["lon", "lat", "flag"]].itertuples(index=False, name=None)
+        ):
             folium.PolyLine(segment, **LINE_STYLE).add_to(fmap)
 
-        fmap.save(self.map_path)
-        self.status_var.set(f"Saved map for {csv_path.name} -> {self.map_path.name}")
-        self.open_map()
+        out_path = Path(__file__).with_name("map.html")
+        fmap.save(out_path.as_posix())
+        self.status_var.set(f"Saved map for {csv_path.name} -> {out_path.name}")
 
-    def open_map(self) -> None:
-        try:
-            webbrowser.open(self.map_path.as_uri(), new=0, autoraise=True)
-        except Exception:
-            messagebox.showwarning("Browser", "Could not open map in web browser.")
+        global BROWSER_OPENED
+        if not BROWSER_OPENED:
+            try:
+                webbrowser.open(out_path.as_uri(), new=1)
+            except Exception:
+                messagebox.showwarning("Browser", "Could not open map in web browser.")
+            else:
+                BROWSER_OPENED = True
 
     # ------------------------------------------------------------------
     # Tk mainloop
