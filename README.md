@@ -24,7 +24,7 @@ ETC2.0 解析のためのスクリプト集です。
 ### ▶ 実行方法
 
 1. スクリプト先頭の設定を自分の環境に合わせて編集：
-   ```python
+```python
    INPUT_DIR = r"D:\...\R7年2月_OUT1-2"
    OUTPUT_DIR = r"D:\...\out(1st)"
    TERM_NAME = "R7_2"
