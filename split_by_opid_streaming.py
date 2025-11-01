@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 import sys
 import time
 import zipfile
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Set
+from typing import Callable, Iterable, List, Optional, Set, Tuple
 
 try:  # Optional dependency for friendly progress bars.
     from tqdm import tqdm  # type: ignore
@@ -35,6 +36,13 @@ SHOW_PROGRESS = True                                           # use tqdm if ava
 WRITE_HEADER_PER_FILE = True                                   # keep CSV headers
 BUFFER_SIZE = 1 << 20                                          # 1 MiB write buffer
 
+# --- Final sort settings ---
+DO_FINAL_SORT = True
+TIMESTAMP_COL = 6
+SORT_GLOB = f"{TERM_NAME}_*.csv"
+CHUNK_ROWS = 200_000
+TEMP_SORT_DIR = "_sort_tmp"
+
 # ---------------------------------------------------------------------------
 
 CsvRow = List[str]
@@ -45,6 +53,214 @@ def ensure_output_dir(path: Path) -> None:
     """Ensure the output directory exists."""
 
     path.mkdir(parents=True, exist_ok=True)
+
+
+def _parse_ts_to_int(s: str) -> int:
+    """Convert timestamp strings into sortable integers."""
+
+    s = (s or "").strip()
+    if not s.isdigit():
+        return 10**20
+    if len(s) >= 14:
+        s = s[:14]
+    elif len(s) == 12:
+        s = f"{s}00"
+    else:
+        return 10**20
+    try:
+        return int(s)
+    except Exception:
+        return 10**20
+
+
+def _split_to_sorted_chunks(
+    src: Path,
+    temp_dir: Path,
+    encoding: str,
+    delim: str,
+    ts_col: int,
+    chunk_rows: int,
+) -> Tuple[List[Path], Optional[CsvRow]]:
+    import csv as _csv
+
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    chunk_files: List[Path] = []
+    buf: List[Tuple[int, CsvRow]] = []
+    header_row: Optional[CsvRow] = None
+    header_is_data = False
+
+    with src.open("r", encoding=encoding, newline="") as f:
+        reader = _csv.reader(f, delimiter=delim)
+        for row in reader:
+            if not row:
+                continue
+            if header_row is None:
+                header_row = row
+                if len(row) > ts_col and _parse_ts_to_int(row[ts_col]) != 10**20:
+                    header_is_data = True
+                else:
+                    header_is_data = False
+                    continue
+            if len(row) <= ts_col:
+                key = 10**20
+            else:
+                key = _parse_ts_to_int(row[ts_col])
+            buf.append((key, row))
+            if len(buf) >= chunk_rows:
+                buf.sort(key=lambda x: x[0])
+                cpath = temp_dir / f"chunk_{len(chunk_files) + 1:05d}.csv"
+                with cpath.open("w", encoding=encoding, newline="") as w:
+                    wtr = _csv.writer(w, delimiter=delim, quoting=_csv.QUOTE_MINIMAL)
+                    for _, r in buf:
+                        wtr.writerow(r)
+                chunk_files.append(cpath)
+                buf.clear()
+
+    if buf:
+        buf.sort(key=lambda x: x[0])
+        cpath = temp_dir / f"chunk_{len(chunk_files) + 1:05d}.csv"
+        with cpath.open("w", encoding=encoding, newline="") as w:
+            wtr = _csv.writer(w, delimiter=delim, quoting=_csv.QUOTE_MINIMAL)
+            for _, r in buf:
+                wtr.writerow(r)
+        chunk_files.append(cpath)
+        buf.clear()
+
+    return chunk_files, (header_row if header_row is not None and not header_is_data else None)
+
+
+def _merge_chunks(
+    chunk_files: List[Path],
+    dst: Path,
+    encoding: str,
+    delim: str,
+    ts_col: int,
+    header: Optional[CsvRow],
+) -> None:
+    import csv as _csv
+    import heapq
+
+    tmp = dst.with_suffix(".sorted.tmp")
+    readers: List[_csv._reader] = []  # type: ignore[attr-defined]
+    files = []
+    try:
+        for cf in chunk_files:
+            f = cf.open("r", encoding=encoding, newline="")
+            files.append(f)
+            readers.append(_csv.reader(f, delimiter=delim))
+
+        heap: List[Tuple[int, int, int, CsvRow]] = []
+        counter = 0
+        for i, rd in enumerate(readers):
+            try:
+                row = next(rd)
+            except StopIteration:
+                continue
+            key = _parse_ts_to_int(row[ts_col]) if len(row) > ts_col else 10**20
+            heap.append((key, counter, i, row))
+            counter += 1
+        heapq.heapify(heap)
+
+        with tmp.open("w", encoding=encoding, newline="") as w:
+            wtr = _csv.writer(w, delimiter=delim, quoting=_csv.QUOTE_MINIMAL)
+            if header is not None:
+                wtr.writerow(header)
+            while heap:
+                _, _, idx, row = heapq.heappop(heap)
+                wtr.writerow(row)
+                try:
+                    row = next(readers[idx])
+                except StopIteration:
+                    continue
+                k2 = _parse_ts_to_int(row[ts_col]) if len(row) > ts_col else 10**20
+                heapq.heappush(heap, (k2, counter, idx, row))
+                counter += 1
+
+        os.replace(tmp, dst)
+    finally:
+        for f in files:
+            try:
+                f.close()
+            except Exception:
+                pass
+
+
+def _final_sort_one(
+    path: Path,
+    encoding: str,
+    delim: str,
+    ts_col: int,
+    chunk_rows: int,
+    temp_root: Path,
+) -> None:
+    import csv as _csv
+
+    print(f"[FINAL-SORT] {path.name}")
+    temp_dir = temp_root / path.stem
+    try:
+        chunks, header = _split_to_sorted_chunks(
+            path, temp_dir, encoding, delim, ts_col, chunk_rows
+        )
+        if not chunks:
+            if header is not None:
+                tmp = path.with_suffix(".sorted.tmp")
+                with tmp.open("w", encoding=encoding, newline="") as w:
+                    wtr = _csv.writer(w, delimiter=delim, quoting=_csv.QUOTE_MINIMAL)
+                    wtr.writerow(header)
+                os.replace(tmp, path)
+            return
+
+        if len(chunks) == 1:
+            tmp = path.with_suffix(".sorted.tmp")
+            with tmp.open("w", encoding=encoding, newline="") as w:
+                wtr = _csv.writer(w, delimiter=delim, quoting=_csv.QUOTE_MINIMAL)
+                if header is not None:
+                    wtr.writerow(header)
+                with chunks[0].open("r", encoding=encoding, newline="") as r:
+                    rdr = _csv.reader(r, delimiter=delim)
+                    for row in rdr:
+                        wtr.writerow(row)
+            os.replace(tmp, path)
+        else:
+            _merge_chunks(chunks, path, encoding, delim, ts_col, header)
+    finally:
+        if temp_dir.exists():
+            for p in sorted(temp_dir.glob("*.csv")):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+            try:
+                temp_dir.rmdir()
+            except Exception:
+                pass
+
+
+def _final_sort_all(
+    output_dir: Path,
+    pattern: str,
+    encoding: str,
+    delim: str,
+    ts_col: int,
+    chunk_rows: int,
+    temp_dir_name: str,
+) -> None:
+    temp_root = output_dir / temp_dir_name
+    temp_root.mkdir(parents=True, exist_ok=True)
+    files = sorted(output_dir.glob(pattern))
+    if not files:
+        print(f"[FINAL-SORT] no files matched: {output_dir}\\{pattern}")
+        try:
+            temp_root.rmdir()
+        except Exception:
+            pass
+        return
+    for f in files:
+        _final_sort_one(f, encoding, delim, ts_col, chunk_rows, temp_root)
+    try:
+        temp_root.rmdir()
+    except Exception:
+        pass
 
 
 def iter_target_zips(directory: Path, digit_keys: Iterable[str]) -> List[Path]:
@@ -278,6 +494,19 @@ def main() -> None:
 
     if outer_bar is not None:
         outer_bar.close()
+
+    if DO_FINAL_SORT:
+        print("\n[FINAL-SORT] Start chronological sorting by timestamp (col=7)...")
+        _final_sort_all(
+            output_dir=OUTPUT_DIR_PATH,
+            pattern=SORT_GLOB,
+            encoding=ENC,
+            delim=DELIM,
+            ts_col=TIMESTAMP_COL,
+            chunk_rows=CHUNK_ROWS,
+            temp_dir_name=TEMP_SORT_DIR,
+        )
+        print("[FINAL-SORT] Done.")
 
     end_time = time.time()
     duration = end_time - start_time
