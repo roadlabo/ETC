@@ -63,6 +63,10 @@ def read_route_data(csv_path: Path) -> pd.DataFrame:
     )
     df.columns = ["lon", "lat", "flag"]
     df[["lon", "lat"]] = df[["lon", "lat"]].apply(pd.to_numeric, errors="coerce")
+    print("[DEBUG]", csv_path.name)
+    print("lon/lat head:", df["lon"].head().tolist(), df["lat"].head().tolist())
+    print("lon range:", df["lon"].min(), "→", df["lon"].max())
+    print("lat range:", df["lat"].min(), "→", df["lat"].max())
     df["flag"] = pd.to_numeric(df["flag"], errors="coerce")
     df = df.dropna(subset=["lon", "lat", "flag"])
     # Filter to Japan bounds
