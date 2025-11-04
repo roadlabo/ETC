@@ -3,7 +3,7 @@
 route_sampler.py
 
 クリックでポイントを打ってサンプルルートを作成し、
-route_mapper_simple.py がそのまま読めるCSV（O列=緯度, P列=経度, M列=flag）を出力します。
+route_mapper_simple.py がそのまま読めるCSV（O列=経度, P列=緯度, M列=flag）を出力します。
 
 ・ブラウザで地図（Leaflet）を開き、クリックで点追加／右クリックで直前の点を削除。
 ・「保存」ボタンでCSVを出力（ヘッダなし、カンマ区切り）。
@@ -142,7 +142,7 @@ def resample_polyline(
 # ------------------------------
 # 出力CSVの列定義（0-based index）
 # ------------------------------
-# A=0, B=1, ... O=14(lat), P=15(lon), M=12(flag), E=4(type), F=5(use), G=6(time), S=18(speed)
+# A=0, B=1, ... O=14(lon), P=15(lat), M=12(flag), E=4(type), F=5(use), G=6(time), S=18(speed)
 LAT_COL = 14
 LON_COL = 15
 FLAG_COL = 12
@@ -276,9 +276,9 @@ def build_rows(points: List[Tuple[float, float]], start_time: datetime) -> List[
         # 時刻（YYYYMMDDHHMMSS 形式）
         t = start_time + timedelta(seconds=TIME_STEP_SEC * idx)
         row[TIME_COL] = t.strftime("%Y%m%d%H%M%S")
-        # 座標: O列=lat, P列=lon
-        row[LAT_COL] = f"{lat:.10f}"
-        row[LON_COL] = f"{lon:.10f}"
+        # ★修正★ 座標: O列=lon, P列=lat（経度→緯度の順）
+        row[LAT_COL] = f"{lon:.10f}"   # 経度をO列に
+        row[LON_COL] = f"{lat:.10f}"   # 緯度をP列に
         rows.append(row)
     return rows
 
