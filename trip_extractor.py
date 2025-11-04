@@ -1,21 +1,19 @@
-"""Trip extractor utility.
+"""ETC trip extractor utility.
 
-This script scans CSV files in a selected directory and extracts trips that
-match a sample route defined by a separate CSV file. The GUI prompts are used
-to select both the sample file and the directory containing the trip logs.
-
-The implementation follows the requirements provided in the user request,
-including robust trip segmentation, route matching via haversine distance, and
-safe handling of malformed data rows.
+This module scans CSV files within a selected directory (optionally via GUI)
+and extracts trip segments whose routes overlap a given sample route. The
+implementation follows the detailed specification provided in the user
+instructions, including strict trip segmentation rules, haversine distance
+checks, and rich command-line progress feedback.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import logging
 import math
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, List, Sequence, Tuple
@@ -25,20 +23,22 @@ import numpy as np
 try:
     import tkinter as tk
     from tkinter import filedialog
-except Exception:  # pragma: no cover - tkinter not available in some envs
+except Exception:  # pragma: no cover - tkinter is optional in some environments
     tk = None
     filedialog = None
 
 
-EARTH_RADIUS_M = 6371000.0
+# Column indices (0-based)
 LAT_INDEX = 14
 LON_INDEX = 15
 FLAG_INDEX = 12
 
+EARTH_RADIUS_M = 6_371_000.0
+
 
 @dataclass
 class CSVRow:
-    """Container for parsed CSV row along with original values."""
+    """Container for a CSV row preserving its original values."""
 
     values: List[str]
 
@@ -49,44 +49,45 @@ class CSVRow:
         return self.values[item]
 
 
-def read_sample_points(path: Path) -> np.ndarray:
-    """Read sample latitude/longitude points from a CSV file.
+def read_sample_points(path: Path) -> Tuple[np.ndarray, np.ndarray]:
+    """Read sample latitude/longitude points and return radians arrays."""
 
-    The returned array contains radians for both latitude and longitude.
-    Rows with missing or invalid data are skipped.
-    """
+    lat_list: List[float] = []
+    lon_list: List[float] = []
 
-    points: List[Tuple[float, float]] = []
-    try:
-        with path.open("r", encoding="utf-8-sig", errors="ignore", newline="") as f:
-            reader = csv.reader(f)
-            for row in reader:
-                if len(row) <= max(LAT_INDEX, LON_INDEX):
-                    continue
-                try:
-                    lat = float(row[LAT_INDEX])
-                    lon = float(row[LON_INDEX])
-                except (TypeError, ValueError):
-                    continue
-                points.append((math.radians(lat), math.radians(lon)))
-    except Exception as exc:  # pragma: no cover - safety catch
-        logging.error("Failed to read sample CSV %s: %s", path, exc)
-        raise
+    with path.open("r", encoding="utf-8-sig", errors="ignore", newline="") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if len(row) <= max(LAT_INDEX, LON_INDEX):
+                continue
+            try:
+                lat = float(row[LAT_INDEX])
+                lon = float(row[LON_INDEX])
+            except (TypeError, ValueError):
+                continue
+            lat_list.append(math.radians(lat))
+            lon_list.append(math.radians(lon))
 
-    if not points:
+    if not lat_list:
         raise ValueError(f"No valid sample points found in {path}")
 
-    return np.asarray(points, dtype=np.float64)
+    return np.asarray(lat_list, dtype=np.float64), np.asarray(lon_list, dtype=np.float64)
 
 
-def haversine_batch(lat: float, lon: float, sample_lat_rad: np.ndarray, sample_lon_rad: np.ndarray) -> float:
-    """Return the minimum haversine distance between a point and sample points."""
+def haversine_min_to_sample(
+    lat_deg: float,
+    lon_deg: float,
+    sample_lat_rad: np.ndarray,
+    sample_lon_rad: np.ndarray,
+) -> float:
+    """Return the minimum haversine distance from a point to the sample points."""
 
-    lat_rad = math.radians(lat)
-    lon_rad = math.radians(lon)
+    lat_rad = math.radians(lat_deg)
+    lon_rad = math.radians(lon_deg)
 
     d_lat = lat_rad - sample_lat_rad
     d_lon = lon_rad - sample_lon_rad
+
     sin_dlat = np.sin(d_lat / 2.0)
     sin_dlon = np.sin(d_lon / 2.0)
     a = sin_dlat ** 2 + np.cos(lat_rad) * np.cos(sample_lat_rad) * sin_dlon ** 2
@@ -95,8 +96,19 @@ def haversine_batch(lat: float, lon: float, sample_lat_rad: np.ndarray, sample_l
     return float(np.min(distances))
 
 
+def read_csv_rows(path: Path) -> List[CSVRow]:
+    """Read CSV rows (without headers) preserving original values."""
+
+    rows: List[CSVRow] = []
+    with path.open("r", encoding="utf-8-sig", errors="ignore", newline="") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            rows.append(CSVRow(list(row)))
+    return rows
+
+
 def build_boundaries(rows: Sequence[CSVRow]) -> List[int]:
-    """Construct trip boundaries based on flag transitions and file edges."""
+    """Build the boundary set B following the strict specification."""
 
     boundaries = {0, len(rows)}
     for idx, row in enumerate(rows):
@@ -107,12 +119,11 @@ def build_boundaries(rows: Sequence[CSVRow]) -> List[int]:
             boundaries.add(idx)
         elif flag == "1":
             boundaries.add(idx + 1)
-
     return sorted(boundaries)
 
 
 def iter_segments_from_boundaries(boundaries: Sequence[int]) -> Iterator[Tuple[int, int]]:
-    """Yield candidate segments as half-open intervals from sorted boundaries."""
+    """Yield candidate segments from consecutive boundary pairs (length >= 2)."""
 
     for start, end in zip(boundaries[:-1], boundaries[1:]):
         if end - start >= 2:
@@ -121,20 +132,20 @@ def iter_segments_from_boundaries(boundaries: Sequence[int]) -> Iterator[Tuple[i
 
 def trip_matches_route(
     rows: Sequence[CSVRow],
-    sample_points: np.ndarray,
-    thresh_m: float = 10.0,
-    min_hits: int = 2,
+    start: int,
+    end: int,
+    sample_lat_rad: np.ndarray,
+    sample_lon_rad: np.ndarray,
+    thresh_m: float,
+    min_hits: int,
 ) -> bool:
-    """Determine if a trip segment matches the sample route."""
+    """Return True if the segment [start, end) contains at least ``min_hits`` matches."""
 
-    if sample_points.size == 0:
+    if sample_lat_rad.size == 0 or sample_lon_rad.size == 0:
         return False
 
-    sample_lat = sample_points[:, 0]
-    sample_lon = sample_points[:, 1]
-
     hits = 0
-    for row in rows:
+    for row in rows[start:end]:
         if len(row.values) <= max(LAT_INDEX, LON_INDEX):
             continue
         try:
@@ -143,7 +154,7 @@ def trip_matches_route(
         except (TypeError, ValueError):
             continue
 
-        distance = haversine_batch(lat, lon, sample_lat, sample_lon)
+        distance = haversine_min_to_sample(lat, lon, sample_lat_rad, sample_lon_rad)
         if distance <= thresh_m:
             hits += 1
             if hits >= min_hits:
@@ -152,182 +163,260 @@ def trip_matches_route(
     return False
 
 
-def save_trip(rows: Sequence[CSVRow], out_dir: Path, base_name: str, seq_no: int) -> Path:
-    """Save a trip segment to a CSV file and return the path."""
+def save_trip(
+    rows: Sequence[CSVRow],
+    start: int,
+    end: int,
+    out_dir: Path,
+    base_name: str,
+    seq_no: int,
+) -> Path:
+    """Save the segment [start, end) into the output directory."""
 
     out_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{base_name}-{seq_no:02d}.csv"
     out_path = out_dir / filename
     with out_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        for row in rows:
+        for row in rows[start:end]:
             writer.writerow(row.values)
     return out_path
 
 
-def read_csv_rows(path: Path) -> List[CSVRow]:
-    """Read CSV rows preserving their values for later writing."""
+def list_csv_files(root: Path, recursive: bool = False) -> List[Path]:
+    """Return a sorted list of CSV files under ``root``."""
 
-    rows: List[CSVRow] = []
-    with path.open("r", encoding="utf-8-sig", errors="ignore", newline="") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            rows.append(CSVRow(list(row)))
-    return rows
+    if recursive:
+        return sorted(p for p in root.rglob("*.csv") if p.is_file())
+    return sorted(p for p in root.glob("*.csv") if p.is_file())
+
+
+def format_hms(seconds: float) -> str:
+    """Format seconds as HH:MM:SS."""
+
+    seconds = max(0.0, float(seconds))
+    total = int(round(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _clear_progress(last_len: int) -> None:
+    if last_len:
+        sys.stdout.write("\r" + " " * last_len + "\r")
+        sys.stdout.flush()
+
+
+def _update_progress(line: str, last_len: int) -> int:
+    padding = max(0, last_len - len(line))
+    sys.stdout.write("\r" + line + (" " * padding))
+    sys.stdout.flush()
+    return len(line)
 
 
 def process_file(
     path: Path,
-    sample_points: np.ndarray,
+    sample_lat_rad: np.ndarray,
+    sample_lon_rad: np.ndarray,
     out_dir: Path,
     thresh_m: float,
     min_hits: int,
-    dry_run: bool = False,
-    verbose: bool = False,
-) -> int:
-    """Process a single CSV file and return the number of saved trips."""
+    dry_run: bool,
+    verbose: bool,
+) -> Tuple[int, int, int]:
+    """Process a single CSV file and return (candidate_trips, matched, saved)."""
 
     try:
         rows = read_csv_rows(path)
     except Exception as exc:
-        logging.warning("Failed to read %s: %s", path, exc)
-        return 0
+        if verbose:
+            print(f"Failed to read {path.name}: {exc}")
+        return 0, 0, 0
 
     if not rows:
-        return 0
+        if verbose:
+            print(f"{path.name}: empty file")
+        return 0, 0, 0
 
     boundaries = build_boundaries(rows)
     segments = list(iter_segments_from_boundaries(boundaries))
-    saved = 0
+    candidate_count = len(segments)
+    matched_count = 0
+    saved_count = 0
 
-    for start, end in segments:
-        segment_rows = rows[start:end]
-        if not trip_matches_route(segment_rows, sample_points, thresh_m, min_hits):
+    for seg_idx, (start, end) in enumerate(segments, start=1):
+        if not trip_matches_route(
+            rows,
+            start,
+            end,
+            sample_lat_rad,
+            sample_lon_rad,
+            thresh_m,
+            min_hits,
+        ):
             continue
 
+        matched_count += 1
         if dry_run:
-            saved += 1
+            saved_count += 1
             if verbose:
-                logging.info("[DRY-RUN] Trip match in %s rows %d-%d", path.name, start, end)
+                print(
+                    f"[DRY-RUN] {path.name}: match segment #{seg_idx} rows {start}-{end}"
+                )
             continue
 
         try:
-            save_trip(segment_rows, out_dir, path.stem, saved + 1)
-            saved += 1
+            save_trip(rows, start, end, out_dir, path.stem, saved_count + 1)
+            saved_count += 1
             if verbose:
-                logging.info("Saved trip %s #%02d (%d-%d)", path.name, saved, start, end)
+                print(
+                    f"Saved {path.name} segment #{saved_count:02d} rows {start}-{end}"
+                )
         except Exception as exc:
-            logging.warning("Failed to save segment from %s: %s", path, exc)
+            if verbose:
+                print(f"Failed to save segment from {path.name}: {exc}")
 
-    return saved
-
-
-def collect_csv_files(directory: Path, recursive: bool = False) -> List[Path]:
-    """Collect CSV files from a directory."""
-
-    if recursive:
-        files = sorted(p for p in directory.rglob("*.csv") if p.is_file())
-    else:
-        files = sorted(p for p in directory.glob("*.csv") if p.is_file())
-    return files
+    return candidate_count, matched_count, saved_count
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Extract trips matching a sample route")
-    parser.add_argument("--sample", type=Path, help="Path to sample CSV (optional)")
-    parser.add_argument("--input-dir", type=Path, help="Directory containing trip CSV files (optional)")
+    parser = argparse.ArgumentParser(description="Extract trips that match a sample route")
+    parser.add_argument("--sample", type=Path, help="Path to sample CSV")
+    parser.add_argument("--input-dir", type=Path, help="Directory containing trip CSV files")
     parser.add_argument("--thresh", type=float, default=10.0, help="Distance threshold in meters")
-    parser.add_argument("--min-hits", type=int, default=2, help="Minimum matching points required")
-    parser.add_argument("--dry-run", action="store_true", help="Identify matches without writing files")
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
-    parser.add_argument("--recursive", action="store_true", help="Recursively search for CSV files")
-    return parser.parse_args(argv)
+    parser.add_argument("--min-hits", type=int, default=2, help="Minimum match points required")
+    parser.add_argument("--dry-run", action="store_true", help="Run without writing files")
+    parser.add_argument("--recursive", action="store_true", help="Recursively search CSV files")
+    parser.add_argument("--verbose", action="store_true", help="Print verbose logs")
+    return parser.parse_args(list(argv))
 
 
-def init_logging(verbose: bool) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(message)s")
+def request_paths_via_gui(args: argparse.Namespace) -> Tuple[Path, Path]:
+    """Use GUI dialogs to request the sample file and input directory if missing."""
 
+    sample_path = args.sample
+    input_dir = args.input_dir
 
-def request_path_via_gui(args: argparse.Namespace) -> Tuple[Path, Path]:
-    """Prompt the user via GUI dialogs for sample file and input directory."""
-
-    if args.sample and args.input_dir:
-        return args.sample, args.input_dir
+    if sample_path is not None and input_dir is not None:
+        return sample_path, input_dir
 
     if tk is None or filedialog is None:
-        raise RuntimeError("Tkinter is not available; please provide --sample and --input-dir")
+        raise RuntimeError("Tkinter is not available; provide --sample and --input-dir")
 
     root = tk.Tk()
     root.withdraw()
 
-    sample_path = args.sample
     if sample_path is None:
-        sample_file = filedialog.askopenfilename(title="Select sample CSV", filetypes=[["CSV files", "*.csv"]])
-        if not sample_file:
+        selected = filedialog.askopenfilename(
+            title="サンプルルートファイルを選択",
+            filetypes=[["CSV", "*.csv"], ["All", "*.*"]],
+        )
+        if not selected:
+            root.destroy()
             raise SystemExit("Sample CSV selection cancelled")
-        sample_path = Path(sample_file)
+        sample_path = Path(selected)
 
-    input_dir = args.input_dir
     if input_dir is None:
-        directory = filedialog.askdirectory(title="Select directory containing trip CSV files")
-        if not directory:
+        selected_dir = filedialog.askdirectory(
+            title="ETC2.0データ（1st）加工済みデータの入ったフォルダを選択"
+        )
+        if not selected_dir:
+            root.destroy()
             raise SystemExit("Input directory selection cancelled")
-        input_dir = Path(directory)
+        input_dir = Path(selected_dir)
 
     root.destroy()
     return sample_path, input_dir
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    argv = list(argv) if argv is not None else sys.argv[1:]
+    argv = sys.argv[1:] if argv is None else list(argv)
     args = parse_args(argv)
-    init_logging(args.verbose)
 
     try:
-        sample_path, input_dir = request_path_via_gui(args)
+        sample_path, input_dir = request_paths_via_gui(args)
     except Exception as exc:
-        logging.error("Initialization failed: %s", exc)
+        print(f"Initialization failed: {exc}")
         return 1
 
     if not sample_path.exists():
-        logging.error("Sample CSV does not exist: %s", sample_path)
+        print(f"Sample CSV not found: {sample_path}")
         return 1
 
     if not input_dir.exists() or not input_dir.is_dir():
-        logging.error("Input directory does not exist or is not a directory: %s", input_dir)
+        print(f"Input directory not found: {input_dir}")
         return 1
 
     try:
-        sample_points = read_sample_points(sample_path)
+        sample_lat_rad, sample_lon_rad = read_sample_points(sample_path)
     except Exception as exc:
-        logging.error("Failed to process sample CSV: %s", exc)
+        print(f"Failed to read sample CSV: {exc}")
         return 1
 
-    files = collect_csv_files(input_dir, recursive=args.recursive)
-    if not files:
-        logging.info("No CSV files found in %s", input_dir)
+    files = list_csv_files(input_dir, recursive=args.recursive)
+    total_files = len(files)
+    if total_files == 0:
+        print(f"No CSV files found in {input_dir}")
         return 0
 
-    out_dir = input_dir / sample_path.stem
-    total_saved = 0
+    print(f"Total CSV files: {total_files}")
 
-    for file_path in files:
-        saved = process_file(
+    out_root = input_dir / sample_path.stem
+    total_trips = 0
+    total_matches = 0
+    total_saved = 0
+    start_time = time.time()
+    last_len = 0
+
+    for index, file_path in enumerate(files, start=1):
+        if args.verbose and last_len:
+            _clear_progress(last_len)
+            last_len = 0
+
+        candidate_count, matched_count, saved_count = process_file(
             file_path,
-            sample_points,
-            out_dir,
+            sample_lat_rad,
+            sample_lon_rad,
+            out_root,
             thresh_m=args.thresh,
             min_hits=args.min_hits,
             dry_run=args.dry_run,
             verbose=args.verbose,
         )
-        total_saved += saved
 
-    logging.info("Finished processing %d files, saved %d trips", len(files), total_saved)
+        total_trips += candidate_count
+        total_matches += matched_count
+        total_saved += saved_count
+
+        elapsed = time.time() - start_time
+        avg_time = elapsed / index
+        eta = avg_time * (total_files - index)
+
+        line = (
+            f"[{index}/{total_files}] {file_path.name}  "
+            f"trips:{candidate_count}  hits:{matched_count}  saved:{saved_count}  "
+            f"(elapsed {format_hms(elapsed)}, eta {format_hms(eta)})"
+        )
+        last_len = _update_progress(line, last_len)
+
+        if args.verbose:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            last_len = 0
+
+    if last_len:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+    print(
+        "Processed {files} files, total trips {trips}, matched {matches}, saved {saved}".format(
+            files=total_files, trips=total_trips, matches=total_matches, saved=total_saved
+        )
+    )
+
     return 0
 
 
-if __name__ == "__main__":  # pragma: no cover - CLI entry point
+if __name__ == "__main__":  # pragma: no cover - CLI entry
     raise SystemExit(main())
 
