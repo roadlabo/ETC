@@ -10,6 +10,7 @@ route_mapper_simple.py がそのまま読めるCSV（O列=緯度, P列=経度, M
 ・flag列（M=0-based idx 12）は **すべて中間=2** を出力します。
 ・種別(TYPE=E列=idx4), 用途(USE=F列=idx5), GPS時刻(TIME=G列=idx6), 速度(SPEED=S列=idx18) は
   ダミー値を自動付与（時刻は先頭基準で +10秒刻み）。
+・保存前に 20m ピッチで折れ点(30°以上)を保持しながらリサンプリングします。
 
 依存: Flask (pip install flask)
 起動: python route_sampler.py --outdir "/path/to/save" --filename sample.csv
@@ -22,10 +23,121 @@ import csv
 import threading
 import webbrowser
 from datetime import datetime, timedelta
+from math import asin, atan2, cos, pi, radians, sin, sqrt
 from pathlib import Path
 from typing import List, Tuple
 
 from flask import Flask, jsonify, render_template_string, request
+
+
+# ------------------------------
+# ジオメトリ計算ユーティリティ
+# ------------------------------
+
+def haversine_m(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
+    """2地点間の距離（メートル）をハヴァーサインで求める。"""
+    lat1, lon1 = p1
+    lat2, lon2 = p2
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    lat1_rad = radians(lat1)
+    lat2_rad = radians(lat2)
+    a = sin(dlat / 2) ** 2 + cos(lat1_rad) * cos(lat2_rad) * sin(dlon / 2) ** 2
+    c = 2 * asin(min(1.0, sqrt(a)))
+    return 6371000.0 * c
+
+
+def bearing_deg(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
+    """p1->p2 の方位角（度）を返す。"""
+    lat1, lon1 = map(radians, p1)
+    lat2, lon2 = map(radians, p2)
+    dlon = lon2 - lon1
+    x = sin(dlon) * cos(lat2)
+    y = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dlon)
+    bearing = (atan2(x, y) * 180.0 / pi + 360.0) % 360.0
+    return bearing
+
+
+def turn_angle_deg(p_prev: Tuple[float, float], p_curr: Tuple[float, float], p_next: Tuple[float, float]) -> float:
+    """3点から折れ角（0..180度）を算出する。"""
+    b1 = bearing_deg(p_prev, p_curr)
+    b2 = bearing_deg(p_curr, p_next)
+    d = abs(((b2 - b1 + 180.0) % 360.0) - 180.0)
+    return d
+
+
+def lerp_point(p1: Tuple[float, float], p2: Tuple[float, float], t: float) -> Tuple[float, float]:
+    """p1->p2 を t(0-1) で線形補間。"""
+    lat = p1[0] + (p2[0] - p1[0]) * t
+    lon = p1[1] + (p2[1] - p1[1]) * t
+    return (lat, lon)
+
+
+def _resample_segment(points: List[Tuple[float, float]], step_m: float) -> List[Tuple[float, float]]:
+    """単一セグメントを step_m ごとに再サンプリング。"""
+    if not points:
+        return []
+
+    if len(points) == 1:
+        return points[:]
+
+    resampled: List[Tuple[float, float]] = [points[0]]
+    accumulated = 0.0
+    next_target = step_m
+
+    for idx in range(len(points) - 1):
+        p1 = points[idx]
+        p2 = points[idx + 1]
+        seg_len = haversine_m(p1, p2)
+        if seg_len <= 0:
+            continue
+
+        while accumulated + seg_len >= next_target:
+            ratio = (next_target - accumulated) / seg_len
+            resampled.append(lerp_point(p1, p2, ratio))
+            next_target += step_m
+
+        accumulated += seg_len
+
+    if haversine_m(resampled[-1], points[-1]) > 1e-6:
+        resampled.append(points[-1])
+    return resampled
+
+
+def resample_polyline(
+    points: List[Tuple[float, float]],
+    step_m: float = 20.0,
+    angle_threshold: float = 30.0,
+) -> List[Tuple[float, float]]:
+    """折れ点を保持しつつ等間隔リサンプリングした座標列を返す。"""
+
+    if len(points) < 2:
+        return points[:]
+
+    breakpoint_indices = {0, len(points) - 1}
+    for i in range(1, len(points) - 1):
+        angle = turn_angle_deg(points[i - 1], points[i], points[i + 1])
+        if angle >= angle_threshold:
+            breakpoint_indices.add(i)
+
+    sorted_indices = sorted(breakpoint_indices)
+
+    resampled: List[Tuple[float, float]] = []
+    for start_idx, end_idx in zip(sorted_indices[:-1], sorted_indices[1:]):
+        segment = points[start_idx : end_idx + 1]
+        seg_resampled = _resample_segment(segment, step_m)
+        if resampled and seg_resampled:
+            if haversine_m(resampled[-1], seg_resampled[0]) < 1e-6:
+                seg_resampled = seg_resampled[1:]
+        resampled.extend(seg_resampled)
+
+    if sorted_indices:
+        last_idx = sorted_indices[-1]
+        last_point = points[last_idx]
+        if not resampled or haversine_m(resampled[-1], last_point) > 1e-6:
+            resampled.append(last_point)
+
+    return resampled
 
 # ------------------------------
 # 出力CSVの列定義（0-based index）
@@ -73,6 +185,7 @@ INDEX_HTML = """
 <div class="toolbar">
   <div><strong>サンプルルート作成</strong></div>
   <div class="hint">左クリックで追加／右クリックで直前の点を削除</div>
+  <div class="hint">保存時に20mごと＆30°以上の折れ点保持で再サンプリング</div>
   <div><input id="fname" placeholder="保存ファイル名 (例: sample.csv)"/></div>
   <button id="btnSave">保存</button>
   <button id="btnClear">全消去</button>
@@ -147,11 +260,11 @@ INDEX_HTML = """
 
 
 def build_rows(points: List[Tuple[float, float]], start_time: datetime) -> List[List[str]]:
-    """Leafletからの [ {lat, lon}, ... ] を route_mapper_simple.py 互換の行に変換。
-    各行は "TOTAL_COLS" 長のリスト（文字列）で、未使用セルは "0" を入れる。
-    """
+    """Leafletの原始点列をリサンプリングしてCSV行を構築。"""
+    sampled_points = resample_polyline(points, step_m=20.0, angle_threshold=30.0)
+
     rows: List[List[str]] = []
-    for idx, (lat, lon) in enumerate(points):
+    for idx, (lat, lon) in enumerate(sampled_points):
         row = ["0"] * TOTAL_COLS
         # ダミー: 種別/用途/速度
         row[TYPE_COL] = str(DEFAULT_TYPE)
@@ -180,21 +293,29 @@ def save():
     try:
         data = request.get_json(force=True)
         filename = (data.get("filename") or "sample.csv").strip()
+        if not filename:
+            filename = "sample.csv"
         pts = data.get("points") or []
         if not isinstance(pts, list) or len(pts) < 2:
             return jsonify(ok=False, error="points must be >= 2")
         # 正規化
         points: List[Tuple[float, float]] = []
         for p in pts:
-            lat = float(p.get("lat"))
-            lon = float(p.get("lon"))
+            try:
+                lat = float(p.get("lat"))
+                lon = float(p.get("lon"))
+            except (TypeError, ValueError):
+                return jsonify(ok=False, error="invalid point data")
             points.append((lat, lon))
 
         start_time = datetime.now()
         rows = build_rows(points, start_time)
 
         # 保存先を引数の outdir に
-        out_path = OUTDIR / filename
+        if not filename.lower().endswith(".csv"):
+            filename = f"{filename}.csv"
+        safe_name = Path(filename).name or "sample.csv"
+        out_path = OUTDIR / safe_name
         with open(out_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f, lineterminator="\n")
             writer.writerows(rows)
