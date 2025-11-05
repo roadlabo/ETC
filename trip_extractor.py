@@ -1,7 +1,7 @@
 """ETC trip extractor utility.
 
-This module scans CSV files within a selected directory (optionally via GUI)
-and extracts trip segments whose routes overlap a given sample route. The
+This module scans CSV files within a configured directory and extracts trip
+segments whose routes overlap a given sample route. The
 implementation follows the detailed specification provided in the user
 instructions, including strict trip segmentation rules, haversine distance
 checks, and rich command-line progress feedback.
@@ -20,13 +20,6 @@ from typing import Iterator, List, Sequence, Tuple
 
 import numpy as np
 
-try:
-    import tkinter as tk
-    from tkinter import filedialog
-except Exception:  # pragma: no cover - tkinter is optional in some environments
-    tk = None
-    filedialog = None
-
 
 # Column indices (0-based)
 LAT_INDEX = 14
@@ -34,6 +27,15 @@ LON_INDEX = 15
 FLAG_INDEX = 12
 
 EARTH_RADIUS_M = 6_371_000.0
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+# Edit these paths to match your environment when running the script without
+# command-line arguments.  Both paths can still be overridden via --sample and
+# --input-dir options if desired.
+DEFAULT_SAMPLE_PATH: Path | None = Path("/path/to/sample_route.csv")
+DEFAULT_INPUT_DIR: Path | None = Path("/path/to/input_directory")
 
 
 @dataclass
@@ -291,42 +293,19 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(list(argv))
 
 
-def request_paths_via_gui(args: argparse.Namespace) -> Tuple[Path, Path]:
-    """Use GUI dialogs to request the sample file and input directory if missing."""
+def resolve_paths(args: argparse.Namespace) -> Tuple[Path, Path]:
+    """Resolve the sample file and input directory without GUI dialogs."""
 
-    sample_path = args.sample
-    input_dir = args.input_dir
+    sample_path = args.sample or DEFAULT_SAMPLE_PATH
+    input_dir = args.input_dir or DEFAULT_INPUT_DIR
 
-    if sample_path is not None and input_dir is not None:
-        return sample_path, input_dir
-
-    if tk is None or filedialog is None:
-        raise RuntimeError("Tkinter is not available; provide --sample and --input-dir")
-
-    root = tk.Tk()
-    root.withdraw()
-
-    if sample_path is None:
-        selected = filedialog.askopenfilename(
-            title="サンプルルートファイルを選択",
-            filetypes=[["CSV", "*.csv"], ["All", "*.*"]],
+    if sample_path is None or input_dir is None:
+        raise SystemExit(
+            "Specify --sample and --input-dir or set DEFAULT_SAMPLE_PATH and "
+            "DEFAULT_INPUT_DIR in the script."
         )
-        if not selected:
-            root.destroy()
-            raise SystemExit("Sample CSV selection cancelled")
-        sample_path = Path(selected)
 
-    if input_dir is None:
-        selected_dir = filedialog.askdirectory(
-            title="ETC2.0データ（1st）加工済みデータの入ったフォルダを選択"
-        )
-        if not selected_dir:
-            root.destroy()
-            raise SystemExit("Input directory selection cancelled")
-        input_dir = Path(selected_dir)
-
-    root.destroy()
-    return sample_path, input_dir
+    return Path(sample_path), Path(input_dir)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -334,7 +313,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
 
     try:
-        sample_path, input_dir = request_paths_via_gui(args)
+        sample_path, input_dir = resolve_paths(args)
     except Exception as exc:
         print(f"Initialization failed: {exc}")
         return 1
