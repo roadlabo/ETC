@@ -17,8 +17,7 @@ OUTPUT_PATH = r"D:\\path\\to\\paformance001.csv"
 RADIUS_M = 20.0
 
 # ルートCSVの列index（ヘッダー無し）
-#   KP列（“そのまま出力する”ラベル）／経度O=14／緯度P=15
-ROUTE_KP_COL  = 0   # ←環境に合わせて設定
+#   経度O=14／緯度P=15 から⊿L[m]を積算してKP[km]を自動算出
 ROUTE_LON_COL = 14
 ROUTE_LAT_COL = 15
 
@@ -30,6 +29,7 @@ COL_SPEED = 18  # S
 
 # 出力の丸め（平均速度の小数桁）
 ROUND_DIGITS = 1
+KP_DECIMALS  = 2   # キロポストの表示小数桁（例：0.00）
 
 # サブフォルダも探索するなら True
 RECURSIVE = True
@@ -65,32 +65,39 @@ def parse_hour(s):
     except: pass
     return None
 
-def read_route(route_path):
-    """ルートCSVから KPラベル(文字列), lat(rad), lon(rad) の配列を出現順で取得"""
-    kp_labels, lat_r, lon_r = [], [], []
-    seen = set()
+def build_route_kp(route_path):
+    """
+    ルートCSVを上から順に辿り、1行目を 0.00 km として
+    O列(14)=lon, P列(15)=lat から⊿L[m]をハバーサインで積算し、
+    各行のキロポスト[km]配列を作る。
+    Returns:
+      kp_km   : List[float]  各ルート行のキロポスト[km]
+      lat_rad : List[float]  各ルート行の緯度(rad)
+      lon_rad : List[float]  各ルート行の経度(rad)
+    """
+    lats, lons = [], []
     with open(route_path, "r", newline="", encoding="cp932") as f:
         reader = csv.reader(f)
         for row in reader:
-            if not row: continue
+            if not row:
+                continue
             try:
-                kp_raw = row[ROUTE_KP_COL]
                 lon = float(row[ROUTE_LON_COL])
                 lat = float(row[ROUTE_LAT_COL])
             except Exception:
                 continue
-            # KPラベルは“そのまま文字列”で保持（桁や表記を変えない）
-            kp_label = str(kp_raw)
-            kp_labels.append(kp_label)
-            lat_r.append(deg2rad(lat))
-            lon_r.append(deg2rad(lon))
-    # 出力順を決めるための“出現順ユニークKPラベル”リスト
-    order = []
-    for kp in kp_labels:
-        if kp not in seen:
-            seen.add(kp)
-            order.append(kp)
-    return kp_labels, lat_r, lon_r, order
+            lons.append(lon)
+            lats.append(lat)
+    if not lats:
+        raise RuntimeError("ルートCSVから座標を読み取れませんでした。列index設定を確認してください。")
+
+    lat_r = [deg2rad(x) for x in lats]
+    lon_r = [deg2rad(x) for x in lons]
+    kp_km = [0.0]
+    for i in range(1, len(lat_r)):
+        d = haversine_m(lat_r[i-1], lon_r[i-1], lat_r[i], lon_r[i])  # meters
+        kp_km.append(kp_km[-1] + d / 1000.0)  # km 累積
+    return kp_km, lat_r, lon_r
 
 def nearest_route_index(lat_deg, lon_deg, route_lat_r, route_lon_r):
     """観測点→ルート最近傍インデックス（総当たり）"""
@@ -137,7 +144,7 @@ def print_progress(current, total, width=40):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="paformance001.csv を見本通りに生成（KPはルートCSVの値をそのまま使用）")
+    ap = argparse.ArgumentParser(description="paformance001.csv を見本通りに生成（KPはルート座標から自動算出）")
     ap.add_argument("--recursive", action="store_true", help="サブフォルダも探索（既定はRECURSIVEに従う）")
     args = ap.parse_args()
 
@@ -145,16 +152,13 @@ def main():
     if args.recursive:
         RECURSIVE = True
 
-    # ルート読込
-    kp_labels_seq, route_lat_r, route_lon_r, kp_order = read_route(ROUTE_PATH)
-    if not kp_order:
-        raise RuntimeError("ルートCSVからKPが読み取れませんでした。ROUTE_KP_COLの設定を確認してください。")
+    # ルート読込 → KP[km]自動算出
+    kp_km, route_lat_r, route_lon_r = build_route_kp(ROUTE_PATH)
+    kp_count = len(kp_km)
+    print(f"[INFO] ルート点数(=行数): {kp_count}")
 
-    kp_count = len(kp_order)
-    print(f"[INFO] キロポスト数: {kp_count}")
-
-    # 集計器：stats[kp_label][hour] = [sum_speed, count]
-    stats = {kp: [[0.0, 0] for _ in range(24)] for kp in kp_order}
+    # 集計器：各ルート行index × 24時間 → [sum_speed, count]
+    stats = [[[0.0, 0] for _ in range(24)] for _ in range(kp_count)]
 
     files = list_input_csvs(INPUT_DIR, RECURSIVE)
     total_files = len(files)
@@ -189,13 +193,8 @@ def main():
                     d, idx = nearest_route_index(lat, lon, route_lat_r, route_lon_r)
                     if idx < 0 or d > RADIUS_M:
                         continue
-                    kp = kp_labels_seq[idx]  # 最近傍点の“元のKPラベル”
-                    bucket = stats.get(kp)
-                    if bucket is None:
-                        # ルート外のKPが拾われた場合（通常は起きないがガード）
-                        continue
-                    s, c = bucket[hour]
-                    bucket[hour] = [s + spd, c + 1]
+                    s, c = stats[idx][hour]
+                    stats[idx][hour] = [s + spd, c + 1]
         except Exception as e:
             print(f"[WARN] 読み込み失敗: {path} ({e})")
             had_warning = True
@@ -209,19 +208,18 @@ def main():
     with open(OUTPUT_PATH, "w", newline="", encoding="cp932") as f:
         writer = csv.writer(f, lineterminator="\r\n")
         write_header(writer)
-        for kp in kp_order:
+        for i in range(kp_count):
+            km_str = f"{kp_km[i]:.{KP_DECIMALS}f}"
             avg24, cnt24 = [], []
-            buckets = stats[kp]
             for h in range(24):
-                s, c = buckets[h]
+                s, c = stats[i][h]
                 if c > 0:
                     avg24.append(f"{round(s / c, ROUND_DIGITS)}")
                     cnt24.append(str(c))
                 else:
                     avg24.append("")
                     cnt24.append("")
-            # “キロ”列は左右ともルートCSVのKPラベルをそのまま出力
-            row = [kp] + avg24 + [kp] + cnt24
+            row = [km_str] + avg24 + [km_str] + cnt24
             writer.writerow(row)
 
     print(f"[DONE] 出力: {OUTPUT_PATH}")
