@@ -31,6 +31,16 @@ import webbrowser
 from tkinter import Tk, filedialog, messagebox, ttk
 
 
+# ====== KP label settings ======
+KP_LABEL_STEP = 5           # 何点に1回ラベルを出すか（例：5）
+KP_FONT_SIZE = 11           # px
+KP_PADDING_X = 8            # 左右の余白(px) → 背景を数字より少し長めに見せる
+KP_PADDING_Y = 3            # 上下の余白(px)
+KP_BORDER_RADIUS = 4        # 角丸(px)
+KP_BG_ALPHA = 0.85          # 背景の透過
+KP_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace'
+
+
 def haversine_km(lat1: np.ndarray, lon1: np.ndarray, lat2: np.ndarray, lon2: np.ndarray) -> np.ndarray:
     """配列対応ハバーシン距離（km）。NaNはそのまま返す。"""
 
@@ -171,20 +181,27 @@ def fmt_tooltip(time_value: object, speed_value: object) -> str:
 
 
 def _add_kp_label(m: folium.Map, lat: float, lon: float, kp_km: float) -> None:
-    html = (
-        '<div style="'
-        "font-size:10px;"
-        "background:rgba(255,255,255,0.75);"
-        "padding:2px 4px;"
-        "border-radius:4px;"
-        "white-space:nowrap;"
-        '">KP {:.3f} km</div>'
-    ).format(kp_km)
+    # 背景をテキスト幅に追従させ、かつ少し長めに見せるために左右paddingを厚めに
+    html = f'''
+    <div style="
+        display:inline-block;
+        font-size:{KP_FONT_SIZE}px;
+        font-family:{KP_FONT_FAMILY};
+        line-height:1.2;
+        background:rgba(255,255,255,{KP_BG_ALPHA});
+        padding:{KP_PADDING_Y}px {KP_PADDING_X}px;
+        border-radius:{KP_BORDER_RADIUS}px;
+        white-space:nowrap;
+        box-shadow:0 0 2px rgba(0,0,0,0.15);
+    ">
+        KP {kp_km:.3f} km
+    </div>
+    '''
     folium.Marker(
         location=(lat, lon),
         icon=folium.DivIcon(
             icon_size=(1, 1),
-            icon_anchor=(0, 0),
+            icon_anchor=(0, 0),  # 左上原点
             html=html,
         ),
     ).add_to(m)
@@ -488,23 +505,26 @@ class RouteMapperApp:
         start_location = [df.iloc[0]["lat"], df.iloc[0]["lon"]]
         fmap = folium.Map(location=start_location, zoom_start=12, tiles="OpenStreetMap")
 
-        for row in df.itertuples(index=False):
+        for i, row in enumerate(df.itertuples(index=False)):
             base_tip = fmt_tooltip(row.time, row.speed)
             kp_text = f"KP: {row.kp_km:.3f} km"
             tooltip = base_tip + f"\n{kp_text}"
             if row.flag == 0:
                 _add_start_marker(fmap, row.lat, row.lon, tooltip)
-                _add_kp_label(fmap, row.lat, row.lon, row.kp_km)
+                if i % KP_LABEL_STEP == 0:
+                    _add_kp_label(fmap, row.lat, row.lon, row.kp_km)
             elif row.flag == 1:
                 _add_goal_marker(fmap, row.lat, row.lon, tooltip)
-                _add_kp_label(fmap, row.lat, row.lon, row.kp_km)
+                if i % KP_LABEL_STEP == 0:
+                    _add_kp_label(fmap, row.lat, row.lon, row.kp_km)
             else:
                 folium.CircleMarker(
                     location=(row.lat, row.lon),
                     tooltip=tooltip,
                     **PASS_MARKER,
                 ).add_to(fmap)
-                _add_kp_label(fmap, row.lat, row.lon, row.kp_km)
+                if i % KP_LABEL_STEP == 0:
+                    _add_kp_label(fmap, row.lat, row.lon, row.kp_km)
 
         for segment in chunk_route_points(
             df[["lon", "lat", "flag"]].itertuples(index=False, name=None)
