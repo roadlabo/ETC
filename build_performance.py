@@ -110,6 +110,29 @@ def write_header(writer):
     time_labels = [f"{h}-{h+1}" for h in range(24)]
     writer.writerow(["ポスト"] + time_labels + ["ポスト"] + time_labels)
 
+def format_datetime(dt):
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_timedelta(td):
+    total_seconds = int(td.total_seconds())
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def print_progress(current, total, width=40):
+    if total <= 0:
+        bar = "-" * width
+        pct = 100.0
+    else:
+        ratio = min(max(current / total, 0.0), 1.0)
+        filled = int(width * ratio)
+        bar = "#" * filled + "-" * (width - filled)
+        pct = ratio * 100.0
+    print(f"\r[PROGRESS] |{bar}| {pct:6.2f}% ({current}/{total})", end="", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description="paformance001.csv を見本通りに生成（KPはルートCSVの値をそのまま使用）")
     ap.add_argument("--out", required=True, help="出力 paformance001.csv のパス")
@@ -125,11 +148,24 @@ def main():
     if not kp_order:
         raise RuntimeError("ルートCSVからKPが読み取れませんでした。ROUTE_KP_COLの設定を確認してください。")
 
+    kp_count = len(kp_order)
+    print(f"[INFO] キロポスト数: {kp_count}")
+
     # 集計器：stats[kp_label][hour] = [sum_speed, count]
     stats = {kp: [[0.0, 0] for _ in range(24)] for kp in kp_order}
 
     files = list_input_csvs(INPUT_DIR, RECURSIVE)
-    print(f"[INFO] 入力CSV {len(files)}件 @ {INPUT_DIR}")
+    total_files = len(files)
+    print(f"[INFO] 検索対象CSV数: {total_files} @ {INPUT_DIR}")
+
+    processing_start = datetime.now()
+    print(f"[TIME] Start: {format_datetime(processing_start)}")
+
+    processed_files = 0
+    had_warning = False
+    if total_files == 0:
+        print_progress(total_files, total_files)
+
     for path in files:
         try:
             with open(path, "r", newline="", encoding="cp932") as f:
@@ -160,6 +196,12 @@ def main():
                     bucket[hour] = [s + spd, c + 1]
         except Exception as e:
             print(f"[WARN] 読み込み失敗: {path} ({e})")
+            had_warning = True
+        finally:
+            processed_files += 1
+            print_progress(processed_files, total_files)
+
+    print()
 
     # 出力（Shift_JIS, CRLF）
     with open(args.out, "w", newline="", encoding="cp932") as f:
@@ -181,6 +223,13 @@ def main():
             writer.writerow(row)
 
     print(f"[DONE] 出力: {args.out}")
+
+    processing_end = datetime.now()
+    print(f"[TIME] End: {format_datetime(processing_end)}")
+    print(f"[TIME] Duration: {format_timedelta(processing_end - processing_start)}")
+
+    if not had_warning:
+        print("Congratulations, everything completed successfully.")
 
 if __name__ == "__main__":
     main()
