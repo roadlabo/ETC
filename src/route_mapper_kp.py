@@ -32,12 +32,13 @@ from tkinter import Tk, filedialog, messagebox, ttk
 
 
 # ====== KP label settings ======
-KP_LABEL_STEP = 5           # 何点に1回ラベルを出すか（例：5）
+KP_INTERVAL = 5             # 何点に1回ラベルを出すか（例：5）
 KP_FONT_SIZE = 11           # px
-KP_PADDING_X = 8            # 左右の余白(px) → 背景を数字より少し長めに見せる
+KP_PADDING_X = 8            # 左右の余白(px)
 KP_PADDING_Y = 3            # 上下の余白(px)
 KP_BORDER_RADIUS = 4        # 角丸(px)
-KP_BG_ALPHA = 0.85          # 背景の透過
+KP_BG_ALPHA = 0.8           # 背景の透過
+KP_BORDER_COLOR = "#b0b0b0"  # 枠線の色
 KP_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace'
 
 
@@ -188,14 +189,14 @@ def _add_kp_label(m: folium.Map, lat: float, lon: float, kp_km: float) -> None:
         font-size:{KP_FONT_SIZE}px;
         font-family:{KP_FONT_FAMILY};
         line-height:1.2;
+        color:#000;
         background:rgba(255,255,255,{KP_BG_ALPHA});
         padding:{KP_PADDING_Y}px {KP_PADDING_X}px;
         border-radius:{KP_BORDER_RADIUS}px;
         white-space:nowrap;
-        box-shadow:0 0 2px rgba(0,0,0,0.15);
-    ">
-        KP {kp_km:.3f} km
-    </div>
+        border:1px solid {KP_BORDER_COLOR};
+        box-shadow:0 1px 2px rgba(0,0,0,0.15);
+    ">KP{kp_km:.3f}</div>
     '''
     folium.Marker(
         location=(lat, lon),
@@ -511,11 +512,11 @@ class RouteMapperApp:
             tooltip = base_tip + f"\n{kp_text}"
             if row.flag == 0:
                 _add_start_marker(fmap, row.lat, row.lon, tooltip)
-                if i % KP_LABEL_STEP == 0:
+                if KP_INTERVAL and i % KP_INTERVAL == 0:
                     _add_kp_label(fmap, row.lat, row.lon, row.kp_km)
             elif row.flag == 1:
                 _add_goal_marker(fmap, row.lat, row.lon, tooltip)
-                if i % KP_LABEL_STEP == 0:
+                if KP_INTERVAL and i % KP_INTERVAL == 0:
                     _add_kp_label(fmap, row.lat, row.lon, row.kp_km)
             else:
                 folium.CircleMarker(
@@ -523,7 +524,7 @@ class RouteMapperApp:
                     tooltip=tooltip,
                     **PASS_MARKER,
                 ).add_to(fmap)
-                if i % KP_LABEL_STEP == 0:
+                if KP_INTERVAL and i % KP_INTERVAL == 0:
                     _add_kp_label(fmap, row.lat, row.lon, row.kp_km)
 
         for segment in chunk_route_points(
