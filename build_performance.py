@@ -10,6 +10,9 @@ INPUT_DIR = r"D:\\path\\to\\trip_extractor_outputs"
 # 自動運転ルート.csv のフルパス
 ROUTE_PATH = r"D:\\path\\to\\自動運転ルート.csv"
 
+# 出力 paformance001.csv のフルパス
+OUTPUT_PATH = r"D:\\path\\to\\paformance001.csv"
+
 # マッチ半径[m]（例：20）
 RADIUS_M = 20.0
 
@@ -135,7 +138,6 @@ def print_progress(current, total, width=40):
 
 def main():
     ap = argparse.ArgumentParser(description="paformance001.csv を見本通りに生成（KPはルートCSVの値をそのまま使用）")
-    ap.add_argument("--out", required=True, help="出力 paformance001.csv のパス")
     ap.add_argument("--recursive", action="store_true", help="サブフォルダも探索（既定はRECURSIVEに従う）")
     args = ap.parse_args()
 
@@ -204,7 +206,7 @@ def main():
     print()
 
     # 出力（Shift_JIS, CRLF）
-    with open(args.out, "w", newline="", encoding="cp932") as f:
+    with open(OUTPUT_PATH, "w", newline="", encoding="cp932") as f:
         writer = csv.writer(f, lineterminator="\r\n")
         write_header(writer)
         for kp in kp_order:
@@ -222,7 +224,7 @@ def main():
             row = [kp] + avg24 + [kp] + cnt24
             writer.writerow(row)
 
-    print(f"[DONE] 出力: {args.out}")
+    print(f"[DONE] 出力: {OUTPUT_PATH}")
 
     processing_end = datetime.now()
     print(f"[TIME] End: {format_datetime(processing_end)}")
