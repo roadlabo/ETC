@@ -1,6 +1,8 @@
 import os, csv, glob, math, argparse
 from datetime import datetime
 import random
+import re
+from typing import Optional
 from statistics import median
 from pathlib import Path
 
@@ -50,23 +52,48 @@ def haversine_m(lat1, lon1, lat2, lon2):
     a = math.sin(dlat/2.0)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlon/2.0)**2
     return 2.0 * EARTH_R * math.asin(math.sqrt(a))
 
-def parse_hour(s):
-    if not s: return None
-    s = s.strip()
-    for fmt in ("%H:%M:%S", "%H:%M"):
-        try: return datetime.strptime(s, fmt).hour
-        except: pass
-    for fmt in ("%Y-%m-%d %H:%M:%S","%Y-%m-%d %H:%M",
-                "%Y/%m/%d %H:%M:%S","%Y/%m/%d %H:%M",
-                "%Y-%m-%dT%H:%M:%S","%Y-%m-%dT%H:%M",
-                "%Y/%m/%dT%H:%M:%S","%Y/%m/%dT%H:%M"):
-        try: return datetime.strptime(s, fmt).hour
-        except: pass
+def parse_hour(s: str) -> Optional[int]:
+    """
+    文字列から“時(0–23)”のみ抽出（年月日無視）。
+    対応例:
+      2025-01-02 9:03, 2025/01/02T09:03:00.123+09:00, 09:03, 9:03:5, 12時34分 など
+    """
+    if not s:
+        return None
+    t = s.strip()
+    # 1) 標準: H:MM[:SS[.mmm]][+TZ]
+    m = re.search(r'(\d{1,2}):\d{1,2}(?::\d{1,2}(?:\.\d+)?)?', t)
+    if not m:
+        # 2) 和式など "HH時MM分"
+        m = re.search(r'(\d{1,2})\s*[時Hh]\s*\d{1,2}', t)
+    if not m:
+        # 3) "HH-MM" のようなハイフン区切り（時刻っぽいもの）
+        m = re.search(r'(\d{1,2})-\d{1,2}', t)
+    if not m:
+        return None
     try:
-        if " " in s: return int(s.split(" ")[1][:2])
-        if "T" in s: return int(s.split("T")[1][:2])
-    except: pass
-    return None
+        hh = int(m.group(1))
+        return hh if 0 <= hh <= 23 else None
+    except Exception:
+        return None
+
+
+def parse_speed(val: str) -> Optional[float]:
+    """
+    速度セルから最初の数値（float）を抽出。
+    許容: カンマ, 前後空白, 単位文字, 全角スペース, 先頭ダッシュ等
+    例: "1,234.5", " 67km/h", "—" → None
+    """
+    if val is None:
+        return None
+    t = str(val).replace(",", "").replace("\u3000", " ").strip()
+    m = re.search(r'[-+]?\d+(?:\.\d+)?', t)
+    if not m:
+        return None
+    try:
+        return float(m.group(0))
+    except Exception:
+        return None
 
 def build_route_kp(route_path):
     """
@@ -217,6 +244,10 @@ def main():
     total_rows = 0
     parsed_rows = 0
     matched_rows = 0
+    fail_time = 0
+    fail_speed = 0
+    fail_coord = 0
+    geo_match_rows = 0
     diag_samples = []
 
     for path in files:
@@ -234,20 +265,28 @@ def main():
                 try:
                     lon = float(row[COL_LON])
                     lat = float(row[COL_LAT])
-                    hour = parse_hour(row[COL_TIME])
-                    if hour is None or not (0 <= hour <= 23):
-                        continue
-                    raw_spd = str(row[COL_SPEED]).replace(",", "").replace("　", "").strip()
-                    spd = float(raw_spd)
-                    if spd < 0 or spd > 300:
-                        continue
-                    parsed_rows += 1
                 except Exception:
+                    fail_coord += 1
                     continue
 
                 d, idx = nearest_route_index(lat, lon, route_lat_r, route_lon_r)
-                if idx < 0 or d > RADIUS_M:
+                if idx >= 0 and d <= RADIUS_M:
+                    geo_match_rows += 1
+                else:
                     continue
+
+                hour = parse_hour(row[COL_TIME])
+                if hour is None or not (0 <= hour <= 23):
+                    fail_time += 1
+                    continue
+
+                spd = parse_speed(row[COL_SPEED])
+                if spd is None or spd < 0 or spd > 300:
+                    fail_speed += 1
+                    continue
+
+                parsed_rows += 1
+
                 s, c = stats[idx][hour]
                 stats[idx][hour] = [s + spd, c + 1]
                 matched_rows += 1
@@ -279,7 +318,15 @@ def main():
             writer.writerow(row)
 
     print(f"[DONE] 出力: {OUTPUT_PATH}")
-    print(f"[STATS] files={len(files)}, total_rows={total_rows}, parsed_rows={parsed_rows}, matched_rows={matched_rows}, radius_m={RADIUS_M}")
+    print(f"[STATS] files={len(files)}, total_rows={total_rows}, parsed_rows={parsed_rows}, "
+          f"matched_rows={matched_rows}, geo_only_matches={geo_match_rows}, "
+          f"fail_time={fail_time}, fail_speed={fail_speed}, fail_coord={fail_coord}, "
+          f"radius_m={RADIUS_M}")
+    if parsed_rows == 0:
+        print("[HINT] parsed_rows=0 → 時刻 or 速度の抽出が全滅の可能性。fail_time / fail_speed の内訳を確認。")
+    if matched_rows == 0 and parsed_rows > 0:
+        print("[HINT] matched_rows=0 → ルートと観測の距離が常に閾値超過の可能性。RADIUS_Mを一時的に50–100mで試し、"
+              "lon/lat入替え（自動検知済）やルート座標の誤差を確認してください。")
     if diag_samples:
         d_list = []
         within20 = within50 = within100 = 0
