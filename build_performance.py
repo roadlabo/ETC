@@ -63,19 +63,55 @@ def parse_hour(s: str) -> Optional[int]:
     t = s.strip()
     # 1) 標準: H:MM[:SS[.mmm]][+TZ]
     m = re.search(r'(\d{1,2}):\d{1,2}(?::\d{1,2}(?:\.\d+)?)?', t)
-    if not m:
-        # 2) 和式など "HH時MM分"
-        m = re.search(r'(\d{1,2})\s*[時Hh]\s*\d{1,2}', t)
-    if not m:
-        # 3) "HH-MM" のようなハイフン区切り（時刻っぽいもの）
-        m = re.search(r'(\d{1,2})-\d{1,2}', t)
-    if not m:
-        return None
-    try:
-        hh = int(m.group(1))
-        return hh if 0 <= hh <= 23 else None
-    except Exception:
-        return None
+    if m:
+        try:
+            hh = int(m.group(1))
+            return hh if 0 <= hh <= 23 else None
+        except Exception:
+            return None
+
+    # 2) 和式など "HH時MM分"
+    m = re.search(r'(\d{1,2})\s*[時Hh]\s*\d{1,2}', t)
+    if m:
+        try:
+            hh = int(m.group(1))
+            return hh if 0 <= hh <= 23 else None
+        except Exception:
+            return None
+
+    # 3) "HH-MM" のようなハイフン区切り（時刻っぽいもの）
+    m = re.search(r'(\d{1,2})-\d{1,2}', t)
+    if m:
+        try:
+            hh = int(m.group(1))
+            return hh if 0 <= hh <= 23 else None
+        except Exception:
+            return None
+
+    # 3-a) 区切り無しの HHMM / HMM （例: '0930', '930'）
+    m = re.search(r'\b(\d{3,4})\b', t)  # 3～4桁の連続数字を拾う
+    if m:
+        num = m.group(1)
+        try:
+            # 先頭1～2桁を時とみなす（'930'→'9','0930'→'09'）
+            hh = int(num[:-2]) if len(num) == 4 else int(num[0])
+            if 0 <= hh <= 23:
+                return hh
+        except Exception:
+            return None
+
+    # 3-b) 区切りなしの 14桁: YYYYMMDDHHMMSS（例: 20250224161105）
+    m = re.fullmatch(r'(\d{14})', t)
+    if m:
+        num = m.group(1)
+        try:
+            hh = int(num[8:10])  # 9～10文字目が「時」
+            if 0 <= hh <= 23:
+                return hh
+        except Exception:
+            pass
+
+    return None
 
 
 def parse_speed(val: str) -> Optional[float]:
