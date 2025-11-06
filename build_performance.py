@@ -386,32 +386,32 @@ def main():
         else:
             print("[DIAG] 距離診断サンプルが数値化できませんでした。列の位置や値を確認してください。")
 
-    # --- デバッグ一致CSV（先頭200件だけ） ---
-    try:
-        dbg_path = str(Path(OUTPUT_PATH).with_name("debug_matches.csv"))
-        out_dbg = []
-        count_dbg = 0
-        for i, km in enumerate(kp_km):
-            for h in range(24):
-                s, c = stats[i][h]
-                if c > 0:
-                    avg = s / c
-                    out_dbg.append([f"{km:.{KP_DECIMALS}f}", h, round(avg, ROUND_DIGITS), c])
-                    count_dbg += 1
-                    if count_dbg >= 200:
-                        break
-            if count_dbg >= 200:
-                break
-        if out_dbg:
-            with open(dbg_path, "w", newline="", encoding="cp932") as df:
-                w = csv.writer(df, lineterminator="\r\n")
-                w.writerow(["KP[km]", "hour", "avg_speed", "count"])
-                w.writerows(out_dbg)
-            print(f"[DEBUG] 一致サンプルを {dbg_path} に出力しました（最大200行）。")
-        else:
-            print("[DEBUG] 一致サンプルは0件でした。")
-    except Exception as e:
-        print(f"[DEBUG] debug_matches.csv 出力に失敗: {e}")
+    # --- デバッグ一致CSV出力を停止 ---
+    # try:
+    #     dbg_path = str(Path(OUTPUT_PATH).with_name("debug_matches.csv"))
+    #     out_dbg = []
+    #     count_dbg = 0
+    #     for i, km in enumerate(kp_km):
+    #         for h in range(24):
+    #             s, c = stats[i][h]
+    #             if c > 0:
+    #                 avg = s / c
+    #                 out_dbg.append([f"{km:.{KP_DECIMALS}f}", h, round(avg, ROUND_DIGITS), c])
+    #                 count_dbg += 1
+    #                 if count_dbg >= 200:
+    #                     break
+    #         if count_dbg >= 200:
+    #             break
+    #     if out_dbg:
+    #         with open(dbg_path, "w", newline="", encoding="cp932") as df:
+    #             w = csv.writer(df, lineterminator="\r\n")
+    #             w.writerow(["KP[km]", "hour", "avg_speed", "count"])
+    #             w.writerows(out_dbg)
+    #         print(f"[DEBUG] 一致サンプルを {dbg_path} に出力しました（最大200行）。")
+    #     else:
+    #         print("[DEBUG] 一致サンプルは0件でした。")
+    # except Exception as e:
+    #     print(f"[DEBUG] debug_matches.csv 出力に失敗: {e}")
 
     processing_end = datetime.now()
     print(f"[TIME] End: {format_datetime(processing_end)}")
