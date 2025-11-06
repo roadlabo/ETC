@@ -113,11 +113,30 @@ def list_input_csvs(input_dir, recursive):
     pattern = "**/*.csv" if recursive else "*.csv"
     return glob.glob(os.path.join(input_dir, pattern), recursive=recursive)
 
+def iter_csv_rows_with_guess(path, encodings=("cp932", "utf-8-sig", "utf-8")):
+    """
+    指定ファイルを複数エンコーディングで試行して csv.reader を生成。
+    最初に成功したエンコーディングで全行を yield。
+    """
+    last_err = None
+    for enc in encodings:
+        try:
+            with open(path, "r", newline="", encoding=enc) as f:
+                for row in csv.reader(f):
+                    yield row
+            return
+        except Exception as e:
+            last_err = e
+            continue
+    # どれもだめなら最終エラーを投げる
+    raise last_err if last_err else RuntimeError(f"Failed to read: {path}")
+
+
 def write_header(writer):
-    # 見本と同じヘッダー3行（50列固定）
+    # 見本と同じヘッダー3行（50列固定）※時間帯は'を付けてExcelの日付化を防止
     writer.writerow(["自動運転バス運行ルート　パフォーマンス調査"] + [""]*49)
     writer.writerow(["キロ"] + ["速度"]*24 + ["キロ"] + ["台数"]*24)
-    time_labels = [f"{h}-{h+1}" for h in range(24)]
+    time_labels = [f"'{h}-{h+1}" for h in range(24)]
     writer.writerow(["ポスト"] + time_labels + ["ポスト"] + time_labels)
 
 def format_datetime(dt):
@@ -172,29 +191,35 @@ def main():
     if total_files == 0:
         print_progress(total_files, total_files)
 
+    total_rows = 0
+    parsed_rows = 0
+    matched_rows = 0
+
     for path in files:
         try:
-            with open(path, "r", newline="", encoding="cp932") as f:
-                reader = csv.reader(f)
-                for row in reader:
-                    if not row: continue
-                    try:
-                        lon = float(row[COL_LON])
-                        lat = float(row[COL_LAT])
-                        hour = parse_hour(row[COL_TIME])
-                        if hour is None or not (0 <= hour <= 23):
-                            continue
-                        spd = float(row[COL_SPEED])
-                        if spd < 0 or spd > 300:  # 常識的範囲
-                            continue
-                    except Exception:
+            for row in iter_csv_rows_with_guess(path):
+                if not row:
+                    continue
+                total_rows += 1
+                try:
+                    lon = float(row[COL_LON])
+                    lat = float(row[COL_LAT])
+                    hour = parse_hour(row[COL_TIME])
+                    if hour is None or not (0 <= hour <= 23):
                         continue
+                    spd = float(row[COL_SPEED])
+                    if spd < 0 or spd > 300:  # 常識的範囲
+                        continue
+                    parsed_rows += 1
+                except Exception:
+                    continue
 
-                    d, idx = nearest_route_index(lat, lon, route_lat_r, route_lon_r)
-                    if idx < 0 or d > RADIUS_M:
-                        continue
-                    s, c = stats[idx][hour]
-                    stats[idx][hour] = [s + spd, c + 1]
+                d, idx = nearest_route_index(lat, lon, route_lat_r, route_lon_r)
+                if idx < 0 or d > RADIUS_M:
+                    continue
+                s, c = stats[idx][hour]
+                stats[idx][hour] = [s + spd, c + 1]
+                matched_rows += 1
         except Exception as e:
             print(f"[WARN] 読み込み失敗: {path} ({e})")
             had_warning = True
@@ -223,6 +248,7 @@ def main():
             writer.writerow(row)
 
     print(f"[DONE] 出力: {OUTPUT_PATH}")
+    print(f"[STATS] total_rows={total_rows}, parsed_rows={parsed_rows}, matched_rows={matched_rows}, radius_m={RADIUS_M}")
 
     processing_end = datetime.now()
     print(f"[TIME] End: {format_datetime(processing_end)}")
