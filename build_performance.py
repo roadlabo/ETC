@@ -1,5 +1,8 @@
 import os, csv, glob, math, argparse
 from datetime import datetime
+import random
+from statistics import median
+from pathlib import Path
 
 # =========================
 # ★ スクリプト冒頭で固定指定 ★
@@ -76,18 +79,27 @@ def build_route_kp(route_path):
       lon_rad : List[float]  各ルート行の経度(rad)
     """
     lats, lons = [], []
-    with open(route_path, "r", newline="", encoding="cp932") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if not row:
-                continue
-            try:
-                lon = float(row[ROUTE_LON_COL])
-                lat = float(row[ROUTE_LAT_COL])
-            except Exception:
-                continue
-            lons.append(lon)
-            lats.append(lat)
+    reader = None
+    for enc in ("cp932", "utf-8-sig", "utf-8"):
+        try:
+            with open(route_path, "r", newline="", encoding=enc) as f:
+                reader = list(csv.reader(f))
+            break
+        except Exception:
+            reader = None
+            continue
+    if reader is None:
+        raise RuntimeError("ルートCSVを読み取れません（文字コード不一致）。")
+    for row in reader:
+        if not row:
+            continue
+        try:
+            lon = float(row[ROUTE_LON_COL])
+            lat = float(row[ROUTE_LAT_COL])
+        except Exception:
+            continue
+        lons.append(lon)
+        lats.append(lat)
     if not lats:
         raise RuntimeError("ルートCSVから座標を読み取れませんでした。列index設定を確認してください。")
 
@@ -97,17 +109,28 @@ def build_route_kp(route_path):
     for i in range(1, len(lat_r)):
         d = haversine_m(lat_r[i-1], lon_r[i-1], lat_r[i], lon_r[i])  # meters
         kp_km.append(kp_km[-1] + d / 1000.0)  # km 累積
+    min_lat = min(lats)
+    max_lat = max(lats)
+    min_lon = min(lons)
+    max_lon = max(lons)
+    print(f"[ROUTE] points={len(kp_km)}, length_km={kp_km[-1]:.3f}, "
+          f"lat=[{min_lat:.5f},{max_lat:.5f}] lon=[{min_lon:.5f},{max_lon:.5f}]")
     return kp_km, lat_r, lon_r
 
-def nearest_route_index(lat_deg, lon_deg, route_lat_r, route_lon_r):
-    """観測点→ルート最近傍インデックス（総当たり）"""
-    lr = deg2rad(lat_deg); lo = deg2rad(lon_deg)
+
+def nearest_distance_to_polyline_m(lat_deg, lon_deg, route_lat_r, route_lon_r):
+    lr = deg2rad(lat_deg)
+    lo = deg2rad(lon_deg)
     min_d, min_i = float("inf"), -1
     for i in range(len(route_lat_r)):
         d = haversine_m(lr, lo, route_lat_r[i], route_lon_r[i])
         if d < min_d:
             min_d, min_i = d, i
     return min_d, min_i
+
+def nearest_route_index(lat_deg, lon_deg, route_lat_r, route_lon_r):
+    """観測点→ルート最近傍インデックス（総当たり）"""
+    return nearest_distance_to_polyline_m(lat_deg, lon_deg, route_lat_r, route_lon_r)
 
 def list_input_csvs(input_dir, recursive):
     pattern = "**/*.csv" if recursive else "*.csv"
@@ -194,10 +217,17 @@ def main():
     total_rows = 0
     parsed_rows = 0
     matched_rows = 0
+    diag_samples = []
 
     for path in files:
         try:
-            for row in iter_csv_rows_with_guess(path):
+            rows = list(iter_csv_rows_with_guess(path))
+            if len(diag_samples) < 2000:
+                for r in rows[:200]:
+                    diag_samples.append(r)
+                    if len(diag_samples) >= 2000:
+                        break
+            for row in rows:
                 if not row:
                     continue
                 total_rows += 1
@@ -207,8 +237,9 @@ def main():
                     hour = parse_hour(row[COL_TIME])
                     if hour is None or not (0 <= hour <= 23):
                         continue
-                    spd = float(row[COL_SPEED])
-                    if spd < 0 or spd > 300:  # 常識的範囲
+                    raw_spd = str(row[COL_SPEED]).replace(",", "").replace("　", "").strip()
+                    spd = float(raw_spd)
+                    if spd < 0 or spd > 300:
                         continue
                     parsed_rows += 1
                 except Exception:
@@ -248,7 +279,56 @@ def main():
             writer.writerow(row)
 
     print(f"[DONE] 出力: {OUTPUT_PATH}")
-    print(f"[STATS] total_rows={total_rows}, parsed_rows={parsed_rows}, matched_rows={matched_rows}, radius_m={RADIUS_M}")
+    print(f"[STATS] files={len(files)}, total_rows={total_rows}, parsed_rows={parsed_rows}, matched_rows={matched_rows}, radius_m={RADIUS_M}")
+    if diag_samples:
+        d_list = []
+        within20 = within50 = within100 = 0
+        for r in random.sample(diag_samples, min(len(diag_samples), 1000)):
+            try:
+                lon = float(r[COL_LON])
+                lat = float(r[COL_LAT])
+            except Exception:
+                continue
+            d, _ = nearest_distance_to_polyline_m(lat, lon, route_lat_r, route_lon_r)
+            d_list.append(d)
+            if d <= 20:
+                within20 += 1
+            if d <= 50:
+                within50 += 1
+            if d <= 100:
+                within100 += 1
+        if d_list:
+            print(f"[DIAG] sample_n={len(d_list)}, d_median={median(d_list):.1f}m, "
+                  f"≤20m={within20}, ≤50m={within50}, ≤100m={within100}")
+        else:
+            print("[DIAG] 距離診断サンプルが数値化できませんでした。列の位置や値を確認してください。")
+
+    # --- デバッグ一致CSV（先頭200件だけ） ---
+    try:
+        dbg_path = str(Path(OUTPUT_PATH).with_name("debug_matches.csv"))
+        out_dbg = []
+        count_dbg = 0
+        for i, km in enumerate(kp_km):
+            for h in range(24):
+                s, c = stats[i][h]
+                if c > 0:
+                    avg = s / c
+                    out_dbg.append([f"{km:.{KP_DECIMALS}f}", h, round(avg, ROUND_DIGITS), c])
+                    count_dbg += 1
+                    if count_dbg >= 200:
+                        break
+            if count_dbg >= 200:
+                break
+        if out_dbg:
+            with open(dbg_path, "w", newline="", encoding="cp932") as df:
+                w = csv.writer(df, lineterminator="\r\n")
+                w.writerow(["KP[km]", "hour", "avg_speed", "count"])
+                w.writerows(out_dbg)
+            print(f"[DEBUG] 一致サンプルを {dbg_path} に出力しました（最大200行）。")
+        else:
+            print("[DEBUG] 一致サンプルは0件でした。")
+    except Exception as e:
+        print(f"[DEBUG] debug_matches.csv 出力に失敗: {e}")
 
     processing_end = datetime.now()
     print(f"[TIME] End: {format_datetime(processing_end)}")
