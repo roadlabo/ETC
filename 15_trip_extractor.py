@@ -13,6 +13,7 @@ import csv
 import math
 import sys
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterator, List, Sequence, Tuple
@@ -30,12 +31,21 @@ VERBOSE = False       # Trueで詳細ログ表示
 RECURSIVE = False     # Trueでサブフォルダ再帰探索
 AUDIT_MODE = False    # Trueで距離計算回数など表示
 # ============================================================
+# 抽出対象の曜日（空集合=set()なら曜日フィルタなし）
+# 曜日番号は下記の数値で指定すること：
+# （1-SUN, 2-MON, 3-TUE, 4-WED, 5-THU, 6-FRI, 7-SAT）
+# 例）平日のみ: {2,3,4,5,6} / 日曜のみ: {1}
+TARGET_WEEKDAYS: set[int] = {2, 3, 4, 5, 6}
+# G列の値（例：20250224161105）の先頭8桁 YYYYMMDD から曜日を判定します。
+# 不正値や空欄の行は曜日不明として除外されます。
+# ============================================================
 
 
 # Column indices (0-based)
 LAT_INDEX = 14
 LON_INDEX = 15
 FLAG_INDEX = 12
+DATE_INDEX = 6  # G列。例: 20250224161105（YYYYMMDDHHMMSS）
 
 EARTH_RADIUS_M = 6_371_000.0
 
@@ -120,6 +130,28 @@ def read_csv_rows(path: Path) -> List[CSVRow]:
     return rows
 
 
+def _weekday_from_row(row: "CSVRow") -> int | None:
+    """
+    G列（DATE_INDEX）の先頭8桁 YYYYMMDD から曜日番号を返す。
+    戻り値: 1=SUN, 2=MON, ... , 7=SAT。パース失敗時は None。
+    """
+
+    try:
+        if len(row.values) <= DATE_INDEX:
+            return None
+        token = row.values[DATE_INDEX]
+        if not token:
+            return None
+        ymd = token[:8]  # "YYYYMMDD"
+        dt = datetime.strptime(ymd, "%Y%m%d")
+        # Pythonのweekday(): Mon=0 .. Sun=6 → 1=SUN..7=SAT に変換
+        py = dt.weekday()  # Mon=0, Tue=1, ..., Sun=6
+        # 変換：Sun(6)→1, Mon(0)→2, ..., Sat(5)→7
+        return 1 if py == 6 else py + 2
+    except Exception:
+        return None
+
+
 def build_boundaries(rows: Sequence[CSVRow]) -> List[int]:
     """Build the boundary set B following the strict specification."""
 
@@ -151,14 +183,23 @@ def trip_matches_route(
     sample_lon_rad: np.ndarray,
     thresh_m: float,
     min_hits: int,
+    target_weekdays: set[int],
 ) -> bool:
-    """Return True if the segment [start, end) contains at least ``min_hits`` matches."""
+    """Return True if the segment [start, end) contains at least ``min_hits`` matches
+    after applying weekday filtering (if specified)."""
 
     if sample_lat_rad.size == 0 or sample_lon_rad.size == 0:
         return False
 
     hits = 0
     for row in rows[start:end]:
+        # ① 曜日フィルタ
+        if target_weekdays:
+            wd = _weekday_from_row(row)
+            if wd is None or wd not in target_weekdays:
+                continue  # 対象曜日でなければ距離判定をスキップ
+
+        # ② 距離判定
         if len(row.values) <= max(LAT_INDEX, LON_INDEX):
             continue
         try:
@@ -266,6 +307,7 @@ def process_file(
             sample_lon_rad,
             thresh_m,
             min_hits,
+            TARGET_WEEKDAYS,
         ):
             continue
 
