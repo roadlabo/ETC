@@ -1,334 +1,198 @@
 # -*- coding: utf-8 -*-
 """
-od_heatmap_viewer.py
+50_od_heatmap_viewer.py
 trip_extractor.py の出力CSV群から、起点(Origin)と終点(Destination)を抽出し、
-別々のヒートマップにして1画面で横並び表示するツール。
-
-Usage:
-  python od_heatmap_viewer.py [INPUT_DIR] [--radius 16] [--blur 18] [--min-opacity 0.1]
-                              [--max-zoom 12] [--recursive] [--pattern "*.csv"]
-
-Output:
-  origin_map.html
-  destination_map.html
-  index_od_heatmap.html  ← 2つの地図を1画面に埋め込み（見出し表示）
-  od_summary.txt
+O列=経度, P列=緯度 の固定列を使用してヒートマップを生成する。
 """
-from __future__ import annotations
 
-import argparse
-import glob
-import os
-import sys
-import webbrowser
-from typing import Iterable, List, Optional, Sequence, Tuple
-
-import numpy as np
-import pandas as pd
-from folium import Map
-from folium.plugins import HeatMap
+import os, sys, glob, webbrowser
+import pandas as pd, numpy as np
 from tqdm import tqdm
+import folium
+from folium.plugins import HeatMap
 
-LAT_CANDIDATES: Sequence[str] = ("lat", "latitude", "Lat", "Latitude", "LAT", "緯度")
-LON_CANDIDATES: Sequence[str] = ("lon", "lng", "longitude", "Long", "LON", "経度")
+# ============================================================
+# ★★★ 設定エリア（ここだけ変更すればOK）★★★
+# ============================================================
 
+# ✅ 入力フォルダ（trip_extractor出力CSVの場所）
+INPUT_DIR = r"D:\ETC\trip_csvs"
 
-def _find_lat_lon_columns(df: pd.DataFrame) -> Optional[Tuple[str, str]]:
-    """列名から緯度・経度列を推定する。"""
-    lowered = {c.lower(): c for c in df.columns}
-    lat_col = next((lowered[c.lower()] for c in LAT_CANDIDATES if c.lower() in lowered), None)
-    lon_col = next((lowered[c.lower()] for c in LON_CANDIDATES if c.lower() in lowered), None)
-    if lat_col and lon_col:
-        return lat_col, lon_col
-    return None
+# ✅ 出力フォルダ（ヒートマップ・サマリを保存する場所）
+OUTPUT_DIR = r"D:\ETC\trip_output"
 
+# 出力ファイル（OUTPUT_DIR内に生成される）
+OUTPUT_ORIGIN_HTML = os.path.join(OUTPUT_DIR, "origin_map.html")
+OUTPUT_DEST_HTML   = os.path.join(OUTPUT_DIR, "destination_map.html")
+OUTPUT_INDEX_HTML  = os.path.join(OUTPUT_DIR, "index_od_heatmap.html")
+OUTPUT_SUMMARY_TXT = os.path.join(OUTPUT_DIR, "od_summary.txt")
 
-def _numeric_like_columns(df: pd.DataFrame) -> List[str]:
-    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    if len(numeric_cols) >= 2:
-        return numeric_cols[:2]
+# ヒートマップの描画設定
+RADIUS = 16
+BLUR = 18
+MIN_OPACITY = 0.15
+MAX_ZOOM = 12
 
-    def is_numeric_like(series: pd.Series) -> bool:
-        try:
-            pd.to_numeric(series.dropna().head(100), errors="raise")
-            return True
-        except Exception:
-            return False
+# ------------------------------------------------------------
+# 固定列設定（経度=O列, 緯度=P列）
+# ------------------------------------------------------------
+LON_COL_INDEX = 14  # O列 → 0始まりで14
+LAT_COL_INDEX = 15  # P列 → 0始まりで15
 
-    text_cols = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
-    numeric_like = [c for c in text_cols if is_numeric_like(df[c])]
-    candidates = numeric_cols + numeric_like
-    return candidates[:2]
+# ============================================================
+# 以下、処理ロジック
+# ============================================================
 
-
-def _to_float(value: object) -> float:
-    if value is None:
-        return float("nan")
+def _to_float(v):
+    """文字列をfloatに変換（カンマ付き・NaN対応）"""
     try:
-        return float(value)
+        return float(v)
     except Exception:
         try:
-            return float(str(value).replace(",", ""))
+            return float(str(v).replace(",", ""))
         except Exception:
-            return float("nan")
+            return np.nan
 
-
-def _normalize_latlon(lat: object, lon: object) -> Optional[Tuple[float, float]]:
-    lat_val = _to_float(lat)
-    lon_val = _to_float(lon)
-    if np.isnan(lat_val) or np.isnan(lon_val):
+def _normalize_latlon(lat, lon):
+    """緯度経度を正規化・範囲チェック（逆転補正含む）"""
+    lat = _to_float(lat); lon = _to_float(lon)
+    if np.isnan(lat) or np.isnan(lon):
         return None
-
-    def in_global_range(value: float, lower: float, upper: float) -> bool:
-        return lower <= value <= upper
-
-    if not in_global_range(lat_val, -90, 90) or not in_global_range(lon_val, -180, 180):
-        if in_global_range(lon_val, -90, 90) and in_global_range(lat_val, -180, 180):
-            lat_val, lon_val = lon_val, lat_val
-            if not in_global_range(lat_val, -90, 90) or not in_global_range(lon_val, -180, 180):
-                return None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        if -90 <= lon <= 90 and -180 <= lat <= 180:
+            lat, lon = lon, lat
         else:
             return None
-    return lat_val, lon_val
+    return (lat, lon)
 
+def _read_csv_robust(path):
+    """文字コード・区切り自動検出"""
+    for kwargs in (
+        dict(),
+        dict(encoding="utf-8-sig"),
+        dict(encoding="cp932"),
+        dict(sep=None, engine="python"),
+        dict(sep=None, engine="python", encoding="cp932"),
+    ):
+        try:
+            return pd.read_csv(path, **kwargs)
+        except Exception:
+            continue
+    return None
 
-def extract_origin_destination(df: pd.DataFrame) -> Optional[Tuple[Tuple[float, float], Tuple[float, float]]]:
+def extract_origin_destination(df):
+    """先頭行=Origin, 最終行=Destination を O/P列から抽出"""
+    if df is None or df.empty:
+        return None
+    df = df.dropna(how="all")
     if df.empty:
         return None
 
-    columns = _find_lat_lon_columns(df)
-    if columns is None:
-        candidates = _numeric_like_columns(df)
-        if len(candidates) < 2:
-            return None
-        columns = (candidates[0], candidates[1])
+    cols = list(df.columns)
+    if len(cols) <= max(LON_COL_INDEX, LAT_COL_INDEX):
+        return None
 
-    lat_col, lon_col = columns
+    lon_col = cols[LON_COL_INDEX]
+    lat_col = cols[LAT_COL_INDEX]
+
     head = df.iloc[0]
     tail = df.iloc[-1]
-    origin = _normalize_latlon(head[lat_col], head[lon_col])
-    destination = _normalize_latlon(tail[lat_col], tail[lon_col])
-    if origin is None or destination is None:
+
+    p_o = _normalize_latlon(head[lat_col], head[lon_col])
+    p_d = _normalize_latlon(tail[lat_col], tail[lon_col])
+
+    if p_o is None or p_d is None:
         return None
-    return origin, destination
+    return p_o, p_d
 
-
-def _mean_center(points: Iterable[Tuple[float, float]]) -> Tuple[float, float]:
-    latitudes = [p[0] for p in points]
-    longitudes = [p[1] for p in points]
-    return float(np.mean(latitudes)), float(np.mean(longitudes))
-
-
-def create_heatmap_html(
-    points: Sequence[Sequence[float]],
-    center: Tuple[float, float],
-    out_html: str,
-    *,
-    radius: int,
-    blur: int,
-    min_opacity: float,
-    max_zoom: int,
-) -> None:
-    if points:
-        fmap = Map(location=center, zoom_start=9, control_scale=True, prefer_canvas=True)
-        HeatMap(
-            points,
-            radius=radius,
-            blur=blur,
-            min_opacity=min_opacity,
-            max_zoom=max_zoom,
-        ).add_to(fmap)
+def create_heatmap(points, center, out_html):
+    """Foliumでヒートマップを作成"""
+    if not points:
+        m = folium.Map(location=center, zoom_start=9, control_scale=True)
+        folium.Marker(center, tooltip="No points").add_to(m)
     else:
-        fmap = Map(location=center, zoom_start=9, control_scale=True, prefer_canvas=True)
-        folium_popup = "No points"
-        from folium import Marker
+        m = folium.Map(location=center, zoom_start=9, control_scale=True)
+        HeatMap(points, radius=RADIUS, blur=BLUR,
+                min_opacity=MIN_OPACITY, max_zoom=MAX_ZOOM).add_to(m)
+    m.save(out_html)
 
-        Marker(center, tooltip=folium_popup).add_to(fmap)
-    fmap.save(out_html)
-
-
-def build_index_html(index_path: str, origin_path: str, dest_path: str) -> None:
+def build_index_html(index_path, origin_path, dest_path):
+    """Origin/Destination 2画面を横並び表示するHTMLを生成"""
     html = f"""<!DOCTYPE html>
-<html lang=\"ja\">
+<html lang="ja">
 <head>
-<meta charset=\"utf-8\">
-<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+<meta charset="utf-8">
 <title>OD Heatmaps</title>
 <style>
-  body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Noto Sans JP\", \"Hiragino Sans\", \"Yu Gothic\", \"Helvetica Neue\", Arial, sans-serif; }}
-  header {{ padding: 12px 16px; background: #111; color: #fff; font-weight: 600; }}
-  .container {{
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0;
-    height: calc(100vh - 52px);
-  }}
-  .panel {{ display: flex; flex-direction: column; min-height: 0; }}
-  .title {{ padding: 10px 12px; font-weight: 700; border-bottom: 1px solid #ddd; }}
-  iframe {{ border: 0; width: 100%; height: 100%; }}
-  @media (max-width: 960px) {{
-    .container {{ grid-template-columns: 1fr; grid-auto-rows: 50vh; height: auto; }}
-  }}
+body {{margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans JP";}}
+header {{padding:12px;background:#222;color:#fff;font-weight:bold;}}
+.container {{display:grid;grid-template-columns:1fr 1fr;height:calc(100vh - 50px);}}
+.panel {{display:flex;flex-direction:column;}}
+.title {{padding:8px;font-weight:bold;border-bottom:1px solid #ddd;text-align:center;}}
+iframe {{flex:1;border:0;}}
 </style>
 </head>
 <body>
 <header>Trip Origins & Destinations Heatmaps</header>
-<div class=\"container\">
-  <section class=\"panel\">
-    <div class=\"title\">Origin</div>
-    <iframe src=\"{os.path.basename(origin_path)}\"></iframe>
-  </section>
-  <section class=\"panel\">
-    <div class=\"title\">Destination</div>
-    <iframe src=\"{os.path.basename(dest_path)}\"></iframe>
-  </section>
-</div>
-</body>
-</html>"""
-    with open(index_path, "w", encoding="utf-8") as fp:
-        fp.write(html)
+<div class="container">
+<section class="panel"><div class="title">Origin</div><iframe src="{os.path.basename(origin_path)}"></iframe></section>
+<section class="panel"><div class="title">Destination</div><iframe src="{os.path.basename(dest_path)}"></iframe></section>
+</div></body></html>"""
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(html)
 
+def main():
+    # 出力フォルダ作成
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def _collect_csv_files(base_dir: str, pattern: str, recursive: bool) -> List[str]:
-    if recursive:
-        return sorted(glob.glob(os.path.join(base_dir, "**", pattern), recursive=True))
-    return sorted(glob.glob(os.path.join(base_dir, pattern)))
+    if not os.path.isdir(INPUT_DIR):
+        print(f"フォルダが見つかりません: {INPUT_DIR}")
+        sys.exit(1)
 
+    files = sorted(glob.glob(os.path.join(INPUT_DIR, "*.csv")))
+    origin_pts = []
+    dest_pts = []
+    used = 0
 
-def _read_csv(path: str) -> Optional[pd.DataFrame]:
-    try:
-        return pd.read_csv(path)
-    except Exception:
-        try:
-            return pd.read_csv(path, encoding="cp932")
-        except Exception:
-            return None
-
-
-def _ensure_directory(path: str) -> str:
-    if not os.path.isdir(path):
-        raise FileNotFoundError(f"入力フォルダが見つかりません: {path}")
-    return path
-
-
-def _select_directory_via_dialog() -> str:
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-
-        root = tk.Tk()
-        root.withdraw()
-        return filedialog.askdirectory(title="trip_extractor 出力CSVフォルダを選択")
-    except Exception:
-        return ""
-
-
-def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Trip CSV から起終点ヒートマップを生成（左右2分割HTMLで表示）")
-    parser.add_argument("input_dir", nargs="?", default=None, help="CSVフォルダのパス（未指定ならダイアログで選択）")
-    parser.add_argument("--pattern", default="*.csv", help="CSVファイルの検索パターン（既定: *.csv）")
-    parser.add_argument("--recursive", action="store_true", help="サブフォルダも再帰検索する")
-    parser.add_argument("--radius", type=int, default=16, help="HeatMapのradius（既定: 16）")
-    parser.add_argument("--blur", type=int, default=18, help="HeatMapのblur（既定: 18）")
-    parser.add_argument("--min-opacity", type=float, default=0.15, help="HeatMapのmin_opacity（既定: 0.15）")
-    parser.add_argument("--max-zoom", type=int, default=12, help="HeatMapのmax_zoom（既定: 12）")
-    return parser.parse_args(argv)
-
-
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = _parse_args(argv)
-
-    input_dir = args.input_dir
-    if input_dir is None:
-        input_dir = _select_directory_via_dialog()
-    if not input_dir:
-        print("キャンセルされました。")
-        return 0
-
-    try:
-        _ensure_directory(input_dir)
-    except FileNotFoundError as exc:
-        print(str(exc))
-        return 1
-
-    files = _collect_csv_files(input_dir, args.pattern, args.recursive)
-    origin_points: List[List[float]] = []
-    dest_points: List[List[float]] = []
-    csv_found = 0
-    csv_used = 0
-
-    for csv_path in tqdm(files, desc="Scanning CSV"):
-        if not csv_path.lower().endswith(".csv"):
-            continue
-        csv_found += 1
-        df = _read_csv(csv_path)
+    for f in tqdm(files, desc="Scanning CSV"):
+        df = _read_csv_robust(f)
         if df is None:
             continue
         od = extract_origin_destination(df)
         if od is None:
             continue
-        origin, destination = od
-        origin_points.append([origin[0], origin[1], 1.0])
-        dest_points.append([destination[0], destination[1], 1.0])
-        csv_used += 1
+        (o_lat, o_lon), (d_lat, d_lon) = od
+        origin_pts.append([o_lat, o_lon, 1.0])
+        dest_pts.append([d_lat, d_lon, 1.0])
+        used += 1
 
-    all_points = [(p[0], p[1]) for p in origin_points] + [(p[0], p[1]) for p in dest_points]
-    if all_points:
-        center = _mean_center(all_points)
-    else:
-        center = (35.7, 137.0)
+    if not origin_pts:
+        print("抽出できる起終点がありません。O/P列を確認してください。")
+        sys.exit(1)
 
-    origin_html = os.path.join(input_dir, "origin_map.html")
-    destination_html = os.path.join(input_dir, "destination_map.html")
-    index_html = os.path.join(input_dir, "index_od_heatmap.html")
-    summary_txt = os.path.join(input_dir, "od_summary.txt")
+    # 中心座標を全点の平均から算出
+    all_pts = [(p[0], p[1]) for p in origin_pts + dest_pts]
+    lat_c, lon_c = np.mean([p[0] for p in all_pts]), np.mean([p[1] for p in all_pts])
 
-    create_heatmap_html(
-        origin_points,
-        center,
-        origin_html,
-        radius=args.radius,
-        blur=args.blur,
-        min_opacity=args.min_opacity,
-        max_zoom=args.max_zoom,
-    )
-    create_heatmap_html(
-        dest_points,
-        center,
-        destination_html,
-        radius=args.radius,
-        blur=args.blur,
-        min_opacity=args.min_opacity,
-        max_zoom=args.max_zoom,
-    )
+    # 出力ファイル生成
+    create_heatmap(origin_pts, (lat_c, lon_c), OUTPUT_ORIGIN_HTML)
+    create_heatmap(dest_pts, (lat_c, lon_c), OUTPUT_DEST_HTML)
+    build_index_html(OUTPUT_INDEX_HTML, OUTPUT_ORIGIN_HTML, OUTPUT_DEST_HTML)
 
-    build_index_html(index_html, origin_html, destination_html)
+    # サマリ出力
+    with open(OUTPUT_SUMMARY_TXT, "w", encoding="utf-8") as fw:
+        fw.write(f"Input  : {INPUT_DIR}\n")
+        fw.write(f"Output : {OUTPUT_DIR}\n")
+        fw.write(f"Files  : {len(files)} / Used : {used}\n")
+        fw.write(f"Center : ({lat_c:.6f}, {lon_c:.6f})\n")
+        fw.write(f"Index  : {os.path.basename(OUTPUT_INDEX_HTML)}\n")
 
-    with open(summary_txt, "w", encoding="utf-8") as fp:
-        fp.write("OD Heatmap Summary\n")
-        fp.write(f"Input folder  : {input_dir}\n")
-        fp.write(f"CSV found     : {csv_found}\n")
-        fp.write(f"CSV used      : {csv_used}\n")
-        fp.write(f"Origin points : {len(origin_points)}\n")
-        fp.write(f"Dest points   : {len(dest_points)}\n")
-        fp.write(f"Center(lat,lon): ({center[0]:.6f}, {center[1]:.6f})\n")
-        fp.write("Files:\n")
-        fp.write(f"  - {os.path.basename(origin_html)}\n")
-        fp.write(f"  - {os.path.basename(destination_html)}\n")
-        fp.write(f"  - {os.path.basename(index_html)}\n")
+    # ブラウザで開く
+    webbrowser.open(f"file://{OUTPUT_INDEX_HTML}")
 
-    try:
-        webbrowser.open(f"file://{index_html}")
-    except Exception:
-        pass
+    print("=== 完了しました ===")
+    print(f"出力フォルダ: {OUTPUT_DIR}")
+    print(f"生成ファイル: {OUTPUT_INDEX_HTML}")
 
-    print("\n=== DONE ===")
-    print(f"Index : {index_html}")
-    print(f"Origin: {origin_html}")
-    print(f"Dest  : {destination_html}")
-    print(f"Summary: {summary_txt}")
-    return 0
-
-
-if __name__ == "__main__":  # pragma: no cover
-    sys.exit(main())
+if __name__ == "__main__":
+    main()
