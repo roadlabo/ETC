@@ -9,16 +9,27 @@ checks, and rich command-line progress feedback.
 
 from __future__ import annotations
 
-import argparse
 import csv
 import math
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, List, Sequence, Tuple
+from typing import Dict, Iterator, List, Sequence, Tuple
 
 import numpy as np
+
+
+# ============================================================
+# trip_extractor.py 設定セクション（ユーザーが自由に変更）
+# ============================================================
+THRESH_M = 10.0      # サンプルルートとの距離閾値[m]
+MIN_HITS = 4         # 一致点がこの数以上でHIT
+DRY_RUN = False       # Trueなら保存せず件数のみ
+VERBOSE = False       # Trueで詳細ログ表示
+RECURSIVE = False     # Trueでサブフォルダ再帰探索
+AUDIT_MODE = False    # Trueで距離計算回数など表示
+# ============================================================
 
 
 # Column indices (0-based)
@@ -281,23 +292,26 @@ def process_file(
     return candidate_count, matched_count, saved_count
 
 
-def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+def parse_args(argv: Sequence[str]) -> Dict[str, Path | None]:
+    if not argv:
+        return {}
+
+    import argparse
+
     parser = argparse.ArgumentParser(description="Extract trips that match a sample route")
     parser.add_argument("--sample", type=Path, help="Path to sample CSV")
     parser.add_argument("--input-dir", type=Path, help="Directory containing trip CSV files")
-    parser.add_argument("--thresh", type=float, default=10.0, help="Distance threshold in meters")
-    parser.add_argument("--min-hits", type=int, default=2, help="Minimum match points required")
-    parser.add_argument("--dry-run", action="store_true", help="Run without writing files")
-    parser.add_argument("--recursive", action="store_true", help="Recursively search CSV files")
-    parser.add_argument("--verbose", action="store_true", help="Print verbose logs")
-    return parser.parse_args(list(argv))
+    return vars(parser.parse_args(list(argv)))
 
 
-def resolve_paths(args: argparse.Namespace) -> Tuple[Path, Path]:
+def resolve_paths(args: Dict[str, Path | None]) -> Tuple[Path, Path]:
     """Resolve the sample file and input directory without GUI dialogs."""
 
-    sample_path = args.sample or DEFAULT_SAMPLE_PATH
-    input_dir = args.input_dir or DEFAULT_INPUT_DIR
+    sample_path = args.get("sample")
+    input_dir = args.get("input_dir")
+
+    sample_path = sample_path or DEFAULT_SAMPLE_PATH
+    input_dir = input_dir or DEFAULT_INPUT_DIR
 
     if sample_path is None or input_dir is None:
         raise SystemExit(
@@ -332,7 +346,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Failed to read sample CSV: {exc}")
         return 1
 
-    files = list_csv_files(input_dir, recursive=args.recursive)
+    files = list_csv_files(input_dir, recursive=RECURSIVE)
     total_files = len(files)
     if total_files == 0:
         print(f"No CSV files found in {input_dir}")
@@ -348,7 +362,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     last_len = 0
 
     for index, file_path in enumerate(files, start=1):
-        if args.verbose and last_len:
+        if VERBOSE and last_len:
             _clear_progress(last_len)
             last_len = 0
 
@@ -357,10 +371,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             sample_lat_rad,
             sample_lon_rad,
             out_root,
-            thresh_m=args.thresh,
-            min_hits=args.min_hits,
-            dry_run=args.dry_run,
-            verbose=args.verbose,
+            thresh_m=THRESH_M,
+            min_hits=MIN_HITS,
+            dry_run=DRY_RUN,
+            verbose=VERBOSE,
         )
 
         total_trips += candidate_count
@@ -378,7 +392,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         last_len = _update_progress(line, last_len)
 
-        if args.verbose:
+        if VERBOSE:
             sys.stdout.write("\n")
             sys.stdout.flush()
             last_len = 0
