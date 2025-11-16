@@ -46,6 +46,11 @@ LAT_INDEX = 14
 LON_INDEX = 15
 FLAG_INDEX = 12
 DATE_INDEX = 6  # G列。例: 20250224161105（YYYYMMDDHHMMSS）
+OP_DATE_INDEX = 2  # C列: 運行日 (YYYYMMDD)
+OP_ID_INDEX = 3    # D列: 運行ID (12桁数字)
+VEHICLE_TYPE_INDEX = 4  # E列: 自動車種別 (2桁数字)
+VEHICLE_USE_INDEX = 5   # F列: 自動車用途 (2桁数字)
+TRIP_NO_INDEX = 8       # I列: トリップ番号 (数値)
 
 EARTH_RADIUS_M = 6_371_000.0
 
@@ -152,6 +157,28 @@ def _weekday_from_row(row: "CSVRow") -> int | None:
         return None
 
 
+WEEKDAY_ABBR = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]  # 1: SUN ... 7: SAT に対応
+
+
+def _weekday_abbr_from_ymd(ymd: str) -> str | None:
+    """
+    YYYYMMDD 文字列から曜日の英語3文字表記を返す。
+    例: "20250224" -> "MON"
+    パース失敗時は None。
+    """
+
+    if len(ymd) != 8 or not ymd.isdigit():
+        return None
+    try:
+        dt = datetime.strptime(ymd, "%Y%m%d")
+    except Exception:
+        return None
+    py = dt.weekday()  # Mon=0, ... Sun=6
+    if py == 6:
+        return "SUN"
+    return WEEKDAY_ABBR[py + 1]  # MON=1, TUE=2, ... SAT=6
+
+
 def build_boundaries(rows: Sequence[CSVRow]) -> List[int]:
     """Build the boundary set B following the strict specification."""
 
@@ -222,17 +249,106 @@ def save_trip(
     start: int,
     end: int,
     out_dir: Path,
-    base_name: str,
+    route_name: str,
     seq_no: int,
 ) -> Path:
     """Save the segment [start, end) into the output directory."""
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{base_name}-{seq_no:02d}.csv"
+
+    rows_slice = rows[start:end]
+
+    op_dates: set[str] = set()
+    primary_date: str | None = None
+    for row in rows_slice:
+        if len(row.values) <= OP_DATE_INDEX:
+            continue
+        token = row.values[OP_DATE_INDEX].strip()
+        if len(token) < 8:
+            continue
+        ymd = token[:8]
+        if not ymd.isdigit():
+            continue
+        op_dates.add(ymd)
+        if primary_date is None:
+            primary_date = ymd
+
+    weekdays: set[str] = set()
+    for ymd in op_dates:
+        abbr = _weekday_abbr_from_ymd(ymd)
+        if abbr:
+            weekdays.add(abbr)
+    weekday_order = [abbr for abbr in WEEKDAY_ABBR if abbr in weekdays]
+    weekday_part = "-".join(weekday_order) if weekday_order else "UNK"
+
+    opid12 = "000000000000"
+    for row in rows_slice:
+        if len(row.values) <= OP_ID_INDEX:
+            continue
+        token = row.values[OP_ID_INDEX].strip()
+        if not token:
+            continue
+        opid12 = token.zfill(12)
+        break
+
+    trip_tag = "t000"
+    for row in rows_slice:
+        if len(row.values) <= TRIP_NO_INDEX:
+            continue
+        token = row.values[TRIP_NO_INDEX].strip()
+        if not token:
+            continue
+        try:
+            trip_no = int(float(token))
+        except (TypeError, ValueError):
+            continue
+        trip_tag = f"t{trip_no:03d}"
+        break
+
+    etype_tag = "E00"
+    for row in rows_slice:
+        if len(row.values) <= VEHICLE_TYPE_INDEX:
+            continue
+        token = row.values[VEHICLE_TYPE_INDEX].strip()
+        if not token:
+            continue
+        digits = "".join(ch for ch in token if ch.isdigit())
+        if not digits:
+            continue
+        try:
+            etype_tag = f"E{int(digits):02d}"
+        except ValueError:
+            pass
+        else:
+            break
+
+    fuse_tag = "F00"
+    for row in rows_slice:
+        if len(row.values) <= VEHICLE_USE_INDEX:
+            continue
+        token = row.values[VEHICLE_USE_INDEX].strip()
+        if not token:
+            continue
+        digits = "".join(ch for ch in token if ch.isdigit())
+        if not digits:
+            continue
+        try:
+            fuse_tag = f"F{int(digits):02d}"
+        except ValueError:
+            pass
+        else:
+            break
+
+    if primary_date is None:
+        primary_date = "00000000"
+
+    filename = (
+        f"2nd_{route_name}_{weekday_part}__{opid12}_{primary_date}_{trip_tag}_{etype_tag}_{fuse_tag}.csv"
+    )
     out_path = out_dir / filename
     with out_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        for row in rows[start:end]:
+        for row in rows_slice:
             writer.writerow(row.values)
     return out_path
 
@@ -277,6 +393,7 @@ def process_file(
     min_hits: int,
     dry_run: bool,
     verbose: bool,
+    route_name: str,
 ) -> Tuple[int, int, int]:
     """Process a single CSV file and return (candidate_trips, matched, saved)."""
 
@@ -321,7 +438,7 @@ def process_file(
             continue
 
         try:
-            save_trip(rows, start, end, out_dir, path.stem, saved_count + 1)
+            save_trip(rows, start, end, out_dir, route_name, saved_count + 1)
             saved_count += 1
             if verbose:
                 print(
@@ -397,6 +514,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Total CSV files: {total_files}")
 
     out_root = input_dir / sample_path.stem
+    route_name = sample_path.stem
     total_trips = 0
     total_matches = 0
     total_saved = 0
@@ -417,6 +535,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             min_hits=MIN_HITS,
             dry_run=DRY_RUN,
             verbose=VERBOSE,
+            route_name=route_name,
         )
 
         total_trips += candidate_count
