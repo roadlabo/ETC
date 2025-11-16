@@ -243,25 +243,10 @@ def _is_youshiki_header(header: list[str]) -> bool:
     )
 
 
-def _normalize_trip_number(token: str) -> tuple[list[str], list[int]]:
-    """Return canonical string and integer representations for trip number."""
-
-    strings: list[str] = []
-    integers: list[int] = []
-    cleaned = token.strip()
-    if cleaned:
-        strings.append(cleaned)
-        if cleaned.isdigit():
-            number = int(cleaned)
-            integers.append(number)
-            strings.append(f"{number:03d}")
-    return strings, integers
-
-
 def build_youshiki_dictionary(zip_paths: Iterable[Path]):
     """Build lookup dictionary from 様式1-3 CSV files inside ZIP archives."""
 
-    lookup: dict[tuple[str, str, str | int], list[str]] = {}
+    lookup: dict[tuple[str, str, int], list[str]] = {}
     header: list[str] | None = None
     total_rows = 0
     zip_list = list(zip_paths)
@@ -355,22 +340,19 @@ def build_youshiki_dictionary(zip_paths: Iterable[Path]):
                     trip_token = row[7].strip()
                     if not op_date or not op_id or not trip_token:
                         continue
-                    string_keys, int_keys = _normalize_trip_number(trip_token)
+                    if not trip_token.isdigit():
+                        continue
+                    trip_no = int(trip_token)
                     # Prefer the first occurrence of a key; skip duplicates.
                     row_data = row
                     if header:
                         # Normalize row length to header length for consistent output.
                         row_data = (row + [""] * len(header))[: len(header)]
-                    zip_row_hits += 1
-                    total_rows += 1
-                    for trip_no in int_keys:
-                        key = (op_date, op_id, trip_no)
-                        if key not in lookup:
-                            lookup[key] = row_data
-                    for trip_no in string_keys:
-                        key = (op_date, op_id, trip_no)
-                        if key not in lookup:
-                            lookup[key] = row_data
+                    key = (op_date, op_id, trip_no)
+                    if key not in lookup:
+                        lookup[key] = row_data
+                        zip_row_hits += 1
+                        total_rows += 1
 
         log(
             f"ZIP内様式1-3ヒット行数: {zip_row_hits} 行 "
@@ -409,7 +391,7 @@ def _load_trip_index_rows(index_path: Path) -> list[list[str]]:
 def _match_index_to_lookup(
     index_rows: Sequence[list[str]],
     header: list[str],
-    lookup: dict[tuple[str, str, str | int], list[str]],
+    lookup: dict[tuple[str, str, int], list[str]],
 ) -> tuple[list[list[str]], int, int]:
     """Match index rows to lookup dictionary and return output rows and hit count."""
 
@@ -432,16 +414,19 @@ def _match_index_to_lookup(
         op_id = row[3].strip()
         op_date = row[4].strip()
         trip_token = row[5].strip()
-        string_keys, int_keys = _normalize_trip_number(trip_token)
-        candidates = []
-        candidates.extend((op_date, op_id, key) for key in int_keys)
-        candidates.extend((op_date, op_id, key) for key in string_keys)
+        if not op_id or not op_date or not trip_token:
+            unmatched_count += 1
+            output_rows.append(blank_row)
+            continue
+        if not trip_token.isdigit():
+            unmatched_count += 1
+            output_rows.append(blank_row)
+            continue
+        trip_no = int(trip_token)
 
-        matched_row = None
-        for key in candidates:
-            if key in lookup:
-                matched_row = lookup[key]
-                break
+        key = (op_date, op_id, trip_no)
+        matched_row = lookup.get(key)
+
         if matched_row is not None:
             matched_count += 1
             output_rows.append(matched_row)
