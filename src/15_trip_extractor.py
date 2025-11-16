@@ -26,15 +26,15 @@ import numpy as np
 # Edit these paths to match your environment when running the script without
 # command-line arguments.  Both paths can still be overridden via --sample and
 # --input-dir options if desired.
-DEFAULT_SAMPLE_PATH: Path | None = Path("/path/to/sample_route.csv")
-DEFAULT_INPUT_DIR: Path | None = Path("/path/to/input_directory")
-DEFAULT_OUTPUT_DIR: Path | None = Path("/path/to/output_directory")
+DEFAULT_SAMPLE_PATH: Path | None = Path(r"/path/to/sample_route.csv")
+DEFAULT_INPUT_DIR: Path | None = Path(r"/path/to/input_directory")
+DEFAULT_OUTPUT_DIR: Path | None = Path(r"/path/to/output_directory")
 
 # ============================================================
 # trip_extractor.py 設定セクション（ユーザーが自由に変更）
 # ============================================================
-THRESH_M = 10.0      # サンプルルートとの距離閾値[m]
-MIN_HITS = 4         # 一致点がこの数以上でHIT
+THRESH_M = 20.0      # サンプルルートとの距離閾値[m]
+MIN_HITS = 3         # 一致点がこの数以上でHIT
 DRY_RUN = False       # Trueなら保存せず件数のみ
 VERBOSE = False       # Trueで詳細ログ表示
 RECURSIVE = False     # Trueでサブフォルダ再帰探索
