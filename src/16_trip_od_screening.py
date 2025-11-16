@@ -355,8 +355,8 @@ def build_youshiki_dictionary(zip_paths: Iterable[Path]):
                         total_rows += 1
 
         log(
-            f"ZIP内様式1-3ヒット行数: {zip_row_hits} 行 "
-            f"(累計: {total_rows} 行, file={zip_path.name})"
+            f"ZIP内様式1-3登録候補行数: {zip_row_hits} 行 "
+            f"(累計登録候補: {total_rows} 行, file={zip_path.name})"
         )
 
         progress = idx / zip_total
