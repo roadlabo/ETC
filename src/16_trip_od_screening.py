@@ -8,14 +8,26 @@ trips in the index. Missing matches produce blank rows so that the output row
 count always aligns with the index.
 """
 
+# 本スクリプトは、処理の大まかな進捗が分かるように、5%刻み程度でログを出力します。
+# ファイル件数や行数が多い場合でも、ログが多くなりすぎないよう配慮しています。
+
 from __future__ import annotations
 
 import csv
 import io
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Sequence
+import math
+
+
+def log(msg: str) -> None:
+    """時刻付きで1行ログを出す簡易ヘルパ。"""
+
+    now = datetime.now().strftime("%H:%M:%S")
+    print(f"[{now}] {msg}")
 
 # ---------------------------------------------------------------------------
 # Configuration (edit as needed before running the script)
@@ -108,7 +120,7 @@ def parse_trip_filename(path: Path) -> TripIndexEntry | None:
     stem = path.stem
     parts = stem.split("_")
     if len(parts) < 8 or parts[0] != "2nd":
-        print(f"[WARN] Invalid file name format, skipping: {path.name}")
+        log(f"[WARN] Invalid file name format, skipping: {path.name}")
         return None
 
     route_name = parts[1]
@@ -130,16 +142,16 @@ def parse_trip_filename(path: Path) -> TripIndexEntry | None:
     )
 
 
-def build_trip_index(trip_dir: Path) -> list[TripIndexEntry]:
-    """Scan the trip directory and return parsed entries."""
+def build_trip_index(trip_csv_files: Sequence[Path]) -> list[TripIndexEntry]:
+    """Scan the trip CSV paths and return parsed entries."""
 
     entries: list[TripIndexEntry] = []
-    for csv_path in sorted(trip_dir.glob("*.csv")):
+    for csv_path in trip_csv_files:
         entry = parse_trip_filename(csv_path)
         if entry is None:
             continue
         entries.append(entry)
-    print(f"Found {len(entries)} trip CSV files for indexing.")
+    log(f"インデックス対象のトリップCSV件数: {len(entries)} 件")
     return entries
 
 
@@ -147,6 +159,7 @@ def write_trip_index(entries: Sequence[TripIndexEntry], output_path: Path) -> No
     """Write the trip index CSV based on parsed entries."""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    data_rows_count = len(entries)
     header = [
         "スクリーニング区分",
         "ルート名",
@@ -177,7 +190,9 @@ def write_trip_index(entries: Sequence[TripIndexEntry], output_path: Path) -> No
                     vehicle_use_label(entry.vehicle_use_code),
                 ]
             )
-    print(f"Wrote trip index CSV to {output_path}.")
+    log(
+        f"一覧CSVを出力しました: {output_path} （データ行数: {data_rows_count} 行）"
+    )
 
 
 def _read_csv_rows_from_zip_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> list[list[str]]:
@@ -190,7 +205,7 @@ def _read_csv_rows_from_zip_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -
                 return list(csv.reader(text))
         except UnicodeDecodeError:
             continue
-    print(f"[WARN] Failed to decode CSV in ZIP member: {info.filename}")
+    log(f"[WARN] Failed to decode CSV in ZIP member: {info.filename}")
     return []
 
 
@@ -230,14 +245,25 @@ def build_youshiki_dictionary(zip_paths: Iterable[Path]):
     lookup: dict[tuple[str, str, str | int], list[str]] = {}
     header: list[str] | None = None
     total_rows = 0
+    zip_list = list(zip_paths)
 
-    for zip_path in zip_paths:
+    zip_total = len(zip_list)
+    log("様式1-3の検索・辞書化を開始します。")
+
+    if zip_total == 0:
+        log("処理対象のZIPファイルがありません。")
+        return header, lookup
+
+    zip_start_time = datetime.now()
+    next_progress = 0
+
+    for idx, zip_path in enumerate(zip_list, start=1):
         if zip_path is None or str(zip_path).strip() == "":
             continue
         if not zip_path.exists():
-            print(f"[WARN] ZIP file not found, skipping: {zip_path}")
+            log(f"[WARN] ZIP file not found, skipping: {zip_path}")
             continue
-        print(f"Processing ZIP: {zip_path}")
+        log(f"Processing ZIP: {zip_path}")
         with zipfile.ZipFile(zip_path) as zf:
             for info in zf.infolist():
                 if info.is_dir() or not info.filename.lower().endswith(".csv"):
@@ -273,7 +299,24 @@ def build_youshiki_dictionary(zip_paths: Iterable[Path]):
                         if key not in lookup:
                             lookup[key] = row_data
                     total_rows += 1
-    print(f"Indexed {len(lookup)} unique 様式1-3 keys from {total_rows} data rows.")
+
+        progress = idx / zip_total
+        percent = int(progress * 100)
+
+        if percent >= next_progress:
+            elapsed = (datetime.now() - zip_start_time).total_seconds()
+            if progress > 0 and elapsed > 1.0:
+                est_total = elapsed / progress
+                est_remaining = est_total - elapsed
+                eta = datetime.now() + timedelta(seconds=est_remaining)
+                eta_str = eta.strftime("%H:%M:%S")
+                log(f"ZIP処理進捗: {percent:3d}% ({idx}/{zip_total}) 予想終了時刻: {eta_str}")
+            else:
+                log(f"ZIP処理進捗: {percent:3d}% ({idx}/{zip_total})")
+
+            next_progress += 5
+
+    log(f"様式1-3の辞書化完了。登録行数: {total_rows} 行、ユニークキー数: {len(lookup)} 件")
     return header, lookup
 
 
@@ -290,15 +333,23 @@ def _match_index_to_lookup(
     index_rows: Sequence[list[str]],
     header: list[str],
     lookup: dict[tuple[str, str, str | int], list[str]],
-) -> tuple[list[list[str]], int]:
+) -> tuple[list[list[str]], int, int]:
     """Match index rows to lookup dictionary and return output rows and hit count."""
 
     output_rows: list[list[str]] = []
-    matches = 0
+    matched_count = 0
+    unmatched_count = 0
     blank_row = [""] * len(header)
 
-    for row in index_rows:
+    index_total = len(index_rows)
+    log(f"一覧CSVとのマッチングを開始します。対象件数: {index_total} 行")
+
+    match_start_time = datetime.now()
+    next_progress = 0
+
+    for i, row in enumerate(index_rows, start=1):
         if len(row) < 6:
+            unmatched_count += 1
             output_rows.append(blank_row)
             continue
         op_id = row[3].strip()
@@ -315,22 +366,47 @@ def _match_index_to_lookup(
                 matched_row = lookup[key]
                 break
         if matched_row is not None:
-            matches += 1
+            matched_count += 1
             output_rows.append(matched_row)
         else:
+            unmatched_count += 1
             output_rows.append(blank_row)
-    return output_rows, matches
+
+        progress = i / index_total if index_total else 0
+        percent = int(progress * 100)
+        if percent >= next_progress and index_total:
+            elapsed = (datetime.now() - match_start_time).total_seconds()
+            if progress > 0 and elapsed > 1.0:
+                est_total = elapsed / progress
+                est_remaining = est_total - elapsed
+                eta = datetime.now() + timedelta(seconds=est_remaining)
+                eta_str = eta.strftime("%H:%M:%S")
+                log(
+                    f"マッチング進捗: {percent:3d}% ({i}/{index_total}) 予想終了時刻: {eta_str}"
+                )
+            else:
+                log(f"マッチング進捗: {percent:3d}% ({i}/{index_total})")
+
+            next_progress += 5
+
+    log(
+        f"マッチング完了。ヒット件数: {matched_count} 行、未ヒット件数: {unmatched_count} 行"
+    )
+    return output_rows, matched_count, unmatched_count
 
 
 def write_result_csv(header: list[str], rows: Sequence[list[str]], output_path: Path) -> None:
     """Write the 様式1-3 extraction result CSV."""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    result_rows_count = len(rows)
     with output_path.open("w", encoding=FILE_ENCODING, newline="") as f:
         writer = csv.writer(f)
         writer.writerow(header)
         writer.writerows(rows)
-    print(f"Wrote 様式1-3 extraction CSV to {output_path}.")
+    log(
+        f"出力結果CSVを保存しました: {output_path} （データ行数: {result_rows_count} 行）"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -338,34 +414,64 @@ def write_result_csv(header: list[str], rows: Sequence[list[str]], output_path: 
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    print("=== Trip OD screening ===")
-    print(f"Trip CSV directory: {TRIP_CSV_DIR}")
-    print(f"Trip index CSV: {TRIP_INDEX_CSV_PATH}")
-    print(f"Result CSV: {RESULT_CSV_PATH}")
+    start_time = datetime.now()
+    log("16_trip_od_screening を開始します。")
+    log(f"TRIP_CSV_DIR = {TRIP_CSV_DIR}")
+    log(f"ZIP_DIRS = {[str(d) for d in ZIP_DIRS if d]}")
 
-    entries = build_trip_index(TRIP_CSV_DIR)
+    trip_csv_files = sorted(TRIP_CSV_DIR.glob("*.csv"))
+    log(f"TRIP_CSV_DIR 内のトリップCSV検出: {len(trip_csv_files)} 件。")
+
+    if not trip_csv_files:
+        log("トリップCSVが見つかりませんでした。処理を終了します。")
+        end_time = datetime.now()
+        elapsed = end_time - start_time
+        log(f"処理が完了しました。経過時間: {elapsed}. (開始: {start_time}, 終了: {end_time})")
+        return
+
+    entries = build_trip_index(trip_csv_files)
     write_trip_index(entries, TRIP_INDEX_CSV_PATH)
 
     zip_files: list[Path] = []
+    valid_zip_dirs: list[Path] = []
     for d in ZIP_DIRS:
         if d and d.exists() and d.is_dir():
+            valid_zip_dirs.append(d)
             zip_files.extend(sorted(d.glob("*.zip")))
+        elif d:
+            log(f"警告: ZIP_DIRS に指定されたフォルダが存在しません: {d}")
+
+    log(f"有効なZIPフォルダ数: {len(valid_zip_dirs)} 個")
+    log(f"ZIPファイル総数: {len(zip_files)} 個")
+
+    total_zip_size = math.fsum(p.stat().st_size for p in zip_files) if zip_files else 0
+    total_zip_size_mb = total_zip_size / (1024 * 1024)
+    log(f"ZIPファイル総容量: {total_zip_size_mb:.1f} MB")
+    if not zip_files:
+        log("ZIPファイルがありません。空の辞書で処理を継続します。")
+        # ZIPファイルがない場合でも以降の処理は続行し、空の辞書でマッチングします。
 
     header, lookup = build_youshiki_dictionary(zip_files)
     if header is None:
         header = ["運行日", "運行ID"] + [f"Col{i}" for i in range(3, 19)]
-        print("[WARN] No 様式1-3 header detected; using fallback header.")
+        log("[WARN] No 様式1-3 header detected; using fallback header.")
 
     index_rows = _load_trip_index_rows(TRIP_INDEX_CSV_PATH)
-    matched_rows, hits = _match_index_to_lookup(index_rows, header, lookup)
-    print(f"Matched {hits} / {len(index_rows)} index rows.")
+    matched_rows, matched_count, unmatched_count = _match_index_to_lookup(
+        index_rows, header, lookup
+    )
+    log(f"Matched {matched_count} / {len(index_rows)} index rows.")
 
     if len(matched_rows) != len(index_rows):
-        print(
+        log(
             f"[WARN] Output row count ({len(matched_rows)}) does not match index ({len(index_rows)})."
         )
 
     write_result_csv(header, matched_rows, RESULT_CSV_PATH)
+
+    end_time = datetime.now()
+    elapsed = end_time - start_time
+    log(f"処理が完了しました。経過時間: {elapsed}. (開始: {start_time}, 終了: {end_time})")
 
 
 if __name__ == "__main__":
