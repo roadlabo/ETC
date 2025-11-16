@@ -28,6 +28,7 @@ import numpy as np
 # --input-dir options if desired.
 DEFAULT_SAMPLE_PATH: Path | None = Path("/path/to/sample_route.csv")
 DEFAULT_INPUT_DIR: Path | None = Path("/path/to/input_directory")
+DEFAULT_OUTPUT_DIR: Path | None = Path("/path/to/output_directory")
 
 # ============================================================
 # trip_extractor.py 設定セクション（ユーザーが自由に変更）
@@ -460,25 +461,28 @@ def parse_args(argv: Sequence[str]) -> Dict[str, Path | None]:
     parser = argparse.ArgumentParser(description="Extract trips that match a sample route")
     parser.add_argument("--sample", type=Path, help="Path to sample CSV")
     parser.add_argument("--input-dir", type=Path, help="Directory containing trip CSV files")
+    parser.add_argument("--output-dir", type=Path, help="Directory to store extracted trips")
     return vars(parser.parse_args(list(argv)))
 
 
-def resolve_paths(args: Dict[str, Path | None]) -> Tuple[Path, Path]:
-    """Resolve the sample file and input directory without GUI dialogs."""
+def resolve_paths(args: Dict[str, Path | None]) -> Tuple[Path, Path, Path]:
+    """Resolve the sample file, input directory, and output directory."""
 
     sample_path = args.get("sample")
     input_dir = args.get("input_dir")
+    output_dir = args.get("output_dir")
 
     sample_path = sample_path or DEFAULT_SAMPLE_PATH
     input_dir = input_dir or DEFAULT_INPUT_DIR
+    output_dir = output_dir or DEFAULT_OUTPUT_DIR
 
-    if sample_path is None or input_dir is None:
+    if sample_path is None or input_dir is None or output_dir is None:
         raise SystemExit(
-            "Specify --sample and --input-dir or set DEFAULT_SAMPLE_PATH and "
-            "DEFAULT_INPUT_DIR in the script."
+            "Specify --sample, --input-dir, and --output-dir or set DEFAULT_SAMPLE_PATH, "
+            "DEFAULT_INPUT_DIR, and DEFAULT_OUTPUT_DIR in the script."
         )
 
-    return Path(sample_path), Path(input_dir)
+    return Path(sample_path), Path(input_dir), Path(output_dir)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -486,7 +490,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
 
     try:
-        sample_path, input_dir = resolve_paths(args)
+        sample_path, input_dir, output_dir = resolve_paths(args)
     except Exception as exc:
         print(f"Initialization failed: {exc}")
         return 1
@@ -513,7 +517,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print(f"Total CSV files: {total_files}")
 
-    out_root = input_dir / sample_path.stem
+    out_root = output_dir
     route_name = sample_path.stem
     total_trips = 0
     total_matches = 0
