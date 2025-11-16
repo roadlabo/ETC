@@ -29,10 +29,10 @@ TRIP_INDEX_CSV_PATH = Path(r"C:\\path\\to\\trip_index.csv")
 # 様式1-3 抜粋結果CSVの出力先パス
 RESULT_CSV_PATH = Path(r"C:\\path\\to\\trip_od_result.csv")
 
-# 様式1-3 を格納している ZIP ファイルのパス（最大9個）
-ZIP_PATHS: list[Path] = [
-    Path(r"C:\\path\\to\\youshiki1_3_a.zip"),
-    Path(r"C:\\path\\to\\youshiki1_3_b.zip"),
+# 様式1-3 の ZIP ファイルが格納されているフォルダ（最大9個）
+ZIP_DIRS: list[Path] = [
+    Path(r"C:\\path\\to\\folder_a"),
+    Path(r"C:\\path\\to\\folder_b"),
     # 使わないスロットは None またはコメントアウトでよい
     # None,
 ]
@@ -346,7 +346,12 @@ def main() -> None:
     entries = build_trip_index(TRIP_CSV_DIR)
     write_trip_index(entries, TRIP_INDEX_CSV_PATH)
 
-    header, lookup = build_youshiki_dictionary(ZIP_PATHS)
+    zip_files: list[Path] = []
+    for d in ZIP_DIRS:
+        if d and d.exists() and d.is_dir():
+            zip_files.extend(sorted(d.glob("*.zip")))
+
+    header, lookup = build_youshiki_dictionary(zip_files)
     if header is None:
         header = ["運行日", "運行ID"] + [f"Col{i}" for i in range(3, 19)]
         print("[WARN] No 様式1-3 header detected; using fallback header.")
