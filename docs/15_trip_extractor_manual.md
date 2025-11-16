@@ -114,23 +114,23 @@ DEFAULT_SAMPLE_PATH = Path("D:/ETC/route/sample_route.csv")
 
 拡張子 .csv を忘れない
 
-4.2 DEFAULT_INPUT_DIR（入力データのフォルダ）
+## 4.2 DEFAULT_INPUT_DIR（入力データのフォルダ）
 ETC2.0 の日別データを置いたフォルダを指定します。
 
 DEFAULT_INPUT_DIR = Path("D:/ETC/input")
-4.3 THRESH_M（距離の閾値）
+## 4.3 THRESH_M（距離の閾値）
 ルートから 何 m 以内を走行とみなすか。
 
 初心者は 10.0 のままでOK
 
 取りこぼしが多い時は 15～20 に変更
 
-4.4 MIN_HITS（一致点数）
+## 4.4 MIN_HITS（一致点数）
 ヒット判定（FLAG=1）がこの数以上あればトリップ確定。
 
 通常は 4 のままでOK
 
-4.5 DRY_RUN（試し実行）
+## 4.5 DRY_RUN（試し実行）
 python
 コードをコピーする
 DRY_RUN = True
@@ -140,20 +140,20 @@ DRY_RUN = True
 
 ファイルは生成されない
 
-4.6 VERBOSE（詳細表示）
+## 4.6 VERBOSE（詳細表示）
 初心者は False でOK
 調査・デバッグ時に True にすると詳細ログが出る
 
-4.7 RECURSIVE（サブフォルダ探索）
+## 4.7 RECURSIVE（サブフォルダ探索）
 フォルダが年別に分かれている場合は True
 
 1階層しかない場合は False
 
-4.8 AUDIT_MODE（開発者向け）
+## 4.8 AUDIT_MODE（開発者向け）
 距離計算回数などの統計を表示するモード
 ※初心者は使わなくてOK
 
-4.9 TARGET_WEEKDAYS（曜日フィルタ）
+## 4.9 TARGET_WEEKDAYS（曜日フィルタ）
 曜日番号：
 
 数値	曜日
@@ -171,7 +171,7 @@ TARGET_WEEKDAYS = {2,3,4,5,6}
 曜日無制限（すべて対象）：
 TARGET_WEEKDAYS = set()
 
-5. スクリプトの動作フロー（図解）
+# 5. スクリプトの動作フロー（図解）
 
 (1) sample_route.csv 読み込み
      ↓
@@ -190,18 +190,18 @@ TARGET_WEEKDAYS = set()
 (8) output/ に保存
 
 
-6. 使い方（Windows例）
+# 6. 使い方（Windows例）
 python 15_trip_extractor.py --input input --sample sample_route.csv
 または、DEFAULT_* を設定しておけばただの：
 python 15_trip_extractor.py
 でOK。
 
-7. 出力例
+# 7. 出力例
 output/
  ├── 2nd_sample_route_MON__000000123456_20250203_t001_E01_F01.csv
  ├── 2nd_sample_route_SAT-SUN__000000987654_20250315_t003_E02_F03.csv
 
-9. トラブルシューティング
+# 8. トラブルシューティング
 「出力が0件です」
 THRESH_M が小さすぎる → 20m にする
 
@@ -217,7 +217,7 @@ Path() 内の " " の中を確認
 
 円記号 \ → スラッシュ / にすると安全
 
-9. まとめ（初心者向けクイック表）
+# 9. まとめ（初心者向けクイック表）
 設定	意味	初心者推奨
 DEFAULT_SAMPLE_PATH	ルートファイル	必ず変更
 DEFAULT_INPUT_DIR	入力データ	必ず変更
@@ -228,6 +228,7 @@ VERBOSE	詳細表示	False
 RECURSIVE	サブフォルダ探索	必要に応じて
 TARGET_WEEKDAYS	曜日	set() or {2–6}
 
-10. お問い合わせ
+# 10. お問い合わせ
 
 バグ報告・改良要望は GitHub Issue または RoadLabo まで。
+
