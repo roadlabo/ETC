@@ -78,8 +78,7 @@ SAT-SUN
 
 15_trip_extractor.py の中央付近に、次のブロックがあります。
 
-
-trip_extractor.py 設定セクション（ユーザーが自由に変更）
+## trip_extractor.py 設定セクション（ユーザーが自由に変更）
 
 THRESH_M = 10.0
 MIN_HITS = 4
@@ -88,9 +87,8 @@ VERBOSE = False
 RECURSIVE = False
 AUDIT_MODE = False
 
-============================================================
 TARGET_WEEKDAYS: set[int] = {2, 3, 4, 5, 6}
-============================================================
+
 DEFAULT_SAMPLE_PATH: Path | None = Path("/path/to/sample_route.csv")
 DEFAULT_INPUT_DIR: Path | None = Path("/path/to/input_directory")
 
@@ -230,6 +228,7 @@ TARGET_WEEKDAYS	曜日	set() or {2–6}
 # 10. お問い合わせ
 
 バグ報告・改良要望は GitHub Issue または RoadLabo まで。
+
 
 
 
