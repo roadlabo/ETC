@@ -46,7 +46,7 @@ project_root/
 
 出力は **以下の形式に完全統一**されています。
 
-2nd_{ROUTE_NAME}{WEEKDAY}__{OPID12}{YYYYMMDD}{TRIP3}{E2}_{F2}.csv
+2nd_{ROUTE_NAME}_{WEEKDAY}__ID{OPID12}_{YYYYMMDD}_{TRIP3}_{E2}_{F2}.csv
 
 
 
@@ -57,7 +57,7 @@ project_root/
 | 2nd | 固定文字列 | 2nd |
 | ROUTE_NAME | ルートファイル名（拡張子なし） | sample_route |
 | WEEKDAY | 曜日（英語3文字）複数なら `SUN-MON` | MON, SAT-SUN |
-| OPID12 | 運行ID（12桁ゼロ埋め） | 000123456789 |
+| IDOPID12 | 運行ID（12桁）に ID を付加 | ID000123456789 |
 | YYYYMMDD | 運行日 | 20250201 |
 | TRIP3 | トリップ番号（3桁） | t001 |
 | E2 | 車種（E＋2桁） | E01 |
@@ -195,8 +195,8 @@ python 15_trip_extractor.py
 
 # 7. 出力例
 output/
- ├── 2nd_sample_route_MON__000000123456_20250203_t001_E01_F01.csv
- ├── 2nd_sample_route_SAT-SUN__000000987654_20250315_t003_E02_F03.csv
+ ├── 2nd_sample_route_MON__ID000000123456_20250203_t001_E01_F01.csv
+ ├── 2nd_sample_route_SAT-SUN__ID000000987654_20250315_t003_E02_F03.csv
 
 # 8. トラブルシューティング
 「出力が0件です」
