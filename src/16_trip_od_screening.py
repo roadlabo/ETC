@@ -113,8 +113,11 @@ def vehicle_use_label(code: str) -> str:
 def parse_trip_filename(path: Path) -> TripIndexEntry | None:
     """Parse a trip CSV file name into a :class:`TripIndexEntry`.
 
-    The expected file name format is:
-    ``2nd_<route>_<weekday>_<operation_id>_<operation_date>_<trip_no>_<vehicle_type>_<vehicle_use>.csv``
+    Expected format (example):
+    ``2nd_<route>_<weekday>_ID000000061071_20250124_t001_E02_F01.csv``
+
+    - operation_id: strip leading "ID" → "000000061071"
+    - trip_number : strip leading "t"  → "001"
     """
 
     stem = path.stem
@@ -125,17 +128,33 @@ def parse_trip_filename(path: Path) -> TripIndexEntry | None:
 
     route_name = parts[1]
     weekday_name = parts[2]
-    operation_id = parts[3]
-    operation_date = parts[4]
-    trip_number = parts[5]
+
+    raw_operation_id = parts[3]
+    raw_operation_date = parts[4]
+    raw_trip_number = parts[5]
     vehicle_type_code = parts[6]
     vehicle_use_code = parts[7]
+
+    if raw_operation_id.upper().startswith("ID"):
+        operation_id = raw_operation_id[2:]
+    else:
+        operation_id = raw_operation_id
+    if len(operation_id) != 12 or not operation_id.isdigit():
+        log(
+            f"[WARN] Operation ID does not look like 12-digit numeric: "
+            f"{raw_operation_id} -> {operation_id} (file: {path.name})"
+        )
+
+    if raw_trip_number.lower().startswith("t"):
+        trip_number = raw_trip_number[1:]
+    else:
+        trip_number = raw_trip_number
 
     return TripIndexEntry(
         route_name=route_name,
         weekday_name=weekday_name,
         operation_id=operation_id,
-        operation_date=operation_date,
+        operation_date=raw_operation_date,
         trip_number=trip_number,
         vehicle_type_code=vehicle_type_code,
         vehicle_use_code=vehicle_use_code,
@@ -263,6 +282,8 @@ def build_youshiki_dictionary(zip_paths: Iterable[Path]):
         if not zip_path.exists():
             log(f"[WARN] ZIP file not found, skipping: {zip_path}")
             continue
+
+        zip_row_hits = 0
         log(f"Processing ZIP: {zip_path}")
         with zipfile.ZipFile(zip_path) as zf:
             for info in zf.infolist():
@@ -290,6 +311,8 @@ def build_youshiki_dictionary(zip_paths: Iterable[Path]):
                     if header:
                         # Normalize row length to header length for consistent output.
                         row_data = (row + [""] * len(header))[: len(header)]
+                    zip_row_hits += 1
+                    total_rows += 1
                     for trip_no in int_keys:
                         key = (op_date, op_id, trip_no)
                         if key not in lookup:
@@ -298,7 +321,11 @@ def build_youshiki_dictionary(zip_paths: Iterable[Path]):
                         key = (op_date, op_id, trip_no)
                         if key not in lookup:
                             lookup[key] = row_data
-                    total_rows += 1
+
+        log(
+            f"ZIP内様式1-3ヒット行数: {zip_row_hits} 行 "
+            f"(累計: {total_rows} 行, file={zip_path.name})"
+        )
 
         progress = idx / zip_total
         percent = int(progress * 100)
