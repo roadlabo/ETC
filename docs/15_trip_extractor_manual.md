@@ -90,7 +90,6 @@ AUDIT_MODE = False
 
 ============================================================
 TARGET_WEEKDAYS: set[int] = {2, 3, 4, 5, 6}
-
 ============================================================
 DEFAULT_SAMPLE_PATH: Path | None = Path("/path/to/sample_route.csv")
 DEFAULT_INPUT_DIR: Path | None = Path("/path/to/input_directory")
@@ -231,4 +230,5 @@ TARGET_WEEKDAYS	曜日	set() or {2–6}
 # 10. お問い合わせ
 
 バグ報告・改良要望は GitHub Issue または RoadLabo まで。
+
 
