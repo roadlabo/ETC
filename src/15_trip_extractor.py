@@ -362,7 +362,7 @@ def save_trip(
         primary_date = "00000000"
 
     filename = (
-        f"2nd_{route_name}_{weekday_part}__ID{opid12}_{primary_date}_{trip_tag}_{etype_tag}_{fuse_tag}.csv"
+        f"2nd_{route_name}_{weekday_part}_ID{opid12}_{primary_date}_{trip_tag}_{etype_tag}_{fuse_tag}.csv"
     )
     out_path = out_dir / filename
     with out_path.open("w", encoding="utf-8", newline="") as f:
