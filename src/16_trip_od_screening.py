@@ -293,11 +293,61 @@ def build_youshiki_dictionary(zip_paths: Iterable[Path]):
                 if not rows:
                     continue
                 csv_header = rows[0]
-                if not _is_youshiki_header(csv_header):
-                    continue
-                if header is None:
-                    header = csv_header
-                for row in rows[1:]:
+
+                # -------------------------------------------------------------
+                # A. 日本語ヘッダ付き様式1-3
+                # -------------------------------------------------------------
+                if _is_youshiki_header(csv_header):
+                    if header is None:
+                        header = csv_header
+                    data_rows = rows[1:]  # 2行目以降がデータ
+                else:
+                    # ---------------------------------------------------------
+                    # B. ヘッダ無し・18列固定形式の様式1-3
+                    # ---------------------------------------------------------
+                    looks_like_headerless_youshiki = False
+                    if len(csv_header) >= 18:
+                        op_date_candidate = csv_header[0].strip()
+                        op_id_candidate = csv_header[1].strip()
+                        trip_candidate = csv_header[7].strip()
+                        if (
+                            len(op_date_candidate) == 8
+                            and op_date_candidate.isdigit()
+                            and op_id_candidate.isdigit()
+                            and trip_candidate.isdigit()
+                        ):
+                            looks_like_headerless_youshiki = True
+
+                    if not looks_like_headerless_youshiki:
+                        # 様式1-3ではなさそうなのでスキップ
+                        continue
+
+                    if header is None:
+                        header = [
+                            "運行日",  # 0
+                            "運行ID",  # 1
+                            "C",  # 2
+                            "D",  # 3
+                            "E",  # 4
+                            "F",  # 5
+                            "G",  # 6
+                            "トリップ番号",  # 7
+                            "I",  # 8
+                            "J",  # 9
+                            "K",  # 10
+                            "起点経度",  # 11
+                            "起点緯度",  # 12
+                            "終点経度",  # 13
+                            "終点緯度",  # 14
+                            "距離",  # 15
+                            "Q",  # 16
+                            "R",  # 17
+                        ]
+
+                    data_rows = rows  # ヘッダ無しの場合は1行目からデータ
+
+                # ここから先は data_rows を使って共通処理
+                for row in data_rows:
                     if len(row) < 8:
                         continue
                     op_date = row[0].strip()
