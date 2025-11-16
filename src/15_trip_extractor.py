@@ -183,15 +183,33 @@ def _weekday_abbr_from_ymd(ymd: str) -> str | None:
 def build_boundaries(rows: Sequence[CSVRow]) -> List[int]:
     """Build the boundary set B following the strict specification."""
 
-    boundaries = {0, len(rows)}
+    boundaries: set[int] = {0, len(rows)}
+    prev_trip_no: int | None = None
+
     for idx, row in enumerate(rows):
-        if len(row.values) <= FLAG_INDEX:
-            continue
-        flag = row.values[FLAG_INDEX]
-        if flag == "0":
-            boundaries.add(idx)
-        elif flag == "1":
-            boundaries.add(idx + 1)
+        if len(row.values) > FLAG_INDEX:
+            flag = row.values[FLAG_INDEX]
+            if flag == "0":
+                boundaries.add(idx)
+            elif flag == "1":
+                boundaries.add(idx + 1)
+
+        trip_no_val: int | None = None
+        if len(row.values) > TRIP_NO_INDEX:
+            token = row.values[TRIP_NO_INDEX].strip()
+            if token:
+                try:
+                    trip_no_val = int(float(token))
+                except (TypeError, ValueError):
+                    trip_no_val = None
+
+        if trip_no_val is not None:
+            if prev_trip_no is None:
+                prev_trip_no = trip_no_val
+            elif trip_no_val != prev_trip_no:
+                boundaries.add(idx)
+                prev_trip_no = trip_no_val
+
     return sorted(boundaries)
 
 
