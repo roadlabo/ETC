@@ -23,9 +23,6 @@
 
 ETC2.0 CSV群 → ルート判定 → トリップ切り出し → メタ情報抽出 → 出力
 
-yaml
-コードをコピーする
-
 ---
 
 # 2. 必要なファイル
@@ -37,8 +34,7 @@ project_root/
 └── docs/
 └── 15_trip_extractor_manual.md
 
-yaml
-コードをコピーする
+
 
 ### sample_route.csv（必須）
 - 緯度・経度の点が縦に並んでいるだけのシンプルなCSV  
@@ -52,8 +48,7 @@ yaml
 
 2nd_{ROUTE_NAME}{WEEKDAY}__{OPID12}{YYYYMMDD}{TRIP3}{E2}_{F2}.csv
 
-r
-コードをコピーする
+
 
 ## 3.1 各パーツの意味
 
@@ -74,9 +69,6 @@ r
 SUN-MON
 MON-TUE
 SAT-SUN
-
-yaml
-コードをコピーする
 
 のように **−（ハイフン）で連結**します。
 
@@ -103,8 +95,6 @@ TARGET_WEEKDAYS: set[int] = {2, 3, 4, 5, 6}
 DEFAULT_SAMPLE_PATH: Path | None = Path("/path/to/sample_route.csv")
 DEFAULT_INPUT_DIR: Path | None = Path("/path/to/input_directory")
 
-yaml
-コードをコピーする
 
 ここだけ書き換えれば使えます。  
 初心者が迷わないよう、1行ずつ解説します。
@@ -117,7 +107,6 @@ yaml
 
 例：
 
-```python
 DEFAULT_SAMPLE_PATH = Path("D:/ETC/route/sample_route.csv")
 ポイント：
 
@@ -128,8 +117,6 @@ DEFAULT_SAMPLE_PATH = Path("D:/ETC/route/sample_route.csv")
 4.2 DEFAULT_INPUT_DIR（入力データのフォルダ）
 ETC2.0 の日別データを置いたフォルダを指定します。
 
-python
-コードをコピーする
 DEFAULT_INPUT_DIR = Path("D:/ETC/input")
 4.3 THRESH_M（距離の閾値）
 ルートから 何 m 以内を走行とみなすか。
@@ -179,18 +166,13 @@ DRY_RUN = True
 7	SAT
 
 平日のみ：
-
-python
-コードをコピーする
 TARGET_WEEKDAYS = {2,3,4,5,6}
-曜日無制限（すべて対象）：
 
-python
-コードをコピーする
+曜日無制限（すべて対象）：
 TARGET_WEEKDAYS = set()
+
 5. スクリプトの動作フロー（図解）
-lua
-コードをコピーする
+
 (1) sample_route.csv 読み込み
      ↓
 (2) 緯度経度をラジアン化
@@ -206,24 +188,20 @@ lua
 (7) 仕様に従ったファイル名を生成
      ↓
 (8) output/ に保存
+
+
 6. 使い方（Windows例）
-css
-コードをコピーする
 python 15_trip_extractor.py --input input --sample sample_route.csv
 または、DEFAULT_* を設定しておけばただの：
-
-nginx
-コードをコピーする
 python 15_trip_extractor.py
 でOK。
 
 7. 出力例
-lua
-コードをコピーする
 output/
  ├── 2nd_sample_route_MON__000000123456_20250203_t001_E01_F01.csv
  ├── 2nd_sample_route_SAT-SUN__000000987654_20250315_t003_E02_F03.csv
-8. トラブルシューティング
+
+9. トラブルシューティング
 「出力が0件です」
 THRESH_M が小さすぎる → 20m にする
 
@@ -251,4 +229,5 @@ RECURSIVE	サブフォルダ探索	必要に応じて
 TARGET_WEEKDAYS	曜日	set() or {2–6}
 
 10. お問い合わせ
+
 バグ報告・改良要望は GitHub Issue または RoadLabo まで。
