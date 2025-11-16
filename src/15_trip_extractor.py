@@ -20,6 +20,14 @@ from typing import Dict, Iterator, List, Sequence, Tuple
 
 import numpy as np
 
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+# Edit these paths to match your environment when running the script without
+# command-line arguments.  Both paths can still be overridden via --sample and
+# --input-dir options if desired.
+DEFAULT_SAMPLE_PATH: Path | None = Path("/path/to/sample_route.csv")
+DEFAULT_INPUT_DIR: Path | None = Path("/path/to/input_directory")
 
 # ============================================================
 # trip_extractor.py 設定セクション（ユーザーが自由に変更）
@@ -35,7 +43,7 @@ AUDIT_MODE = False    # Trueで距離計算回数など表示
 # 曜日番号は下記の数値で指定すること：
 # （1-SUN, 2-MON, 3-TUE, 4-WED, 5-THU, 6-FRI, 7-SAT）
 # 例）平日のみ: {2,3,4,5,6} / 日曜のみ: {1}
-TARGET_WEEKDAYS: set[int] = {2, 3, 4, 5, 6}
+TARGET_WEEKDAYS: set[int] = {1, 2, 3, 4, 5, 6, 7}
 # G列の値（例：20250224161105）の先頭8桁 YYYYMMDD から曜日を判定します。
 # 不正値や空欄の行は曜日不明として除外されます。
 # ============================================================
@@ -54,14 +62,6 @@ TRIP_NO_INDEX = 8       # I列: トリップ番号 (数値)
 
 EARTH_RADIUS_M = 6_371_000.0
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-# Edit these paths to match your environment when running the script without
-# command-line arguments.  Both paths can still be overridden via --sample and
-# --input-dir options if desired.
-DEFAULT_SAMPLE_PATH: Path | None = Path("/path/to/sample_route.csv")
-DEFAULT_INPUT_DIR: Path | None = Path("/path/to/input_directory")
 
 
 @dataclass
