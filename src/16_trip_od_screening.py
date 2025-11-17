@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import csv
 import io
+import math
+import re
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Sequence
-import math
 
 
 def log(msg: str) -> None:
@@ -64,6 +65,35 @@ class TripIndexEntry:
     trip_number: str
     vehicle_type_code: str
     vehicle_use_code: str
+
+
+def build_wanted_keys(entries: Sequence[TripIndexEntry]) -> tuple[set[tuple[str, str, int]], set[str]]:
+    """トリップインデックスから、探索対象となる (運行日, 運行ID, トリップ番号) のキー集合と、
+    必要な運行日の集合を構築する。
+    """
+
+    wanted_keys: set[tuple[str, str, int]] = set()
+    needed_dates: set[str] = set()
+
+    for e in entries:
+        op_date = (e.operation_date or "").strip()
+        op_id = (e.operation_id or "").strip()
+        trip_str = (e.trip_number or "").strip()
+        if not op_date or not op_id or not trip_str:
+            continue
+        # トリップ番号は整数扱い。数値でない場合はスキップ。
+        if not trip_str.isdigit():
+            continue
+        trip_no = int(trip_str)
+
+        wanted_keys.add((op_date, op_id, trip_no))
+        needed_dates.add(op_date)
+
+    log(
+        f"インデックスから構築したキー候補数: {len(wanted_keys)} 件、"
+        f"対象運行日数: {len(needed_dates)} 日"
+    )
+    return wanted_keys, needed_dates
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +244,28 @@ def write_trip_index(entries: Sequence[TripIndexEntry], output_path: Path) -> No
     )
 
 
+def _normalize_trip_number(trip_token: str) -> tuple[list[str], list[int]]:
+    """トリップ番号表記のゆらぎを吸収し、文字列キーと整数キーを返す。
+
+    例: "001" → ( ["001", "1"], [1] )
+    """
+
+    trip_token = trip_token.strip()
+    string_keys: list[str] = []
+    int_keys: list[int] = []
+
+    if trip_token:
+        string_keys.append(trip_token)
+        if trip_token.isdigit():
+            trip_no = int(trip_token)
+            int_keys.append(trip_no)
+            normalized_str = str(trip_no)
+            if normalized_str not in string_keys:
+                string_keys.append(normalized_str)
+
+    return string_keys, int_keys
+
+
 def _read_csv_rows_from_zip_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> list[list[str]]:
     """Read CSV rows from a ZIP member with encoding fallbacks."""
 
@@ -243,10 +295,50 @@ def _is_youshiki_header(header: list[str]) -> bool:
     )
 
 
-def build_youshiki_dictionary(zip_paths: Iterable[Path]):
+ZIP_DATE_PATTERN = re.compile(r"OUT1-3_(\d{8})\.zip$", re.IGNORECASE)
+
+
+def collect_target_zip_files(zip_dirs: Sequence[Path], needed_dates: set[str]) -> tuple[list[Path], list[Path]]:
+    """ZIP_DIRS と needed_dates に基づいて、処理対象とする ZIP ファイル一覧を構築する。
+
+    戻り値:
+        (zip_files, valid_zip_dirs)
+        zip_files: needed_dates に含まれる日付を持つ OUT1-3_YYYYMMDD.zip のみ
+        valid_zip_dirs: 実在した ZIP_DIRS
+    """
+
+    zip_files: list[Path] = []
+    valid_zip_dirs: list[Path] = []
+
+    for d in zip_dirs:
+        if not d:
+            continue
+        if not d.exists() or not d.is_dir():
+            log(f"警告: ZIP_DIRS に指定されたフォルダが存在しません: {d}")
+            continue
+
+        valid_zip_dirs.append(d)
+
+        # OUT1-3_YYYYMMDD.zip だけを対象にする
+        for p in d.glob("OUT1-3_*.zip"):
+            m = ZIP_DATE_PATTERN.search(p.name)
+            if not m:
+                continue
+            date_str = m.group(1)  # "20240601" など
+            # インデックス側に 1 件も存在しない日付の ZIP はスキップ
+            if date_str not in needed_dates:
+                continue
+            zip_files.append(p)
+
+    return sorted(zip_files), valid_zip_dirs
+
+
+def build_youshiki_dictionary(
+    zip_paths: Iterable[Path], wanted_keys: set[tuple[str, str, int]]
+):
     """Build lookup dictionary from 様式1-3 CSV files inside ZIP archives."""
 
-    lookup: dict[tuple[str, str, int], list[str]] = {}
+    lookup: dict[tuple[str, str, str | int], list[str]] = {}
     header: list[str] | None = None
     total_rows = 0
     zip_list = list(zip_paths)
@@ -340,23 +432,40 @@ def build_youshiki_dictionary(zip_paths: Iterable[Path]):
                     trip_token = row[7].strip()
                     if not op_date or not op_id or not trip_token:
                         continue
-                    if not trip_token.isdigit():
+
+                    # まずトリップ番号を正規化し、代表となる整数トリップ番号を取得
+                    string_keys, int_keys = _normalize_trip_number(trip_token)
+                    if not int_keys:
                         continue
-                    trip_no = int(trip_token)
-                    # Prefer the first occurrence of a key; skip duplicates.
+                    primary_trip_no = int_keys[0]
+
+                    # (運行日, 運行ID, primary_trip_no) が wanted_keys に含まれなければスキップ
+                    base_key = (op_date, op_id, primary_trip_no)
+                    if base_key not in wanted_keys:
+                        continue
+
+                    # ここまで来たら「インデックス側が欲しいトリップ」なので、
+                    # 従来どおり、int_keys / string_keys すべてのキーで lookup を登録する。
                     row_data = row
                     if header:
                         # Normalize row length to header length for consistent output.
                         row_data = (row + [""] * len(header))[: len(header)]
-                    key = (op_date, op_id, trip_no)
-                    if key not in lookup:
-                        lookup[key] = row_data
-                        zip_row_hits += 1
-                        total_rows += 1
+
+                    for trip_no in int_keys:
+                        key = (op_date, op_id, trip_no)
+                        if key not in lookup:
+                            lookup[key] = row_data
+                    for trip_no in string_keys:
+                        key = (op_date, op_id, trip_no)
+                        if key not in lookup:
+                            lookup[key] = row_data
+
+                    total_rows += 1
+                    zip_row_hits += 1
 
         log(
-            f"ZIP内様式1-3登録候補行数: {zip_row_hits} 行 "
-            f"(累計登録候補: {total_rows} 行, file={zip_path.name})"
+            f"ZIP内様式1-3から wanted_keys に一致した行数: {zip_row_hits} 行 "
+            f"(累計辞書登録: {total_rows} 行, file={zip_path.name})"
         )
 
         progress = idx / zip_total
@@ -375,7 +484,9 @@ def build_youshiki_dictionary(zip_paths: Iterable[Path]):
 
             next_progress += 5
 
-    log(f"様式1-3の辞書化完了。登録行数: {total_rows} 行、ユニークキー数: {len(lookup)} 件")
+    log(
+        f"様式1-3の辞書化完了。登録行数: {total_rows} 行、ユニークキー数: {len(lookup)} 件"
+    )
     return header, lookup
 
 
@@ -391,7 +502,7 @@ def _load_trip_index_rows(index_path: Path) -> list[list[str]]:
 def _match_index_to_lookup(
     index_rows: Sequence[list[str]],
     header: list[str],
-    lookup: dict[tuple[str, str, int], list[str]],
+    lookup: dict[tuple[str, str, str | int], list[str]],
 ) -> tuple[list[list[str]], int, int]:
     """Match index rows to lookup dictionary and return output rows and hit count."""
 
@@ -494,17 +605,14 @@ def main() -> None:
     entries = build_trip_index(trip_csv_files)
     write_trip_index(entries, TRIP_INDEX_CSV_PATH)
 
-    zip_files: list[Path] = []
-    valid_zip_dirs: list[Path] = []
-    for d in ZIP_DIRS:
-        if d and d.exists() and d.is_dir():
-            valid_zip_dirs.append(d)
-            zip_files.extend(sorted(d.glob("*.zip")))
-        elif d:
-            log(f"警告: ZIP_DIRS に指定されたフォルダが存在しません: {d}")
+    # 欲しいキー一覧と必要な運行日一覧を構築
+    wanted_keys, needed_dates = build_wanted_keys(entries)
+
+    # ZIP_DIRS と needed_dates を使って、対象ZIPだけを収集
+    zip_files, valid_zip_dirs = collect_target_zip_files(ZIP_DIRS, needed_dates)
 
     log(f"有効なZIPフォルダ数: {len(valid_zip_dirs)} 個")
-    log(f"ZIPファイル総数: {len(zip_files)} 個")
+    log(f"対象ZIPファイル数: {len(zip_files)} 個 (needed_dates に該当するもののみ)")
 
     total_zip_size = math.fsum(p.stat().st_size for p in zip_files) if zip_files else 0
     total_zip_size_mb = total_zip_size / (1024 * 1024)
@@ -513,7 +621,7 @@ def main() -> None:
         log("ZIPファイルがありません。空の辞書で処理を継続します。")
         # ZIPファイルがない場合でも以降の処理は続行し、空の辞書でマッチングします。
 
-    header, lookup = build_youshiki_dictionary(zip_files)
+    header, lookup = build_youshiki_dictionary(zip_files, wanted_keys)
     if header is None:
         header = ["運行日", "運行ID"] + [f"Col{i}" for i in range(3, 19)]
         log("[WARN] No 様式1-3 header detected; using fallback header.")
