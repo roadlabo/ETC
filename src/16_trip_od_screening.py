@@ -54,6 +54,23 @@ ZIP_DIRS: list[Path] = [
 FILE_ENCODING = "utf-8-sig"
 
 
+OUTPUT_HEADER = [
+    "スクリーニング区分",
+    "ルート名",
+    "曜日名",
+    "運行ID",
+    "運行日",
+    "トリップ番号",
+    "自動車の種別",
+    "自動車の用途",
+    "起点経度",
+    "起点緯度",
+    "終点経度",
+    "終点緯度",
+    "距離",
+]
+
+
 @dataclass
 class TripIndexEntry:
     """Container for trip index information parsed from file names."""
@@ -223,10 +240,6 @@ def write_trip_index(entries: Sequence[TripIndexEntry], output_path: Path) -> No
         writer = csv.writer(f)
         writer.writerow(header)
         for entry in entries:
-            try:
-                trip_no_value: str | int = int(entry.trip_number)
-            except ValueError:
-                trip_no_value = entry.trip_number
             writer.writerow(
                 [
                     "第2スクリーニング",
@@ -234,7 +247,7 @@ def write_trip_index(entries: Sequence[TripIndexEntry], output_path: Path) -> No
                     entry.weekday_name,
                     entry.operation_id,
                     entry.operation_date,
-                    trip_no_value,
+                    entry.trip_number,
                     vehicle_type_label(entry.vehicle_type_code),
                     vehicle_use_label(entry.vehicle_use_code),
                 ]
@@ -264,6 +277,27 @@ def _normalize_trip_number(trip_token: str) -> tuple[list[str], list[int]]:
                 string_keys.append(normalized_str)
 
     return string_keys, int_keys
+
+
+def _format_operation_date(date_token: str) -> str:
+    """YYYYMMDD から YYYY-MM-DD の文字列を返す。"""
+
+    try:
+        dt = datetime.strptime(date_token.strip(), "%Y%m%d")
+    except ValueError:
+        return ""
+    return dt.strftime("%Y-%m-%d")
+
+
+def _weekday_jp(date_token: str) -> str:
+    """YYYYMMDD から日本語の曜日名を生成する。"""
+
+    WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
+    try:
+        dt = datetime.strptime(date_token.strip(), "%Y%m%d")
+    except ValueError:
+        return ""
+    return WEEKDAYS[dt.weekday()]
 
 
 def _read_csv_rows_from_zip_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> list[list[str]]:
@@ -499,17 +533,47 @@ def _load_trip_index_rows(index_path: Path) -> list[list[str]]:
     return rows[1:]
 
 
+def _get_required_indices(header: list[str]) -> dict[str, int]:
+    """起終点・距離列のインデックスを取得する。"""
+
+    required = {
+        "origin_lon": "起点経度",
+        "origin_lat": "起点緯度",
+        "dest_lon": "終点経度",
+        "dest_lat": "終点緯度",
+        "distance": "距離",
+    }
+    indices: dict[str, int] = {}
+    for key, keyword in required.items():
+        for idx, col in enumerate(header):
+            if keyword in col:
+                indices[key] = idx
+                break
+
+    missing = [kw for key, kw in required.items() if key not in indices]
+    if missing:
+        raise ValueError(
+            "入力CSVに '起点経度', '起点緯度', '終点経度', '終点緯度' 列がありません。"
+            "16_trip_od_screening.py の新フォーマット出力を指定してください。"
+        )
+    return indices
+
+
+def _safe_pick(row: Sequence[str], index: int) -> str:
+    return row[index] if 0 <= index < len(row) else ""
+
+
 def _match_index_to_lookup(
     index_rows: Sequence[list[str]],
     header: list[str],
     lookup: dict[tuple[str, str, str | int], list[str]],
 ) -> tuple[list[list[str]], int, int]:
-    """Match index rows to lookup dictionary and return output rows and hit count."""
+    """一覧CSV行と辞書を突合し、指定フォーマットの出力行を組み立てる。"""
 
+    indices = _get_required_indices(header)
     output_rows: list[list[str]] = []
     matched_count = 0
     unmatched_count = 0
-    blank_row = [""] * len(header)
 
     index_total = len(index_rows)
     log(f"一覧CSVとのマッチングを開始します。対象件数: {index_total} 行")
@@ -518,32 +582,52 @@ def _match_index_to_lookup(
     next_progress = 0
 
     for i, row in enumerate(index_rows, start=1):
-        if len(row) < 6:
-            unmatched_count += 1
-            output_rows.append(blank_row)
-            continue
-        op_id = row[3].strip()
-        op_date = row[4].strip()
-        trip_token = row[5].strip()
-        if not op_id or not op_date or not trip_token:
-            unmatched_count += 1
-            output_rows.append(blank_row)
-            continue
-        if not trip_token.isdigit():
-            unmatched_count += 1
-            output_rows.append(blank_row)
-            continue
-        trip_no = int(trip_token)
+        screening_label = row[0].strip() if len(row) > 0 else ""
+        route_name = row[1].strip() if len(row) > 1 else ""
+        op_id = row[3].strip() if len(row) > 3 else ""
+        op_date = row[4].strip() if len(row) > 4 else ""
+        trip_token = row[5].strip() if len(row) > 5 else ""
+        vehicle_type = row[6].strip() if len(row) > 6 else ""
+        vehicle_use = row[7].strip() if len(row) > 7 else ""
 
-        key = (op_date, op_id, trip_no)
-        matched_row = lookup.get(key)
+        weekday_name = _weekday_jp(op_date)
+        formatted_op_date = _format_operation_date(op_date)
 
-        if matched_row is not None:
-            matched_count += 1
-            output_rows.append(matched_row)
+        origin_lon = origin_lat = dest_lon = dest_lat = distance = ""
+
+        if op_id and op_date and trip_token and trip_token.isdigit():
+            trip_no = int(trip_token)
+            key = (op_date, op_id, trip_no)
+            matched_row = lookup.get(key)
+            if matched_row is not None:
+                matched_count += 1
+                origin_lon = _safe_pick(matched_row, indices["origin_lon"])
+                origin_lat = _safe_pick(matched_row, indices["origin_lat"])
+                dest_lon = _safe_pick(matched_row, indices["dest_lon"])
+                dest_lat = _safe_pick(matched_row, indices["dest_lat"])
+                distance = _safe_pick(matched_row, indices["distance"])
+            else:
+                unmatched_count += 1
         else:
             unmatched_count += 1
-            output_rows.append(blank_row)
+
+        output_rows.append(
+            [
+                screening_label or "第2スクリーニング",
+                route_name,
+                weekday_name,
+                op_id,
+                formatted_op_date,
+                trip_token,
+                vehicle_type,
+                vehicle_use,
+                origin_lon,
+                origin_lat,
+                dest_lon,
+                dest_lat,
+                distance,
+            ]
+        )
 
         progress = i / index_total if index_total else 0
         percent = int(progress * 100)
@@ -569,7 +653,7 @@ def _match_index_to_lookup(
 
 
 def write_result_csv(header: list[str], rows: Sequence[list[str]], output_path: Path) -> None:
-    """Write the 様式1-3 extraction result CSV."""
+    """Write the screening result CSV in the unified trip list format."""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     result_rows_count = len(rows)
@@ -623,7 +707,26 @@ def main() -> None:
 
     header, lookup = build_youshiki_dictionary(zip_files, wanted_keys)
     if header is None:
-        header = ["運行日", "運行ID"] + [f"Col{i}" for i in range(3, 19)]
+        header = [
+            "運行日",  # 0
+            "運行ID",  # 1
+            "C",  # 2
+            "D",  # 3
+            "E",  # 4
+            "F",  # 5
+            "G",  # 6
+            "トリップ番号",  # 7
+            "I",  # 8
+            "J",  # 9
+            "K",  # 10
+            "起点経度",  # 11
+            "起点緯度",  # 12
+            "終点経度",  # 13
+            "終点緯度",  # 14
+            "距離",  # 15
+            "Q",  # 16
+            "R",  # 17
+        ]
         log("[WARN] No 様式1-3 header detected; using fallback header.")
 
     index_rows = _load_trip_index_rows(TRIP_INDEX_CSV_PATH)
@@ -637,7 +740,7 @@ def main() -> None:
             f"[WARN] Output row count ({len(matched_rows)}) does not match index ({len(index_rows)})."
         )
 
-    write_result_csv(header, matched_rows, RESULT_CSV_PATH)
+    write_result_csv(OUTPUT_HEADER, matched_rows, RESULT_CSV_PATH)
 
     end_time = datetime.now()
     elapsed = end_time - start_time

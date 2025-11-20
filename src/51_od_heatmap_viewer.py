@@ -2,13 +2,17 @@
 """
 51_od_heatmap_viewer.py
 
-16_trip_od_screening.py の出力結果CSV（様式1-3の抜粋）を読み込み、
-L列〜O列に記録された起点・終点座標から Origin / Destination ヒートマップを生成する。
+16_trip_od_screening.py が出力する「1行=1トリップ」のCSV（新フォーマット）を読み込み、
+起点・終点座標から Origin / Destination のヒートマップを生成する。
 """
 
-import os, sys, webbrowser
-import pandas as pd, numpy as np
+import os
+import sys
+import webbrowser
+
 import folium
+import numpy as np
+import pandas as pd
 from folium.plugins import HeatMap
 
 # ============================================================
@@ -34,13 +38,23 @@ MIN_OPACITY = 0.15
 MAX_ZOOM = 12
 
 # ------------------------------------------------------------
-# 16_trip_od_screening.py 出力CSVにおける列位置
-# （0始まりのインデックスを使用）
+# 入力CSV必須列（16_trip_od_screening.py 新フォーマット）
 # ------------------------------------------------------------
-ORIGIN_LON_COL_INDEX = 11  # L列 起点経度
-ORIGIN_LAT_COL_INDEX = 12  # M列 起点緯度
-DEST_LON_COL_INDEX   = 13  # N列 終点経度
-DEST_LAT_COL_INDEX   = 14  # O列 終点緯度
+REQUIRED_COLUMNS = [
+    "スクリーニング区分",
+    "ルート名",
+    "曜日名",
+    "運行ID",
+    "運行日",
+    "トリップ番号",
+    "自動車の種別",
+    "自動車の用途",
+    "起点経度",
+    "起点緯度",
+    "終点経度",
+    "終点緯度",
+    "距離",
+]
 
 # ============================================================
 # 以下、処理ロジック
@@ -82,6 +96,51 @@ def _read_csv_robust(path):
         except Exception:
             continue
     return None
+
+
+def _validate_columns(df: pd.DataFrame) -> None:
+    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    if missing:
+        if any(c in missing for c in ("起点経度", "起点緯度", "終点経度", "終点緯度")):
+            raise ValueError(
+                "入力CSVに '起点経度', '起点緯度', '終点経度', '終点緯度' 列がありません。"
+                "16_trip_od_screening.py の新フォーマット出力を指定してください。"
+            )
+        raise ValueError(f"入力CSVに必要な列が不足しています: {', '.join(missing)}")
+
+
+def _build_trip_records(df: pd.DataFrame) -> list[dict[str, float]]:
+    """入力DataFrameから有効な起終点を抽出する。"""
+
+    records: list[dict[str, float]] = []
+    for _, row in df.iterrows():
+        origin = _normalize_latlon(row["起点緯度"], row["起点経度"])
+        dest = _normalize_latlon(row["終点緯度"], row["終点経度"])
+        if origin is None or dest is None:
+            continue
+        o_lat, o_lon = origin
+        d_lat, d_lon = dest
+        records.append(
+            {
+                "origin_lat": o_lat,
+                "origin_lon": o_lon,
+                "dest_lat": d_lat,
+                "dest_lon": d_lon,
+            }
+        )
+    return records
+
+
+def _aggregate_trip_counts(records: list[dict[str, float]]) -> pd.DataFrame:
+    if not records:
+        return pd.DataFrame()
+    df = pd.DataFrame(records)
+    agg = (
+        df.groupby(["origin_lat", "origin_lon", "dest_lat", "dest_lon"], as_index=False)
+        .size()
+        .rename(columns={"size": "trip_count"})
+    )
+    return agg
 
 def create_heatmap(points, center, out_html):
     """Foliumでヒートマップを作成"""
@@ -132,40 +191,46 @@ def main():
         print(f"入力CSVを読み込めませんでした、または空です: {INPUT_CSV_PATH}")
         sys.exit(1)
 
-    cols = list(df.columns)
-    if len(cols) <= max(ORIGIN_LON_COL_INDEX, ORIGIN_LAT_COL_INDEX,
-                        DEST_LON_COL_INDEX, DEST_LAT_COL_INDEX):
-        print("CSVの列数が足りません。L〜O列が存在するか確認してください。")
+    try:
+        _validate_columns(df)
+    except ValueError as e:
+        print(e)
         sys.exit(1)
 
-    olon_col = cols[ORIGIN_LON_COL_INDEX]
-    olat_col = cols[ORIGIN_LAT_COL_INDEX]
-    dlon_col = cols[DEST_LON_COL_INDEX]
-    dlat_col = cols[DEST_LAT_COL_INDEX]
+    records = _build_trip_records(df)
+    aggregated = _aggregate_trip_counts(records)
 
-    origin_pts = []
-    dest_pts = []
-    used = 0
-
-    for _, row in df.iterrows():
-        o = _normalize_latlon(row[olat_col], row[olon_col])
-        d = _normalize_latlon(row[dlat_col], row[dlon_col])
-        if o is None or d is None:
-            continue
-        o_lat, o_lon = o
-        d_lat, d_lon = d
-        origin_pts.append([o_lat, o_lon, 1.0])
-        dest_pts.append([d_lat, d_lon, 1.0])
-        used += 1
-
-    if not origin_pts:
-        print("抽出できる起終点がありません。L〜O列の座標を確認してください。")
+    if aggregated.empty:
+        print("抽出できる起終点がありません。入力CSVの座標を確認してください。")
         sys.exit(1)
 
-    # 中心座標を全点の平均から算出
-    all_pts = [(p[0], p[1]) for p in origin_pts + dest_pts]
-    lat_c = np.mean([p[0] for p in all_pts])
-    lon_c = np.mean([p[1] for p in all_pts])
+    origin_pts = (
+        aggregated[["origin_lat", "origin_lon", "trip_count"]]
+        .rename(columns={"origin_lat": "lat", "origin_lon": "lon"})
+        .to_numpy()
+        .tolist()
+    )
+    dest_pts = (
+        aggregated[["dest_lat", "dest_lon", "trip_count"]]
+        .rename(columns={"dest_lat": "lat", "dest_lon": "lon"})
+        .to_numpy()
+        .tolist()
+    )
+
+    all_points = pd.concat(
+        [
+            aggregated.rename(columns={"origin_lat": "lat", "origin_lon": "lon"})[
+                ["lat", "lon", "trip_count"]
+            ],
+            aggregated.rename(columns={"dest_lat": "lat", "dest_lon": "lon"})[
+                ["lat", "lon", "trip_count"]
+            ],
+        ],
+        ignore_index=True,
+    )
+    weights = all_points["trip_count"]
+    lat_c = float(np.average(all_points["lat"], weights=weights))
+    lon_c = float(np.average(all_points["lon"], weights=weights))
 
     # 出力ファイル生成
     create_heatmap(origin_pts, (lat_c, lon_c), OUTPUT_ORIGIN_HTML)
@@ -176,7 +241,7 @@ def main():
     with open(OUTPUT_SUMMARY_TXT, "w", encoding="utf-8") as fw:
         fw.write(f"Input CSV : {INPUT_CSV_PATH}\n")
         fw.write(f"Output    : {OUTPUT_DIR}\n")
-        fw.write(f"Rows      : {len(df)} / Used(有効OD) : {used}\n")
+        fw.write(f"Rows      : {len(df)} / Used(有効OD) : {int(aggregated['trip_count'].sum())}\n")
         fw.write(f"Center    : ({lat_c:.6f}, {lon_c:.6f})\n")
         fw.write(f"Index HTML: {os.path.basename(OUTPUT_INDEX_HTML)}\n")
 
