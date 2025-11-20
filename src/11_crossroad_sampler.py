@@ -23,6 +23,8 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
   <style>
     html, body {{ height: 100%; margin: 0; padding: 0; }}
     #map {{ width: 100%; height: 100%; }}
@@ -46,8 +48,16 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
 
   <div class="toolbar">
     <div><strong>交差点ID: {CROSSROAD_ID}</strong></div>
-    <button onclick="saveCsv()">保存</button>
-    <button onclick="clearAll()">全消去</button>
+    <div style="margin-top:4px;">
+      出力ファイル名：
+      <input id="outputName" type="text"
+             value="crossroad{CROSSROAD_ID}"
+             style="width: 140px;" />
+    </div>
+    <div style="margin-top:4px;">
+      <button onclick="saveCsv()">保存</button>
+      <button onclick="clearAll()">全消去</button>
+    </div>
     <div style="margin-top:4px;">左クリック：中心 / 方向追加　右クリック：方向削除</div>
   </div>
 
@@ -68,8 +78,9 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
     map.on('click', function(e) {{
       if (!centerMarker) {{
         centerLatLng = e.latlng;
-        centerMarker = L.marker(e.latlng).addTo(map).bindPopup("中心").openPopup();
+        centerMarker = L.marker(e.latlng).addTo(map).bindPopup("Centre").openPopup();
       }} else {{
+        // branchMarkers.length + 1 を 1,2,3,... の枝番号として振る
         var no = branchMarkers.length + 1;
         var m = L.marker(e.latlng).addTo(map).bindPopup("方向 " + no);
         branchMarkers.push(m);
@@ -116,6 +127,9 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
         return;
       }}
 
+      var nameInput = document.getElementById("outputName");
+      var baseName = (nameInput && nameInput.value.trim()) || "crossroad{CROSSROAD_ID}";
+
       let rows = ["crossroad_id,center_lon,center_lat,branch_no,branch_name,dir_deg"];
       let lon = centerLatLng.lng.toFixed(8);
       let lat = centerLatLng.lat.toFixed(8);
@@ -130,9 +144,27 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
       let url = URL.createObjectURL(blob);
       let a = document.createElement("a");
       a.href = url;
-      a.download = "crossroad{CROSSROAD_ID}.csv";
+      a.download = baseName + ".csv";
       a.click();
       URL.revokeObjectURL(url);
+
+      // 地図のスクリーンキャプチャを JPG で保存
+      var mapDiv = document.getElementById("map");
+      if (window.html2canvas && mapDiv) {{
+        html2canvas(mapDiv, {{ useCORS: true }}).then(function(canvas) {{
+          canvas.toBlob(function(blob) {{
+            if (!blob) return;
+            var urlImg = URL.createObjectURL(blob);
+            var aImg = document.createElement("a");
+            aImg.href = urlImg;
+            aImg.download = baseName + ".jpg";
+            document.body.appendChild(aImg);
+            aImg.click();
+            document.body.removeChild(aImg);
+            URL.revokeObjectURL(urlImg);
+          }}, "image/jpeg", 0.9);
+        });
+      }
     }}
 
     // 全消去
