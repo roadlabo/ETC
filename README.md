@@ -76,6 +76,38 @@ python src/route_mapper_simple.py
 
 ---
 
+## ➕ 3. 交差点の分岐をクリックで定義してCSV保存
+
+**スクリプト**：`src/11_crossroad_sampler.py`
+
+Flaskなしで動作する、Leafletベースのシンプルな交差点サンプラーです。HTMLを生成してブラウザを開き、中心点と方向点をクリックすると、ブラウザ側で `crossroadXXX.csv` をダウンロードできます。
+
+### 🔧 主な特徴
+
+* サーバー不要（`python 11_crossroad_sampler.py` を実行するだけ）
+* 中心点＋方向点（最大5本）をクリックで指定、右クリックで直前の方向を削除
+* 「保存」ボタンでブラウザ側がCSVを生成しダウンロード
+* 出力CSVヘッダ：`crossroad_id,center_lon,center_lat,branch_no,branch_name,dir_deg`
+
+### ▶ 実行方法
+
+```bash
+python src/11_crossroad_sampler.py
+```
+
+* スクリプト内の定数で交差点ID・初期中心座標・ズームなどを設定できます：
+
+  ```python
+  CROSSROAD_ID = "001"
+  OUTPUT_DIR = Path(__file__).parent / "crossroads"
+  INITIAL_LAT = 35.069095
+  INITIAL_LON = 134.004512
+  INITIAL_ZOOM = 16
+  ```
+* 実行後に生成されるHTML（`crossroad001.html` など）が自動で開き、保存ボタンを押すと `crossroad001.csv` がクライアント側に保存されます。
+
+---
+
 ## ⚙️ 環境セットアップ
 
 Python **3.10以上** 推奨。
