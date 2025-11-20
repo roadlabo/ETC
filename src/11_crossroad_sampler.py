@@ -104,11 +104,19 @@ _TEMPLATE = """
       attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
 
+    function setStatus(message, color = '#007b00') {
+      const status = document.getElementById('status');
+      status.innerText = message;
+      status.style.color = color;
+    }
+
     function updateBranchList() {
       const list = document.getElementById('branch-list');
       list.innerHTML = branches.map((b, idx) => {
         const name = b.name ? ` (${b.name})` : '';
-        return `<div class="branch-item">枝${idx + 1}${name}</div>`;
+        const lat = Number(b.lat).toFixed(5);
+        const lon = Number(b.lon).toFixed(5);
+        return `<div class="branch-item">枝${idx + 1}${name} – ${lat}, ${lon}</div>`;
       }).join('');
     }
 
@@ -141,37 +149,41 @@ _TEMPLATE = """
     map.on('click', (e) => {
       if (!centerLatLng) {
         setCenter(e.latlng);
-        document.getElementById('status').innerText = '中心点を設定しました。枝をクリックで追加してください。';
+        setStatus('中心点を設定しました。枝をクリックで追加してください。');
         return;
       }
       const name = prompt('枝ラベルを入力（任意）', '');
       branches.push({lat: e.latlng.lat, lon: e.latlng.lng, name: name || ''});
       updateBranchList();
       drawPolylines();
+      setStatus(`枝を追加しました（合計 ${branches.length} 本）。`);
     });
 
     document.getElementById('undo').addEventListener('click', () => {
       branches.pop();
       updateBranchList();
       drawPolylines();
+      setStatus('直前の枝を取り消しました。');
     });
 
     document.getElementById('reset').addEventListener('click', () => {
       branches = [];
       updateBranchList();
       drawPolylines();
+      setStatus('中心点を除いて全てリセットしました。必要なら中心点もクリックで再設定できます。');
     });
 
     document.getElementById('save').addEventListener('click', async () => {
       if (!centerLatLng) { alert('中心点を先に設定してください'); return; }
       if (branches.length < 3 || branches.length > 5) {
         alert('枝の本数は3〜5本で指定してください');
+        setStatus('枝の本数は3〜5本で指定してください', '#b00020');
         return;
       }
       const payload = { center: {lat: centerLatLng[0], lon: centerLatLng[1]}, branches: branches };
       const res = await fetch('/save', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
       const data = await res.json();
-      document.getElementById('status').innerText = data.message || '保存しました';
+      setStatus(data.message || '保存しました');
       if (data.ok) { alert('保存しました: ' + data.output_csv); }
     });
 

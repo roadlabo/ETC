@@ -18,12 +18,11 @@
 Python 標準ライブラリに加え、次を利用します。
 
 - folium（地図表示）
-- geopy または haversine（距離計算が必要な場合）
-- pandas
+- Flask（ローカル Web UI 提供）
 
-インストール例：
+依存ライブラリのインストール例（venv 利用を推奨）：
 ```bash
-pip install folium geopy pandas
+pip install folium flask
 ```
 
 ---
@@ -60,6 +59,8 @@ python 11_crossroad_sampler.py --id 001
 主なオプション例：
 - `--id` : 交差点番号（3 桁推奨）
 - `--center-lat` / `--center-lon` : 初期表示の中心位置（省略可）
+- `--output-dir` : CSV/HTML の出力先（デフォルトはカレントディレクトリ）
+- `--open-browser` : サーバー起動後に既定ブラウザを自動で開く
 
 例：
 ```bash
@@ -67,9 +68,10 @@ python 11_crossroad_sampler.py --id 003 --center-lat 35.12 --center-lon 134.01
 ```
 
 ### 4-2. 地図を使った方向指定
-1. **最初のクリック**：交差点の中心点を指定
+1. **最初のクリック**：交差点の中心点を指定（事前に座標指定した場合はスキップ可）
 2. **続けて 3〜5 回クリック**：道路方向の端点を指定（中心から離れた位置を方向に向けてクリック）
-3. 方位角が自動計算され、完了すると `crossroadXXX.csv` と `crossroadXXX.html` が出力される
+3. 追加済みの枝は画面上部のリストに **枝番号 / 任意ラベル / 緯度・経度（小数第5位まで）** として表示され、Undo/Reset ボタンで調整可能
+4. 保存ボタンで `crossroadXXX.csv` と `crossroadXXX.html` を出力。枝本数が 3〜5 本でない場合はステータス欄に赤字で警告が出る
 
 ---
 
@@ -80,7 +82,7 @@ python 11_crossroad_sampler.py --id 003 --center-lat 35.12 --center-lon 134.01
 angle_deg = atan2(Δlon, Δlat)  # 北=0°、東=90°方向
 ```
 
-必要に応じて 0〜360° の範囲に正規化した値を `dir_deg` として記録します。この値が `16_crossroad_extractor.py` の進入方向・退出方向マッチングで利用されます。
+必要に応じて 0〜360° の範囲に正規化した値を `dir_deg` として記録します。この値が `16_crossroad_extractor.py` の進入方向・退出方向マッチングで利用されます。UI では保存前に枝リストとステータス欄で本数・座標を確認できるため、角度計算の元となる位置指定ミスを抑制できます。
 
 ---
 
