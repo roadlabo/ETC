@@ -1,253 +1,218 @@
-"""Leaflet-based crossroad sampler without server-side dependencies.
-
-Run the script to generate an interactive HTML map that lets you pick a
-crossroad center and branch directions, then download the definition as CSV
-entirely from the browser. Configuration is defined at the top of this script;
-no command-line arguments or Flask server are needed.
+# -*- coding: utf-8 -*-
 """
+11_crossroad_sampler.py
 
-from __future__ import annotations
+・Flaskや引数は使わず、単体でHTMLを生成してブラウザで開く
+・地図上クリックで 交差点中心＋方向（枝）を指定
+・「保存」ボタンで crossroadXXX.csv をローカルにダウンロード
+"""
 
 from pathlib import Path
 import webbrowser
 
 # ===== 設定値 =====
-CROSSROAD_ID = "001"  # 出力する交差点ID
-OUTPUT_DIR = Path(__file__).parent / "crossroads"  # HTMLを置くフォルダ
-HTML_FILENAME = f"crossroad{CROSSROAD_ID}.html"  # 例: crossroad001.html
+CROSSROAD_ID = "001"  # 交差点ID
+OUTPUT_DIR = Path(__file__).parent / "crossroads"
+HTML_FILENAME = f"crossroad{CROSSROAD_ID}.html"
 
-# 初期表示位置（中心座標とズームレベル）
+# 初期表示位置（必要に応じて津山駅周辺などに変更）
 INITIAL_LAT = 35.069095
 INITIAL_LON = 134.004512
 INITIAL_ZOOM = 16
 
-
-HTML_TEMPLATE = f"""<!doctype html>
-<html lang=\"ja\">
+# ===== ここから下は基本的にそのままでOK =====
+HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="ja">
 <head>
-  <meta charset=\"utf-8\">
+  <meta charset="utf-8" />
   <title>Crossroad Sampler</title>
   <link
-    rel=\"stylesheet\"
-    href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\"
-    integrity=\"sha256-sA+4J5J1JdG3cGzGItL0AO4V0Tg7pR0YkG5xyM7uL8k=\"
-    crossorigin=\"\" />
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
   <style>
-    html, body, #map {{ height: 100%; margin: 0; }}
-    body {{ font-family: sans-serif; }}
+    html, body {{
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }}
+    #map {{
+      width: 100%;
+      height: 100%;
+    }}
     .toolbar {{
       position: absolute;
-      top: 10px; left: 10px;
+      top: 10px;
+      left: 10px;
       z-index: 1000;
       background: #fff;
-      padding: 8px 12px;
-      border-radius: 6px;
-      box-shadow: 0 2px 6px rgba(0, 0, 0, .2);
+      padding: 10px 14px;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,.3);
       font-size: 13px;
     }}
-    .toolbar button {{ margin-right: 6px; }}
-    .status {{ margin-left: 8px; color: #007b00; }}
-    .branch-label {{
-      background: #111;
-      color: #fff;
-      padding: 4px 6px;
-      border-radius: 4px;
-      font-weight: bold;
-      font-size: 12px;
-      border: 1px solid #fff;
-    }}
-    .arrow-head {{
-      color: #111;
-      font-size: 14px;
-      transform-origin: center center;
+    .toolbar button {{
+      margin-right: 6px;
     }}
   </style>
 </head>
 <body>
-  <div class=\"toolbar\">
-    <div><strong>交差点ID: {CROSSROAD_ID}</strong></div>
-    <div style=\"margin-top: 6px;\">
-      <button id=\"saveBtn\">保存</button>
-      <button id=\"clearBtn\">全消去</button>
-      <span class=\"status\" id=\"status\"></span>
+  <div id="map"></div>
+  <div class="toolbar">
+    <div><strong>交差点ID: {cross_id}</strong></div>
+    <div style="margin-top:4px;">
+      <button onclick="saveCsv()">保存</button>
+      <button onclick="clearAll()">全消去</button>
     </div>
-    <div style=\"margin-top: 4px;\">左クリック: 中心（初回）/方向追加、右クリック: 直前の方向削除</div>
+    <div style="margin-top:4px; font-size: 12px;">
+      左クリック: 中心（初回）/ 方向追加、右クリック: 直前の方向削除
+    </div>
   </div>
-  <div id=\"map\"></div>
 
-  <script
-    src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"
-    integrity=\"sha256-o9N1j6kG8z2v1kO0pznP6rk6JwG06fOl4p3pMG2kR28=\"
-    crossorigin=\"\"></script>
   <script>
-    const CROSSROAD_ID = "{CROSSROAD_ID}";
-    const CSV_FILENAME = `crossroad${{CROSSROAD_ID}}.csv`;
-    const INITIAL_CENTER = [{INITIAL_LAT}, {INITIAL_LON}];
-    const INITIAL_ZOOM = {INITIAL_ZOOM};
-    const MAX_BRANCHES = 5;
+    // 地図の初期化
+    var map = L.map('map').setView([{lat}, {lon}], {zoom});
 
-    let centerLatLng = INITIAL_CENTER ? [...INITIAL_CENTER] : null;
-    let centerMarker = null;
-    let branchMarkers = [];
-    let branchLines = [];
-    let branches = [];
-
-    const map = L.map('map').setView(centerLatLng || [35.0, 135.0], INITIAL_ZOOM);
     L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
       maxZoom: 19,
-      attribution: '&copy; OpenStreetMap contributors'
+      attribution: '© OpenStreetMap contributors'
     }}).addTo(map);
 
+    var centerMarker = null;
+    var centerLatLng = null;
+    var branchMarkers = [];
+    var branchLines = [];
+
+    // 左クリック: 中心→方向点
+    map.on('click', function(e) {{
+      if (!centerMarker) {{
+        centerLatLng = e.latlng;
+        centerMarker = L.marker(e.latlng, {{
+          title: '中心'
+        }}).addTo(map).bindPopup('中心').openPopup();
+      }} else {{
+        var latlng = e.latlng;
+        var branchNo = branchMarkers.length + 1;
+        var marker = L.marker(latlng, {{
+          title: '方向 ' + branchNo
+        }}).addTo(map).bindPopup('方向 ' + branchNo);
+        branchMarkers.push(marker);
+
+        var line = L.polyline([centerLatLng, latlng], {{
+          weight: 4
+        }}).addTo(map);
+        line.bindTooltip(String(branchNo), {{
+          permanent: true,
+          direction: 'center'
+        }});
+        branchLines.push(line);
+      }}
+    }});
+
+    // 右クリック: 直前の方向削除
+    map.on('contextmenu', function(e) {{
+      if (branchMarkers.length > 0) {{
+        var m = branchMarkers.pop();
+        map.removeLayer(m);
+      }}
+      if (branchLines.length > 0) {{
+        var l = branchLines.pop();
+        map.removeLayer(l);
+      }}
+    }});
+
+    // 方位角計算
     function bearingDeg(lat1, lon1, lat2, lon2) {{
-      const toRad = x => x * Math.PI / 180.0;
-      const toDeg = x => x * 180.0 / Math.PI;
-      const φ1 = toRad(lat1);
-      const φ2 = toRad(lat2);
-      const λ1 = toRad(lon1);
-      const λ2 = toRad(lon2);
-      const dλ = λ2 - λ1;
-      const x = Math.sin(dλ) * Math.cos(φ2);
-      const y = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(dλ);
-      let brng = toDeg(Math.atan2(x, y));
+      function toRad(x) {{ return x * Math.PI / 180.0; }}
+      function toDeg(x) {{ return x * 180.0 / Math.PI; }}
+      var phi1 = toRad(lat1);
+      var phi2 = toRad(lat2);
+      var dLambda = toRad(lon2 - lon1);
+      var x = Math.sin(dLambda) * Math.cos(phi2);
+      var y = Math.cos(phi1) * Math.sin(phi2) -
+              Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda);
+      var brng = Math.atan2(x, y);
+      brng = toDeg(brng);
       brng = (brng + 360.0) % 360.0;
       return brng;
     }}
 
-    function setCenter(latlng) {{
-      centerLatLng = [latlng.lat, latlng.lng];
-      if (centerMarker) {{ centerMarker.remove(); }}
-      const icon = L.divIcon({{
-        html: '<div style="background:#d7263d;color:#fff;padding:8px 10px;border-radius:50%;border:2px solid #fff;font-weight:bold;">C</div>',
-        className: '',
-        iconAnchor: [12, 12]
-      }});
-      centerMarker = L.marker(latlng, {{ icon }}).addTo(map);
-      redrawBranches();
-      updateStatus('中心点を設定しました。方向を追加してください。');
-    }}
-
-    function clearBranches() {{
-      branchMarkers.forEach(m => m.remove());
-      branchLines.forEach(l => l.remove());
-      branchMarkers = [];
-      branchLines = [];
-    }}
-
-    function redrawBranches() {{
-      clearBranches();
-      if (!centerLatLng) {{ return; }}
-      branches.forEach((b, idx) => {{
-        const line = L.polyline([centerLatLng, [b.lat, b.lon]], {{ color: '#111', weight: 4, opacity: 0.9 }}).addTo(map);
-        branchLines.push(line);
-
-        const dir = bearingDeg(centerLatLng[0], centerLatLng[1], b.lat, b.lon);
-        const arrow = L.marker([b.lat, b.lon], {{
-          icon: L.divIcon({{
-            html: `<div class="arrow-head" style="transform: rotate(${{dir}}deg);">▲</div>`,
-            className: ''
-          }}),
-          interactive: false
-        }}).addTo(map);
-        const label = L.marker([b.lat, b.lon], {{
-          icon: L.divIcon({{
-            html: `<div class="branch-label">${{idx + 1}}</div>`,
-            className: ''
-          }}),
-          interactive: false
-        }}).addTo(map);
-        branchMarkers.push(arrow, label);
-      }});
-    }}
-
-    function addBranch(latlng) {{
-      if (!centerLatLng) {{
-        setCenter(latlng);
-        return;
-      }}
-      if (branches.length >= MAX_BRANCHES) {{
-        alert(`方向は最大 ${{MAX_BRANCHES}} 本までです`);
-        return;
-      }}
-      branches.push({{ lat: latlng.lat, lon: latlng.lng }});
-      redrawBranches();
-      updateStatus(`方向数: ${{branches.length}}`);
-    }}
-
-    function removeLastBranch() {{
-      if (branches.length === 0) {{ return; }}
-      branches.pop();
-      redrawBranches();
-      updateStatus(`方向数: ${{branches.length}}`);
-    }}
-
-    function resetAll() {{
-      branches = [];
-      clearBranches();
-      if (centerMarker) {{ centerMarker.remove(); centerMarker = null; }}
-      centerLatLng = null;
-      map.setView(INITIAL_CENTER, INITIAL_ZOOM);
-      updateStatus('初期化しました。中心点を指定してください。');
-    }}
-
-    function updateStatus(msg) {{
-      document.getElementById('status').innerText = msg || '';
-    }}
-
+    // CSV保存
     function saveCsv() {{
       if (!centerLatLng) {{
-        alert('中心点を先に指定してください');
+        alert('先に中心点を指定してください。');
         return;
       }}
-      if (branches.length === 0) {{
-        alert('方向を最低1本指定してください');
+      if (branchMarkers.length === 0) {{
+        alert('少なくとも1つ以上、方向点を指定してください。');
         return;
       }}
-      const header = 'crossroad_id,center_lon,center_lat,branch_no,branch_name,dir_deg';
-      const rows = branches.map((b, idx) => {{
-        const dir = bearingDeg(centerLatLng[0], centerLatLng[1], b.lat, b.lon);
-        return [
-          CROSSROAD_ID,
-          centerLatLng[1],
-          centerLatLng[0],
-          idx + 1,
-          '',
-          dir.toFixed(6)
-        ].join(',');
-      }});
-      const csv = [header, ...rows].join('\n');
-      const blob = new Blob([csv], {{ type: 'text/csv;charset=utf-8;' }});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
+
+      var rows = [];
+      rows.push('crossroad_id,center_lon,center_lat,branch_no,branch_name,dir_deg');
+
+      var centerLon = centerLatLng.lng.toFixed(8);
+      var centerLat = centerLatLng.lat.toFixed(8);
+
+      for (var i = 0; i < branchMarkers.length; i++) {{
+        var b = branchMarkers[i].getLatLng();
+        var branchNo = i + 1;
+        var dir = bearingDeg(centerLatLng.lat, centerLatLng.lng, b.lat, b.lng);
+        var line = '{id},' + centerLon + ',' + centerLat + ',' +
+                   branchNo + ',' + '' + ',' + dir.toFixed(2);
+        rows.push(line);
+      }}
+
+      var csvContent = rows.join('\r\n');
+      var blob = new Blob([csvContent], {{ type: 'text/csv;charset=utf-8;' }});
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
       a.href = url;
-      a.download = CSV_FILENAME;
+      a.download = 'crossroad{id}.csv';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      updateStatus(`${{CSV_FILENAME}} をダウンロードしました`);
     }}
 
-    document.getElementById('saveBtn').addEventListener('click', saveCsv);
-    document.getElementById('clearBtn').addEventListener('click', resetAll);
-
-    map.on('click', (e) => addBranch(e.latlng));
-    map.on('contextmenu', (e) => {{ e.preventDefault(); removeLastBranch(); }});
-
-    if (centerLatLng) {{
-      setCenter({{ lat: centerLatLng[0], lng: centerLatLng[1] }});
-    }} else {{
-      updateStatus('中心点をクリックで指定してください');
+    // 全消去
+    function clearAll() {{
+      if (centerMarker) {{
+        map.removeLayer(centerMarker);
+        centerMarker = null;
+        centerLatLng = null;
+      }}
+      while (branchMarkers.length > 0) {{
+        map.removeLayer(branchMarkers.pop());
+      }}
+      while (branchLines.length > 0) {{
+        map.removeLayer(branchLines.pop());
+      }}
     }}
   </script>
 </body>
 </html>
-"""
+""".format(
+    lat=INITIAL_LAT,
+    lon=INITIAL_LON,
+    zoom=INITIAL_ZOOM,
+    cross_id=CROSSROAD_ID,
+    id=CROSSROAD_ID,
+)
 
 
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     html_path = OUTPUT_DIR / HTML_FILENAME
     html_path.write_text(HTML_TEMPLATE, encoding="utf-8")
+    print(f"[11_crossroad_sampler] {html_path} を出力しました。")
     webbrowser.open(html_path.as_uri())
 
 
