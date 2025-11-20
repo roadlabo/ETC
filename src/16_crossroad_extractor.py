@@ -207,32 +207,71 @@ def _iter_trip_groups(rows: List[CSVRow]) -> Iterator[Tuple[Tuple[str, str, str]
         yield key, group
 
 
-def _read_crossroad_def(path: Path) -> CrossroadDef:
-    with path.open("r", encoding="utf-8-sig", errors="ignore", newline="") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-    if not rows:
-        raise ValueError(f"crossroad definition is empty: {path}")
+def _load_crossroad_defs(crossroad_dir: Path, verbose: bool = False) -> Dict[str, CrossroadDef]:
+    required_cols = {"crossroad_id", "center_lon", "center_lat", "branch_no", "dir_deg"}
+    crossroads: Dict[str, CrossroadDef] = {}
 
-    first = rows[0]
-    crossroad_id = first.get("crossroad_id") or "000"
-    center_lon = _parse_float(first.get("center_lon"))
-    center_lat = _parse_float(first.get("center_lat"))
-    if center_lon is None or center_lat is None:
-        raise ValueError(f"center coordinates missing in {path}")
+    for csv_path in sorted(crossroad_dir.glob("*.csv")):
+        try:
+            with csv_path.open("r", encoding="utf-8-sig", errors="ignore", newline="") as f:
+                reader = csv.DictReader(f)
+                fieldnames = set(reader.fieldnames or [])
+                if not required_cols.issubset(fieldnames):
+                    if verbose:
+                        missing = required_cols - fieldnames
+                        print(f"[crossroad] skip {csv_path.name}: missing columns {sorted(missing)}")
+                    continue
 
-    branches: List[CrossroadBranch] = []
-    for row in rows:
-        no = _parse_int(row.get("branch_no"))
-        dir_deg = _parse_float(row.get("dir_deg"))
-        if no is None or dir_deg is None:
-            continue
-        branches.append(CrossroadBranch(no=no, dir_deg=dir_deg % 360.0, name=row.get("branch_name") or ""))
+                for row in reader:
+                    cid_raw = row.get("crossroad_id")
+                    cid = str(cid_raw).strip() if cid_raw is not None else ""
+                    center_lon = _parse_float(row.get("center_lon"))
+                    center_lat = _parse_float(row.get("center_lat"))
+                    branch_no = _parse_int(row.get("branch_no"))
+                    dir_deg = _parse_float(row.get("dir_deg"))
+                    branch_name = row.get("branch_name") or ""
 
-    if len(branches) < 3:
-        raise ValueError(f"expected at least 3 branches in {path}")
+                    if not cid:
+                        if verbose:
+                            print(f"[crossroad] skip row without crossroad_id in {csv_path.name}")
+                        continue
+                    if center_lon is None or center_lat is None:
+                        if verbose:
+                            print(f"[crossroad] skip row without center coordinates in {csv_path.name} (id={cid})")
+                        continue
 
-    return CrossroadDef(crossroad_id=crossroad_id, center_lat=center_lat, center_lon=center_lon, branches=branches)
+                    cross = crossroads.setdefault(
+                        cid,
+                        CrossroadDef(
+                            crossroad_id=cid, center_lat=center_lat, center_lon=center_lon, branches=[]
+                        ),
+                    )
+
+                    if (abs(cross.center_lat - center_lat) > 1e-9 or abs(cross.center_lon - center_lon) > 1e-9) and verbose:
+                        print(
+                            f"[crossroad] warning: center mismatch for id={cid}:"
+                            f" existing=({cross.center_lon},{cross.center_lat}), new=({center_lon},{center_lat})"
+                        )
+
+                    if branch_no is None or dir_deg is None:
+                        if verbose:
+                            print(f"[crossroad] skip row without branch_no/dir_deg in {csv_path.name} (id={cid})")
+                        continue
+
+                    cross.branches.append(
+                        CrossroadBranch(no=branch_no, dir_deg=dir_deg % 360.0, name=str(branch_name))
+                    )
+        except Exception as exc:  # pragma: no cover - defensive
+            if verbose:
+                print(f"[crossroad] failed to read {csv_path}: {exc}")
+
+    invalid_ids = [cid for cid, cr in crossroads.items() if len(cr.branches) < 3]
+    for cid in invalid_ids:
+        if verbose:
+            print(f"[crossroad] discard id={cid}: need >=3 branches (got {len(crossroads[cid].branches)})")
+        del crossroads[cid]
+
+    return crossroads
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +469,7 @@ def _process_file(
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="交差点通過抽出 (様式1-2)")
     parser.add_argument("--input", nargs="+", required=True, type=Path, help="入力CSVファイル（複数可）")
-    parser.add_argument("--crossroad", required=True, type=Path, help="crossroadXXX.csv")
+    parser.add_argument("--crossroad-dir", required=True, type=Path, help="交差点定義CSVが入ったフォルダ")
     parser.add_argument("--output", default=Path("crossroad_hits.csv"), type=Path, help="出力CSVパス")
     parser.add_argument("--screening-label", default="", help="スクリーニング区分ラベル")
     parser.add_argument("--route-name", default="", help="ルート名")
@@ -441,10 +480,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
-    try:
-        crossroad = _read_crossroad_def(args.crossroad)
-    except Exception as exc:
-        print(f"failed to read crossroad definition: {exc}")
+    if not args.crossroad_dir.is_dir():
+        print(f"crossroad directory not found: {args.crossroad_dir}")
+        return 1
+
+    crossroads = _load_crossroad_defs(args.crossroad_dir, args.verbose)
+    if not crossroads:
+        print(f"no valid crossroad definitions found in {args.crossroad_dir}")
         return 1
 
     output_rows: List[List[str]] = []
@@ -464,31 +506,41 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "time_after",
         "distance_m",
         "speed_kmh",
+        "crossroad_id",
     ]
 
     print(
-        f"[16_crossroad_extractor] 開始します。input_files = {len(args.input)}, crossroad = {crossroad.crossroad_id}"
+        f"[16_crossroad_extractor] 開始します。input_files = {len(args.input)}, crossroads = {len(crossroads)}"
     )
     start = time.time()
     total_hits = 0
     total_files = 0
 
-    for idx, path in enumerate(args.input, start=1):
-        trip_count, file_hits, hits = _process_file(
-            path,
-            crossroad,
-            args.screening_label,
-            args.route_name,
-            args.debounce_sec,
-            args.verbose,
-        )
+    for cid, crossroad in crossroads.items():
+        if args.verbose:
+            print(f"[16_crossroad_extractor] 処理中 crossroad_id={cid}")
+        for idx, path in enumerate(args.input, start=1):
+            trip_count, file_hits, hits = _process_file(
+                path,
+                crossroad,
+                args.screening_label,
+                args.route_name,
+                args.debounce_sec,
+                args.verbose,
+            )
 
-        output_rows.extend(hits)
-        total_hits += file_hits
-        total_files += 1
+            for row in hits:
+                row.append(crossroad.crossroad_id)
 
-        if args.verbose or idx % 10 == 0:
-            print(f"[16_crossroad_extractor] ({idx}/{len(args.input)}) file={path.name}, hits={file_hits}")
+            output_rows.extend(hits)
+            total_hits += file_hits
+            total_files += 1
+
+            if args.verbose or idx % 10 == 0:
+                print(
+                    f"[16_crossroad_extractor] ({idx}/{len(args.input)}) file={path.name},"
+                    f" hits={file_hits}, crossroad_id={cid}"
+                )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8-sig", newline="") as f:

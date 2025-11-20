@@ -1,6 +1,6 @@
 # 16_crossroad_extractor.py 説明書（Markdown版）
 
-最終更新：2025-02-10  
+最終更新：2025-02-17
 作者：RoadLabo / Maki  
 対象読者：交差点別の交通量・方向分析を行う担当者
 
@@ -13,9 +13,9 @@
 処理の全体像：
 
 ```
-ETC2.0トリップCSV ──┐
-crossroadXXX.csv    ──┼──▶ 16_crossroad_extractor.py ───▶ crossroad_extracted.csv
-crossroadXXX.html   ──┘
+ETC2.0トリップCSV ──────┐
+crossroad 定義CSV群 ──┼──▶ 16_crossroad_extractor.py ───▶ crossroad_extracted.csv
+crossroad 定義JPG群 ──┘        （交差点IDは CSV の crossroad_id 列で管理）
 ```
 
 ---
@@ -23,14 +23,15 @@ crossroadXXX.html   ──┘
 ## 2. 入出力の全体像
 
 - **入力1：トリップデータ** — 15_trip_extractor.py が出力する形式に準拠した CSV 群。
-- **入力2：交差点情報** — 11_crossroad_sampler.py が生成した crossroadXXX.csv / crossroadXXX.html。
-- **出力：crossroad_extracted.csv** — 交差点通過ごとに1行を記録。
+- **入力2：交差点情報** — 11_crossroad_sampler.py が生成した交差点定義 CSV（ファイル名は任意）。交差点IDは CSV 内の **crossroad_id 列** で管理する。
+- **参考情報：交差点スクリーンショット** — 11_crossroad_sampler.py が CSV 保存時に同名ベースで出力する JPG。16_crossroad_extractor.py では直接利用しないが、資料化や目視確認用に保管しておく。
+- **出力：crossroad_extracted.csv** — 交差点通過ごとに1行を記録。必要に応じて交差点ID列を付与する。
 
 ---
 
 ## 3. 出力ファイルの仕様（最重要）
 
-### 3.1 crossroad_extracted.csv の列構成（A〜O列）
+### 3.1 crossroad_extracted.csv の列構成（A〜O列＋必要に応じてP列）
 
 | 列 | 内容 |
 | --- | --- |
@@ -49,6 +50,7 @@ crossroadXXX.html   ──┘
 | M | 2Point後 時刻 |
 | N | 2Point前 → 2Point後 の距離（道なり） |
 | O | 速度（距離 / 時間差） |
+| P | 交差点ID（crossroad_id, 任意列。複数交差点をまとめて出力する場合に付与） |
 
 **特徴**
 
@@ -62,10 +64,21 @@ crossroadXXX.html   ──┘
 ## 4. 必要ファイル
 
 ### 4.1 交差点情報（前処理）
-- crossroad001.csv
-- crossroad001.html
+- 交差点定義 CSV：ファイル名は任意（例：`tsuyama_station_north.csv`、`route53_cross1.csv` など）。
+- 交差点定義 JPG：CSV と同じベース名のスクリーンショット画像（任意）。
 
-※どちらも 11_crossroad_sampler.py が生成します。
+交差点CSVの列仕様（11_crossroad_sampler.py と共通）：
+
+| 列名 | 必須/任意 | 内容 |
+| --- | --- | --- |
+| crossroad_id | 必須 | 交差点ID。ファイル名ではなくこの列を正とする。 |
+| center_lon | 必須 | 交差点中心の経度（WGS84） |
+| center_lat | 必須 | 交差点中心の緯度（WGS84） |
+| branch_no | 必須 | 枝番号（1,2,3,...） |
+| dir_deg | 必須 | 方位角（北=0°, 東=90°, 時計回りで 0〜360） |
+| branch_name | 任意 | 枝のラベル。欠損時は空文字として扱う。 |
+
+※ 中心ラベル "Centre" は CSV には含まれません。中心点情報は `center_lon` / `center_lat` から取得します。
 
 ### 4.2 トリップデータ
 - 15_trip_extractor.py が生成する形式のトリップ CSV。最低限必要な列：緯度（lat）／経度（lon）／タイムスタンプ／累積距離（または座標から距離計算可能なデータ）／スクリーニング区分／ルート名／曜日名／運行ID／運行日／トリップ番号／自動車種別／用途。
@@ -76,7 +89,7 @@ crossroadXXX.html   ──┘
 
 ```bash
 python 16_crossroad_extractor.py \
-    --trip-dir ./trip_data \
+    --input ./trip_data/trip_*.csv \
     --crossroad-dir ./crossroads \
     --output ./output/crossroad_extracted.csv
 ```
@@ -85,8 +98,8 @@ python 16_crossroad_extractor.py \
 
 | オプション | 内容 |
 | --- | --- |
-| --trip-dir | トリップ CSV フォルダ |
-| --crossroad-dir | crossroadXXX.csv が格納されたフォルダ |
+| --input | トリップ CSV ファイル（複数指定可） |
+| --crossroad-dir | 交差点定義 CSV が格納されたフォルダ（ファイル名は任意、*.csv を全て読み込み） |
 | --output | 出力 CSV ファイル名 |
 | --verbose | 詳細ログ（任意） |
 
