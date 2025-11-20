@@ -116,6 +116,26 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
       return (toDeg(θ) + 360) % 360;
     }}
 
+    // 地図のスクリーンキャプチャを JPG で保存
+    function saveMapJpg(baseName) {{
+      var mapDiv = document.getElementById("map");
+      if (window.html2canvas && mapDiv) {{
+        html2canvas(mapDiv, {{ useCORS: true }}).then(function(canvas) {{
+          canvas.toBlob(function(blob) {{
+            if (!blob) return;
+            var urlImg = URL.createObjectURL(blob);
+            var aImg = document.createElement("a");
+            aImg.href = urlImg;
+            aImg.download = baseName + ".jpg";
+            document.body.appendChild(aImg);
+            aImg.click();
+            document.body.removeChild(aImg);
+            URL.revokeObjectURL(urlImg);
+          }}, "image/jpeg", 0.9);
+        });
+      }
+    }}
+
     // CSV保存
     function saveCsv() {{
       if (!centerLatLng) {{
@@ -148,23 +168,7 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
       a.click();
       URL.revokeObjectURL(url);
 
-      // 地図のスクリーンキャプチャを JPG で保存
-      var mapDiv = document.getElementById("map");
-      if (window.html2canvas && mapDiv) {{
-        html2canvas(mapDiv, {{ useCORS: true }}).then(function(canvas) {{
-          canvas.toBlob(function(blob) {{
-            if (!blob) return;
-            var urlImg = URL.createObjectURL(blob);
-            var aImg = document.createElement("a");
-            aImg.href = urlImg;
-            aImg.download = baseName + ".jpg";
-            document.body.appendChild(aImg);
-            aImg.click();
-            document.body.removeChild(aImg);
-            URL.revokeObjectURL(urlImg);
-          }}, "image/jpeg", 0.9);
-        });
-      }
+      saveMapJpg(baseName);
     }}
 
     // 全消去
