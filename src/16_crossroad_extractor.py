@@ -17,6 +17,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
+# ============================================================
+# 16_crossroad_extractor.py 設定セクション（ユーザーが自由に変更）
+# ============================================================
+# 入力フォルダのデフォルト（最大15個まで指定可能）
+DEFAULT_INPUT_DIRS: List[Path] = [
+    # Path(r"/path/to/input1"),
+    # Path(r"/path/to/input2"),
+]
+
+# 交差点定義フォルダのデフォルト
+DEFAULT_CROSSROAD_DIR: Path | None = None  # Path(r"/path/to/crossroads")
+
+# 出力CSVパスのデフォルト
+DEFAULT_OUTPUT_PATH: Path | None = None  # Path(r"/path/to/output.csv")
+
 # Column indices (0-based) for 様式1-2
 RSU_ID_IDX = 0
 RECV_TIME_IDX = 1
@@ -468,9 +483,24 @@ def _process_file(
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="交差点通過抽出 (様式1-2)")
-    parser.add_argument("--input", nargs="+", required=True, type=Path, help="入力CSVファイル（複数可）")
-    parser.add_argument("--crossroad-dir", required=True, type=Path, help="交差点定義CSVが入ったフォルダ")
-    parser.add_argument("--output", default=Path("crossroad_hits.csv"), type=Path, help="出力CSVパス")
+    parser.add_argument(
+        "--input-dirs",
+        nargs="+",
+        type=Path,
+        help="入力CSVが入ったフォルダ（最大15個まで複数指定可）",
+    )
+    parser.add_argument(
+        "--crossroad-dir",
+        default=DEFAULT_CROSSROAD_DIR,
+        type=Path,
+        help="交差点定義CSVが入ったフォルダ",
+    )
+    parser.add_argument(
+        "--output",
+        default=DEFAULT_OUTPUT_PATH or Path("crossroad_hits.csv"),
+        type=Path,
+        help="出力CSVパス",
+    )
     parser.add_argument("--screening-label", default="", help="スクリーニング区分ラベル")
     parser.add_argument("--route-name", default="", help="ルート名")
     parser.add_argument("--debounce-sec", type=int, default=30, help="同一トリップ内の連続ヒットを抑制する秒数")
@@ -480,6 +510,22 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
+    input_dirs: List[Path] = []
+    if args.input_dirs:
+        input_dirs = list(args.input_dirs)
+    elif DEFAULT_INPUT_DIRS:
+        input_dirs = list(DEFAULT_INPUT_DIRS)
+
+    if not input_dirs:
+        print("input directories not specified (use --input-dirs or DEFAULT_INPUT_DIRS)")
+        return 1
+    if len(input_dirs) > 15:
+        print(f"input directories exceed limit (15): {len(input_dirs)}")
+        return 1
+
+    if args.crossroad_dir is None:
+        print("crossroad directory not specified (use --crossroad-dir or DEFAULT_CROSSROAD_DIR)")
+        return 1
     if not args.crossroad_dir.is_dir():
         print(f"crossroad directory not found: {args.crossroad_dir}")
         return 1
@@ -510,37 +556,48 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ]
 
     print(
-        f"[16_crossroad_extractor] 開始します。input_files = {len(args.input)}, crossroads = {len(crossroads)}"
+        f"[16_crossroad_extractor] 開始します。input_dirs = {len(input_dirs)}, crossroads = {len(crossroads)}"
     )
     start = time.time()
     total_hits = 0
     total_files = 0
 
+    
+    input_dir_files: List[Tuple[Path, List[Path]]] = []
+    for dir_path in input_dirs:
+        files = sorted(dir_path.glob("*.csv"))
+        input_dir_files.append((dir_path, files))
+
     for cid, crossroad in crossroads.items():
         if args.verbose:
             print(f"[16_crossroad_extractor] 処理中 crossroad_id={cid}")
-        for idx, path in enumerate(args.input, start=1):
-            trip_count, file_hits, hits = _process_file(
-                path,
-                crossroad,
-                args.screening_label,
-                args.route_name,
-                args.debounce_sec,
-                args.verbose,
+        for dir_idx, (dir_path, files) in enumerate(input_dir_files, start=1):
+            print(
+                f"[16_crossroad_extractor] Processing input_folder={dir_path} ({len(files)} files)"
             )
-
-            for row in hits:
-                row.append(crossroad.crossroad_id)
-
-            output_rows.extend(hits)
-            total_hits += file_hits
-            total_files += 1
-
-            if args.verbose or idx % 10 == 0:
-                print(
-                    f"[16_crossroad_extractor] ({idx}/{len(args.input)}) file={path.name},"
-                    f" hits={file_hits}, crossroad_id={cid}"
+            for file_idx, path in enumerate(files, start=1):
+                trip_count, file_hits, hits = _process_file(
+                    path,
+                    crossroad,
+                    args.screening_label,
+                    args.route_name,
+                    args.debounce_sec,
+                    args.verbose,
                 )
+
+                for row in hits:
+                    row.append(crossroad.crossroad_id)
+
+                output_rows.extend(hits)
+                total_hits += file_hits
+                total_files += 1
+
+                if args.verbose or file_idx % 10 == 0:
+                    print(
+                        f"[16_crossroad_extractor] ({file_idx}/{len(files)}) file={path.name},",
+                        f" hits={file_hits}, crossroad_id={cid}"
+                    )
+
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8-sig", newline="") as f:
