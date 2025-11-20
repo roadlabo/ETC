@@ -62,7 +62,7 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
   </div>
 
   <script>
-    var map = L.map('map').setView([{INITIAL_LAT}, {INITIAL_LON}], {INITIAL_ZOOM});
+    var map = L.map('map', {{ preferCanvas: true }}).setView([{INITIAL_LAT}, {INITIAL_LON}], {INITIAL_ZOOM});
 
     L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
       maxZoom: 19,
@@ -73,6 +73,7 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
     var centerLatLng = null;
     var branchMarkers = [];
     var branchLines = [];
+    var canvasRenderer = L.canvas();
 
     // 左クリック
     map.on('click', function(e) {{
@@ -85,7 +86,7 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
         var m = L.marker(e.latlng).addTo(map).bindPopup(\"方向 \" + no);
         branchMarkers.push(m);
 
-        var poly = L.polyline([centerLatLng, e.latlng], {{ weight: 4 }}).addTo(map);
+        var poly = L.polyline([centerLatLng, e.latlng], {{ weight: 4, renderer: canvasRenderer }}).addTo(map);
         poly.bindTooltip(String(no), {{ permanent: true, direction: \"center\" }});
         branchLines.push(poly);
       }}
@@ -119,21 +120,33 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
     // 地図のスクリーンキャプチャを JPG で保存
     function saveMapJpg(baseName) {{
       var mapDiv = document.getElementById(\"map\");
-      if (window.html2canvas && mapDiv) {{
-        html2canvas(mapDiv, {{ useCORS: true }}).then(function(canvas) {{
-          canvas.toBlob(function(blob) {{
-            if (!blob) return;
-            var urlImg = URL.createObjectURL(blob);
-            var aImg = document.createElement(\"a\");
-            aImg.href = urlImg;
-            aImg.download = baseName + \".jpg\";
-            document.body.appendChild(aImg);
-            aImg.click();
-            document.body.removeChild(aImg);
-            URL.revokeObjectURL(urlImg);
-          }}, \"image/jpeg\", 0.9);
-        }});
+      if (!window.html2canvas) {{
+        console.error('html2canvas が見つかりません');
+        return;
       }}
+      if (!mapDiv) {{
+        console.error('#map 要素が見つかりません');
+        return;
+      }}
+
+      html2canvas(mapDiv, {{ useCORS: true, backgroundColor: null, logging: false }}).then(function(canvas) {{
+        canvas.toBlob(function(blob) {{
+          if (!blob) {{
+            console.error('Canvas から Blob を生成できませんでした');
+            return;
+          }}
+          var urlImg = URL.createObjectURL(blob);
+          var aImg = document.createElement(\"a\");
+          aImg.href = urlImg;
+          aImg.download = baseName + \".jpg\";
+          document.body.appendChild(aImg);
+          aImg.click();
+          document.body.removeChild(aImg);
+          URL.revokeObjectURL(urlImg);
+        }}, \"image/jpeg\", 0.9);
+      }}).catch(function(err) {{
+        console.error('地図キャプチャ中にエラーが発生しました', err);
+      }});
     }}
 
     // CSV保存
