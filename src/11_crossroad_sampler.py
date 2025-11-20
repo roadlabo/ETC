@@ -54,7 +54,7 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
   <script>
     var map = L.map('map').setView([{INITIAL_LAT}, {INITIAL_LON}], {INITIAL_ZOOM});
 
-    L.tileLayer('https://{{{{s}}}}.tile.openstreetmap.org/{{{{z}}}}/{{{{x}}}}/{{{{y}}}}.png', {{
+    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
       maxZoom: 19,
       attribution: '© OpenStreetMap contributors'
     }}).addTo(map);
