@@ -12,18 +12,18 @@ INITIAL_ZOOM = 16
 
 # ===== HTMLテンプレート（f-string & {{ }} エスケープ版） =====
 HTML_TEMPLATE = f"""<!DOCTYPE html>
-<html lang="ja">
+<html lang=\"ja\">
 <head>
-  <meta charset="utf-8">
+  <meta charset=\"utf-8\">
   <title>Crossroad Sampler</title>
 
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\"
+    integrity=\"sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=\" crossorigin=\"\"/>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"
+    integrity=\"sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=\" crossorigin=\"\"></script>
 
-  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src=\"https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js\"></script>
 
   <style>
     html, body {{ height: 100%; margin: 0; padding: 0; }}
@@ -44,21 +44,21 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
 </head>
 
 <body>
-  <div id="map"></div>
+  <div id=\"map\"></div>
 
-  <div class="toolbar">
+  <div class=\"toolbar\">
     <div><strong>交差点ID: {CROSSROAD_ID}</strong></div>
-    <div style="margin-top:4px;">
+    <div style=\"margin-top:4px;\">
       出力ファイル名：
-      <input id="outputName" type="text"
-             value="crossroad{CROSSROAD_ID}"
-             style="width: 140px;" />
+      <input id=\"outputName\" type=\"text\"
+             value=\"crossroad{CROSSROAD_ID}\"
+             style=\"width: 140px;\" />
     </div>
-    <div style="margin-top:4px;">
-      <button onclick="saveCsv()">保存</button>
-      <button onclick="clearAll()">全消去</button>
+    <div style=\"margin-top:4px;\">
+      <button onclick=\"saveCsv()\">保存</button>
+      <button onclick=\"clearAll()\">全消去</button>
     </div>
-    <div style="margin-top:4px;">左クリック：中心 / 方向追加　右クリック：方向削除</div>
+    <div style=\"margin-top:4px;\">左クリック：中心 / 方向追加　右クリック：方向削除</div>
   </div>
 
   <script>
@@ -78,15 +78,15 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
     map.on('click', function(e) {{
       if (!centerMarker) {{
         centerLatLng = e.latlng;
-        centerMarker = L.marker(e.latlng).addTo(map).bindPopup("Centre").openPopup();
+        centerMarker = L.marker(e.latlng).addTo(map).bindPopup(\"Centre\").openPopup();
       }} else {{
         // branchMarkers.length + 1 を 1,2,3,... の枝番号として振る
         var no = branchMarkers.length + 1;
-        var m = L.marker(e.latlng).addTo(map).bindPopup("方向 " + no);
+        var m = L.marker(e.latlng).addTo(map).bindPopup(\"方向 \" + no);
         branchMarkers.push(m);
 
         var poly = L.polyline([centerLatLng, e.latlng], {{ weight: 4 }}).addTo(map);
-        poly.bindTooltip(String(no), {{ permanent: true, direction: "center" }});
+        poly.bindTooltip(String(no), {{ permanent: true, direction: \"center\" }});
         branchLines.push(poly);
       }}
     }});
@@ -118,53 +118,53 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
 
     // 地図のスクリーンキャプチャを JPG で保存
     function saveMapJpg(baseName) {{
-      var mapDiv = document.getElementById("map");
+      var mapDiv = document.getElementById(\"map\");
       if (window.html2canvas && mapDiv) {{
         html2canvas(mapDiv, {{ useCORS: true }}).then(function(canvas) {{
           canvas.toBlob(function(blob) {{
             if (!blob) return;
             var urlImg = URL.createObjectURL(blob);
-            var aImg = document.createElement("a");
+            var aImg = document.createElement(\"a\");
             aImg.href = urlImg;
-            aImg.download = baseName + ".jpg";
+            aImg.download = baseName + \".jpg\";
             document.body.appendChild(aImg);
             aImg.click();
             document.body.removeChild(aImg);
             URL.revokeObjectURL(urlImg);
-          }}, "image/jpeg", 0.9);
-        });
-      }
+          }}, \"image/jpeg\", 0.9);
+        }});
+      }}
     }}
 
     // CSV保存
     function saveCsv() {{
       if (!centerLatLng) {{
-        alert("先に中心を指定してください");
+        alert(\"先に中心を指定してください\");
         return;
       }}
       if (branchMarkers.length === 0) {{
-        alert("方向を追加してください");
+        alert(\"方向を追加してください\");
         return;
       }}
 
-      var nameInput = document.getElementById("outputName");
-      var baseName = (nameInput && nameInput.value.trim()) || "crossroad{CROSSROAD_ID}";
+      var nameInput = document.getElementById(\"outputName\");
+      var baseName = (nameInput && nameInput.value.trim()) || \"crossroad{CROSSROAD_ID}\";
 
-      let rows = ["crossroad_id,center_lon,center_lat,branch_no,branch_name,dir_deg"];
+      let rows = [\"crossroad_id,center_lon,center_lat,branch_no,branch_name,dir_deg\"];
       let lon = centerLatLng.lng.toFixed(8);
       let lat = centerLatLng.lat.toFixed(8);
 
       for (let i = 0; i < branchMarkers.length; i++) {{
         let p = branchMarkers[i].getLatLng();
         let deg = bearing(centerLatLng.lat, centerLatLng.lng, p.lat, p.lng).toFixed(2);
-        rows.push("{CROSSROAD_ID}," + lon + "," + lat + "," + (i+1) + ",," + deg);
+        rows.push(\"{CROSSROAD_ID},\" + lon + \",\" + lat + \",\" + (i + 1) + \",,\" + deg);
       }}
 
-      let blob = new Blob([rows.join("\\r\\n")], {{type:"text/csv"}});
+      let blob = new Blob([rows.join(\"\\r\\n\")], {{ type: \"text/csv\" }});
       let url = URL.createObjectURL(blob);
-      let a = document.createElement("a");
+      let a = document.createElement(\"a\");
       a.href = url;
-      a.download = baseName + ".csv";
+      a.download = baseName + \".csv\";
       a.click();
       URL.revokeObjectURL(url);
 
