@@ -1,4 +1,4 @@
-# 15_trip_extractor マニュアル（完全版）
+# 15_trip_extractor_route マニュアル（完全版）
 最終更新：2025-11-16  
 作者：RoadLabo / Maki  
 対象読者：初めてスクリプトを使う自治体職員・技術者・研究者
@@ -7,7 +7,7 @@
 
 # 1. このスクリプトでできること
 
-**15_trip_extractor.py** は、ETC2.0 プローブデータから  
+**15_trip_extractor_route.py** は、ETC2.0 プローブデータから  
 「特定ルートを走行したトリップだけを自動抽出するツール」です。
 
 このスクリプトは以下の処理を行います：
@@ -28,7 +28,7 @@ ETC2.0 CSV群 → ルート判定 → トリップ切り出し → メタ情報�
 # 2. 必要なファイル
 
 project_root/
-├── 15_trip_extractor.py
+├── 15_trip_extractor_route.py
 ├── sample_route.csv ← ルート定義ファイル（必須）
 ├── input/ ← ETC2.0 生データ（大量）
 └── docs/
@@ -76,9 +76,9 @@ SAT-SUN
 
 # 4. スクリプトの「設定セクション」の丁寧な解説（初心者向け）
 
-15_trip_extractor.py の中央付近に、次のブロックがあります。
+15_trip_extractor_route.py の中央付近に、次のブロックがあります。
 
-## trip_extractor.py 設定セクション（ユーザーが自由に変更）
+## trip_extractor_route.py 設定セクション（ユーザーが自由に変更）
 
 THRESH_M = 10.0
 MIN_HITS = 4
@@ -188,9 +188,9 @@ TARGET_WEEKDAYS = set()
 
 
 # 6. 使い方（Windows例）
-python 15_trip_extractor.py --input input --sample sample_route.csv
+python 15_trip_extractor_route.py --input input --sample sample_route.csv
 または、DEFAULT_* を設定しておけばただの：
-python 15_trip_extractor.py
+python 15_trip_extractor_route.py
 でOK。
 
 # 7. 出力例
@@ -228,6 +228,7 @@ TARGET_WEEKDAYS	曜日	set() or {2–6}
 # 10. お問い合わせ
 
 バグ報告・改良要望は GitHub Issue または RoadLabo まで。
+
 
 
 
