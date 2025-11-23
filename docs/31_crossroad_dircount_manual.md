@@ -1,4 +1,4 @@
-# 16_crossroad_extractor.py 説明書（Markdown版）
+# 31_crossroad_extractor.py 説明書（Markdown版）
 
 最終更新：2025-02-17
 作者：RoadLabo / Maki  
@@ -8,13 +8,13 @@
 
 ## 1. 概要
 
-**16_crossroad_extractor.py** は、ETC2.0 トリップデータから交差点通過の「進入方向」と「退出方向」を判定し、通過1回につき1行のレコードとして出力する解析スクリプトです。11_crossroad_sampler.py で作成した交差点情報（中心点・道路方向）をもとに、各トリップがどの方向から入り、どの方向へ出たかを推定します。結果は交通量調査、方向別 OD 集計、右折直進左折比率などの後続分析に利用できます。
+**31_crossroad_extractor.py** は、ETC2.0 トリップデータから交差点通過の「進入方向」と「退出方向」を判定し、通過1回につき1行のレコードとして出力する解析スクリプトです。11_crossroad_sampler.py で作成した交差点情報（中心点・道路方向）をもとに、各トリップがどの方向から入り、どの方向へ出たかを推定します。結果は交通量調査、方向別 OD 集計、右折直進左折比率などの後続分析に利用できます。
 
 処理の全体像：
 
 ```
 ETC2.0トリップCSV ──────┐
-crossroad 定義CSV群 ──┼──▶ 16_crossroad_extractor.py ───▶ crossroad_extracted.csv
+crossroad 定義CSV群 ──┼──▶ 31_crossroad_extractor.py ───▶ crossroad_extracted.csv
 crossroad 定義JPG群 ──┘        （交差点IDは CSV の crossroad_id 列で管理）
 ```
 
@@ -24,7 +24,7 @@ crossroad 定義JPG群 ──┘        （交差点IDは CSV の crossroad_id �
 
 - **入力1：トリップデータ** — 15_trip_extractor.py が出力する形式に準拠した CSV 群。
 - **入力2：交差点情報** — 11_crossroad_sampler.py が生成した交差点定義 CSV（ファイル名は任意）。交差点IDは CSV 内の **crossroad_id 列** で管理する。
-- **参考情報：交差点スクリーンショット** — 11_crossroad_sampler.py が CSV 保存時に同名ベースで出力する JPG。16_crossroad_extractor.py では直接利用しないが、資料化や目視確認用に保管しておく。
+- **参考情報：交差点スクリーンショット** — 11_crossroad_sampler.py が CSV 保存時に同名ベースで出力する JPG。31_crossroad_extractor.py では直接利用しないが、資料化や目視確認用に保管しておく。
 - **出力：crossroad_extracted.csv** — 交差点通過ごとに1行を記録。必要に応じて交差点ID列を付与する。
 
 ---
@@ -88,7 +88,7 @@ crossroad 定義JPG群 ──┘        （交差点IDは CSV の crossroad_id �
 ## 5. 実行方法
 
 ```bash
-python 16_crossroad_extractor.py \
+python 31_crossroad_extractor.py \
     --input ./trip_data/trip_*.csv \
     --crossroad-dir ./crossroads \
     --output ./output/crossroad_extracted.csv
@@ -167,11 +167,11 @@ ETC2.0 は直進区間だと 200m に 1ポイントしかないケースがあ�
 ## 10. 進捗表示例
 
 ```
-[16_crossroad_extractor] Start. trip_files=1289, crossroads=12
-[16_crossroad_extractor] (85/1289) file=trip_00085.csv, hits=2
-[16_crossroad_extractor] (123/1289) file=trip_00123.csv, hits=0
+[31_crossroad_extractor] Start. trip_files=1289, crossroads=12
+[31_crossroad_extractor] (85/1289) file=trip_00085.csv, hits=2
+[31_crossroad_extractor] (123/1289) file=trip_00123.csv, hits=0
 ...
-[16_crossroad_extractor] Done. total_hits=3542, time=01:23:09
+[31_crossroad_extractor] Done. total_hits=3542, time=01:23:09
 ```
 
 ---
