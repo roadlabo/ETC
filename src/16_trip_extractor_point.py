@@ -528,6 +528,82 @@ def process_file_for_crossroad(
     return candidate_count, matched_count, saved_count
 
 
+def process_file_for_all_crossroads(
+    path: Path,
+    crossroads: Sequence[CrossroadPoint],
+    output_dir: Path,
+    thresh_m: float,
+    min_hits: int,
+    dry_run: bool,
+    verbose: bool,
+    hits_per_cross: Dict[str, int],
+    saved_per_cross: Dict[str, int],
+) -> Tuple[int, int]:
+    """Process one CSV file against all crossroads.
+
+    This replaces the previous per-crossroad file processing loop so that each
+    file is read only once. ``process_file_for_crossroad`` is retained for
+    compatibility but is no longer used in the main flow.
+    """
+
+    try:
+        rows = read_csv_rows(path)
+    except Exception as exc:
+        if verbose:
+            print(f"Failed to read {path.name}: {exc}")
+        return 0, 0
+
+    if not rows:
+        if verbose:
+            print(f"{path.name}: empty file")
+        return 0, 0
+
+    boundaries = build_boundaries(rows)
+    segments = list(iter_segments_from_boundaries(boundaries))
+    candidate_count = len(segments)
+    matched_count = 0
+
+    for seg_idx, (start, end) in enumerate(segments, start=1):
+        for cp in crossroads:
+            if not trip_matches_point(
+                rows,
+                start,
+                end,
+                cp.lat,
+                cp.lon,
+                thresh_m,
+                min_hits,
+                TARGET_WEEKDAYS,
+            ):
+                continue
+
+            matched_count += 1
+            hits_per_cross[cp.name] = hits_per_cross.get(cp.name, 0) + 1
+
+            if dry_run:
+                saved_per_cross[cp.name] = saved_per_cross.get(cp.name, 0) + 1
+                if verbose:
+                    print(
+                        f"[DRY-RUN] {path.name}: match {cp.name} segment #{seg_idx} rows {start}-{end}"
+                    )
+                continue
+
+            cross_out_dir = output_dir / cp.name
+            saved_per_cross[cp.name] = saved_per_cross.get(cp.name, 0) + 1
+            seq_no = saved_per_cross[cp.name]
+            try:
+                save_trip(rows, start, end, cross_out_dir, cp.name, seq_no)
+                if verbose:
+                    print(
+                        f"Saved {path.name} segment #{seq_no:02d} for {cp.name} rows {start}-{end}"
+                    )
+            except Exception as exc:
+                if verbose:
+                    print(f"Failed to save segment for {cp.name} from {path.name}: {exc}")
+
+    return candidate_count, matched_count
+
+
 # ---------------------------------------------------------------------------
 # CLI helpers
 # ---------------------------------------------------------------------------
@@ -591,6 +667,10 @@ def run_crossroad(
     verbose: bool,
 ) -> int:
     """Process all trip files for a single crossroad and return hit count."""
+
+    # NOTE: This legacy flow is kept for compatibility/testing only. The main
+    # entrypoint now processes files once for all crossroads via
+    # ``process_file_for_all_crossroads``.
 
     # 交差点ファイルごとのサブフォルダを作成
     cross_out_dir = output_dir / cross.name  # cross.name は元のCSVの stem
@@ -669,24 +749,61 @@ def main(argv: Sequence[str] | None = None) -> int:
     for cp in crossroads:
         print(f"  - {cp.name}")
 
-    overall_start = time.time()
-    overall_hits = 0
+    total_files = len(trip_files)
 
-    for cp in crossroads:
-        hits = run_crossroad(
-            cp,
-            trip_files,
+    hits_per_cross = {cp.name: 0 for cp in crossroads}
+    saved_per_cross = {cp.name: 0 for cp in crossroads}
+
+    total_candidate = 0
+    total_matched = 0
+
+    overall_start = time.time()
+    last_len = 0
+
+    for idx, trip_path in enumerate(trip_files, 1):
+        cand, matched = process_file_for_all_crossroads(
+            trip_path,
+            crossroads,
             output_dir,
             THRESH_M,
             MIN_HITS,
             DRY_RUN,
             VERBOSE,
+            hits_per_cross,
+            saved_per_cross,
         )
-        overall_hits += hits
+        total_candidate += cand
+        total_matched += matched
 
-    total_elapsed = format_hms(time.time() - overall_start)
-    print(f"TOTAL 所要時間: {total_elapsed}")
-    print(f"TOTAL HIT件数 : {overall_hits}")
+        elapsed = time.time() - overall_start
+        percent = (idx / total_files) * 100 if total_files else 100.0
+        eta = (elapsed / idx) * (total_files - idx) if idx else 0.0
+
+        cross_summary = ", ".join(
+            f"{name}:{hits_per_cross[name]}" for name in sorted(hits_per_cross.keys())
+        )
+        max_summary_len = 120
+        if len(cross_summary) > max_summary_len:
+            cross_summary = cross_summary[: max_summary_len - 3] + "..."
+
+        line = (
+            f"{percent:3.0f}% ({idx}/{total_files} files)  "
+            f"total_hits={total_matched}  "
+            f"[{cross_summary}]  "
+            f"elapsed {format_hms(elapsed)}  "
+            f"eta {format_hms(eta)}"
+        )
+        last_len = _update_progress(line, last_len)
+
+    _clear_progress(last_len)
+
+    total_elapsed = time.time() - overall_start
+    print(f"TOTAL 所要時間: {format_hms(total_elapsed)}")
+    print(f"TOTAL 候補セグメント数 : {total_candidate}")
+    print(f"TOTAL HIT件数       : {total_matched}")
+    print("HIT 件数（交差点別）:")
+    for cp in crossroads:
+        print(f"  {cp.name}: {hits_per_cross[cp.name]} (saved={saved_per_cross[cp.name]})")
 
     return 0
 
