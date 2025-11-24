@@ -15,6 +15,16 @@ from pathlib import Path
 from typing import List, Sequence, Tuple
 
 # ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+# 入力トリップCSVディレクトリ / 出力ディレクトリ
+DEFAULT_INPUT_DIR: Path | None = Path(r"C:\Users\owner\Documents\temp(ETC)\02_1st_screening")
+DEFAULT_OUTPUT_DIR: Path | None = Path(r"C:\Users\owner\Documents\temp(ETC)\06_2nd_point\市内10か所")
+
+# 交差点CSVファイルが入っているフォルダ（この中の *.csv を全て対象とする）
+CROSSROAD_CSV_DIR: Path | None = Path(r"C:\Users\owner\Documents\temp(ETC)\04_crossroads\市内10か所")
+
+# ---------------------------------------------------------------------------
 # Constants (aligned with production 16_trip_extractor_point.py)
 # ---------------------------------------------------------------------------
 LAT_INDEX = 14
@@ -492,8 +502,19 @@ def parse_target_weekdays(token: str) -> set[int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Debug trip extractor for crossroad points")
-    parser.add_argument("trip_dir", type=Path, help="Trip CSV directory")
-    parser.add_argument("--crossroad-csv", nargs="+", type=Path, required=True, help="Crossroad CSV files")
+    parser.add_argument(
+        "trip_dir",
+        nargs="?",
+        type=Path,
+        default=DEFAULT_INPUT_DIR,
+        help="Trip CSV directory (default: DEFAULT_INPUT_DIR)",
+    )
+    parser.add_argument(
+        "--crossroad-csv",
+        nargs="+",
+        type=Path,
+        help="Crossroad CSV files (default: all CSVs under CROSSROAD_CSV_DIR)",
+    )
     parser.add_argument("--thresh-m", type=float, default=20.0, help="Threshold distance in meters")
     parser.add_argument("--min-hits", type=int, default=1, help="Minimum hits (point + segment)")
     parser.add_argument("--target-weekdays", type=str, default="1,2,3,4,5,6,7", help="Weekday filter (1=SUN ... 7=SAT)")
@@ -501,7 +522,18 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    crossroads = load_crossroad_points(args.crossroad_csv)
+    crossroad_csv_paths: list[Path] = []
+
+    if args.crossroad_csv:
+        crossroad_csv_paths.extend(args.crossroad_csv)
+    elif CROSSROAD_CSV_DIR is not None:
+        crossroad_csv_paths.extend(sorted(CROSSROAD_CSV_DIR.glob("*.csv")))
+
+    if not crossroad_csv_paths:
+        print("No crossroad CSV files specified and CROSSROAD_CSV_DIR is not set. Aborting.")
+        return
+
+    crossroads = load_crossroad_points(crossroad_csv_paths)
     if not crossroads:
         print("No valid crossroad points loaded. Aborting.")
         return
