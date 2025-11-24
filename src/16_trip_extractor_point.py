@@ -24,11 +24,13 @@ from typing import Dict, List, Sequence, Tuple
 DEFAULT_INPUT_DIR: Path | None = Path(r"/path/to/input_directory")
 DEFAULT_OUTPUT_DIR: Path | None = Path(r"/path/to/output_directory")
 
-# 交差点CSVファイルを複数指定
+# 交差点CSVファイルが入っているフォルダ（この中の *.csv を全て対象とする）
+CROSSROAD_CSV_DIR: Path | None = Path(r"/path/to/crossroads_dir")
+
+# （任意）個別に追加したい交差点CSVがあればここにも書けるようにしておく
 CROSSROAD_CSV_LIST: list[Path] = [
-    Path(r"/path/to/crossroad001.csv"),
-    Path(r"/path/to/crossroad002.csv"),
-    # 必要に応じて追加
+    # 例:
+    # Path(r"/path/to/special_crossroad.csv"),
 ]
 
 THRESH_M = 20.0      # 交差点中心からの判定距離[m]
@@ -590,6 +592,9 @@ def run_crossroad(
 ) -> int:
     """Process all trip files for a single crossroad and return hit count."""
 
+    # 交差点ファイルごとのサブフォルダを作成
+    cross_out_dir = output_dir / cross.name  # cross.name は元のCSVの stem
+
     _print_crossroad_header(cross, len(trip_files))
     start_ts = time.time()
     hits = 0
@@ -597,7 +602,7 @@ def run_crossroad(
 
     for idx, trip_path in enumerate(trip_files, start=1):
         _, matched, _ = process_file_for_crossroad(
-            trip_path, cross, output_dir, thresh_m, min_hits, dry_run, verbose
+            trip_path, cross, cross_out_dir, thresh_m, min_hits, dry_run, verbose
         )
         hits += matched
 
@@ -629,11 +634,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Input directory not found: {input_dir}")
         return 1
 
-    if not CROSSROAD_CSV_LIST:
+    # 交差点CSVをフォルダ＋個別指定から集約
+    cross_paths: list[Path] = []
+
+    if CROSSROAD_CSV_DIR is not None:
+        if not CROSSROAD_CSV_DIR.exists() or not CROSSROAD_CSV_DIR.is_dir():
+            print(f"Crossroad CSV directory not found: {CROSSROAD_CSV_DIR}")
+            return 1
+        cross_paths.extend(
+            p for p in sorted(CROSSROAD_CSV_DIR.glob("*.csv")) if p.is_file()
+        )
+
+    # 互換性のため、個別指定も併用できるようにする
+    if CROSSROAD_CSV_LIST:
+        cross_paths.extend(CROSSROAD_CSV_LIST)
+
+    if not cross_paths:
         print("No crossroad CSV files configured.")
         return 1
 
-    crossroads = load_crossroad_points(CROSSROAD_CSV_LIST)
+    crossroads = load_crossroad_points(cross_paths)
     if not crossroads:
         print("No valid crossroad points could be loaded.")
         return 1
