@@ -46,8 +46,8 @@ TARGET_WEEKDAYS: set[int] = {1, 2, 3, 4, 5, 6, 7}
 
 
 # Column indices (0-based)
-LAT_INDEX = 14
-LON_INDEX = 15
+LON_INDEX = 14  # O列: 経度
+LAT_INDEX = 15  # P列: 緯度
 FLAG_INDEX = 12
 DATE_INDEX = 6  # G列。例: 20250224161105（YYYYMMDDHHMMSS）
 OP_DATE_INDEX = 2  # C列: 運行日 (YYYYMMDD)
@@ -780,7 +780,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         eta = (elapsed / idx) * (total_files - idx) if idx else 0.0
 
         cross_summary = ", ".join(
-            f"{name}:{hits_per_cross[name]}" for name in sorted(hits_per_cross.keys())
+            f"{name[:2]}:{hits_per_cross[name]}" for name in sorted(hits_per_cross.keys())
         )
         max_summary_len = 120
         if len(cross_summary) > max_summary_len:
