@@ -35,7 +35,8 @@ THRESH_M = 20.0      # 交差点中心からの判定距離[m]
 MIN_HITS = 1         # HITとみなす最小ヒット数（点＋線分の合計）
 DRY_RUN = False
 VERBOSE = False
-RECURSIVE = False
+# 入力ディレクトリ配下のサブフォルダも含めて探索するかどうか
+RECURSIVE = True
 AUDIT_MODE = False   # （必要なら距離計算回数などの統計用）
 
 # 曜日フィルタは 15_trip_extractor_route.py と同様の TARGET_WEEKDAYS を流用
