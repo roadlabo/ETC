@@ -20,16 +20,17 @@ import pandas as pd
 
 # =========================================
 # 入出力設定（ユーザーが冒頭で編集可能にする）
+# 出力フォルダ（ここだけ変更すればすべての出力がこの中に生成される）
+OUTPUT_BASE_DIR = r"C:\\path\\to\\output_folder"
+
 CONFIG = [
     {
         "trip_folder": r"C:\\path\\to\\screening2_folder1",  # 様式1-2 が大量に入ったフォルダ
         "crossroad_file": r"C:\\path\\to\\crossroad1.csv",   # 交差点CSV（フルパス）
-        "output_csv": r"C:\\path\\to\\output1.csv",           # セット1の出力
     },
     {
         "trip_folder": r"C:\\path\\to\\screening2_folder2",
         "crossroad_file": r"C:\\path\\to\\crossroad2.csv",
-        "output_csv": r"C:\\path\\to\\output2.csv",
     },
     # 必要なだけ追加できる
 ]
@@ -371,11 +372,14 @@ def find_nearest_point(group: pd.DataFrame, center_lat: float, center_lon: float
 def process_config(conf: Dict[str, str]) -> None:
     trip_folder = conf.get("trip_folder")
     crossroad_file = conf.get("crossroad_file")
-    output_csv = conf.get("output_csv")
 
-    if not trip_folder or not crossroad_file or not output_csv:
+    if not trip_folder or not crossroad_file:
         print(f"[SKIP] CONFIG が不完全です: {conf}")
         return
+
+    crossroad_path = Path(conf["crossroad_file"])
+    crossroad_stem = crossroad_path.stem  # 拡張子なし
+    output_csv = Path(OUTPUT_BASE_DIR) / f"{crossroad_stem}_performance.csv"
 
     print(f"[LOAD] 交差点CSV: {crossroad_file}")
     try:
@@ -423,6 +427,7 @@ def save_output(rows: List[List[Optional[str]]], output_path: str) -> None:
 
 # ---------------------- エントリポイント ----------------------
 def main() -> None:
+    Path(OUTPUT_BASE_DIR).mkdir(parents=True, exist_ok=True)
     for conf in CONFIG:
         try:
             process_config(conf)
