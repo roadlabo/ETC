@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -381,7 +382,6 @@ def process_config(conf: Dict[str, str]) -> None:
     crossroad_stem = crossroad_path.stem  # 拡張子なし
     output_csv = Path(OUTPUT_BASE_DIR) / f"{crossroad_stem}_performance.csv"
 
-    print(f"[LOAD] 交差点CSV: {crossroad_file}")
     try:
         crossroads = load_crossroads(crossroad_file)
     except Exception as e:
@@ -389,20 +389,57 @@ def process_config(conf: Dict[str, str]) -> None:
         return
 
     trip_files = list_trip_files(trip_folder)
-    if not trip_files:
-        print(f"[WARN] トリップCSVが見つかりません: {trip_folder}")
-        return
+    total = len(trip_files)
+
+    set_start = datetime.now()
+
+    print()
+    print(f"[CROSSROAD] {crossroad_path.name}")
+    print(f"  folder={trip_folder}  files={total}")
+    print(f"  start={set_start.strftime('%H:%M:%S')}")
+
+    def fmt_td_short(td: timedelta) -> str:
+        total_sec = max(0, int(td.total_seconds()))
+        h = total_sec // 3600
+        m = (total_sec % 3600) // 60
+        s = total_sec % 60
+        if h > 0:
+            return f"{h:d}h{m:02d}m{s:02d}s"
+        elif m > 0:
+            return f"{m:d}m{s:02d}s"
+        else:
+            return f"{s:d}s"
 
     output_rows: List[List[Optional[str]]] = []
 
     crossroad_base = Path(crossroad_file).name
 
-    for trip_path in trip_files:
-        print(f"[PROC] {trip_path}")
+    for idx, trip_path in enumerate(trip_files, start=1):
+        now = datetime.now()
+        elapsed = now - set_start
+
+        if total > 0 and idx > 0:
+            avg_per_file = elapsed / idx
+            remaining = avg_per_file * (total - idx)
+            eta = now + remaining
+            percent = idx / total * 100
+        else:
+            remaining = timedelta(0)
+            eta = now
+            percent = 100.0
+
+        msg = (
+            f"  [PROC] {idx}/{total} ({percent:5.1f}%) "
+            f"elapsed={fmt_td_short(elapsed)} "
+            f"remain={fmt_td_short(remaining)} "
+            f"ETA={eta.strftime('%H:%M:%S')} "
+            f"current={Path(trip_path).name}"
+        )
+        print(msg, end="\r", flush=True)
         try:
             trip_df = read_csv_flexible(trip_path)
         except Exception as e:
-            print(f"[ERROR] CSV読み込み失敗: {trip_path}: {e}")
+            print(f"\n[ERROR] {Path(trip_path).name} 読み込み失敗: {e}")
             continue
 
         for cross in crossroads.values():
@@ -411,11 +448,23 @@ def process_config(conf: Dict[str, str]) -> None:
                 rows = process_trip(trip_df, cross, context, crossroad_base)
                 output_rows.extend(rows)
             except Exception as e:
-                print(f"[ERROR] トリップ処理失敗 ({trip_path}, crossroad={cross.crossroad_id}): {e}")
+                print(
+                    f"\n[ERROR] {Path(trip_path).name} 処理中にエラー: {e}"
+                )
                 continue
 
     save_output(output_rows, output_csv)
-    print(f"[DONE] 出力: {output_csv} ({len(output_rows)} rows)")
+    set_end = datetime.now()
+    set_elapsed = set_end - set_start
+
+    print()
+    print(
+        f"  [DONE] rows={len(output_rows)} "
+        f"start={set_start.strftime('%H:%M:%S')} "
+        f"end={set_end.strftime('%H:%M:%S')} "
+        f"elapsed={fmt_td_short(set_elapsed)} "
+        f"-> {output_csv}"
+    )
 
 
 def save_output(rows: List[List[Optional[str]]], output_path: str) -> None:
@@ -427,6 +476,23 @@ def save_output(rows: List[List[Optional[str]]], output_path: str) -> None:
 
 # ---------------------- エントリポイント ----------------------
 def main() -> None:
+    from pathlib import Path
+
+    global_start = datetime.now()
+
+    num_sets = len(CONFIG)
+    total_trip_files = 0
+    for conf in CONFIG:
+        folder = conf.get("trip_folder")
+        if folder:
+            total_trip_files += len(list(Path(folder).glob("*.csv")))
+
+    print("=" * 60)
+    print(f"[INFO] 全体開始時刻 : {global_start.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"[INFO] CONFIG セット数 : {num_sets}")
+    print(f"[INFO] 全トリップCSV数(合計) : {total_trip_files}")
+    print("=" * 60)
+
     Path(OUTPUT_BASE_DIR).mkdir(parents=True, exist_ok=True)
     for conf in CONFIG:
         try:
@@ -434,6 +500,21 @@ def main() -> None:
         except Exception as e:
             print(f"[ERROR] CONFIG処理失敗: {e}")
             continue
+
+    global_end = datetime.now()
+    total_elapsed = global_end - global_start
+
+    def fmt_td(td: timedelta) -> str:
+        total_sec = int(td.total_seconds())
+        h = total_sec // 3600
+        m = (total_sec % 3600) // 60
+        s = total_sec % 60
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+    print("=" * 60)
+    print(f"[INFO] 全体終了時刻 : {global_end.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"[INFO] 全体所要時間 : {fmt_td(total_elapsed)}")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
