@@ -7,8 +7,8 @@ Flask + Leaflet でポリゴンを編集・保存するツール。
 ・http://127.0.0.1:<port>/ をブラウザで開いて操作します。
 ・左クリックで点追加、右クリックで直前の点を削除。
 ・「追加」で名前付きポリゴンとして登録。
-・既存CSVがあれば読み込み、同じ形式で保存します
-  （1行1ポリゴン、A列: name, B以降: lon,lat の繰り返し）。
+・起動後のダイアログで既存CSVを読み込むか新規作成かを選べます
+  （CSV形式は1行1ポリゴン、A列: name, B以降: lon,lat の繰り返し）。
 
 起動例: python 21_polygon_builder.py --outdir "/tmp/out" --filename polygons.csv --port 5010
 """
@@ -30,34 +30,6 @@ app = Flask(__name__)
 # Flaskハンドラが参照する保存先と既存ポリゴン
 OUTDIR = Path(__file__).parent.resolve()
 DEFAULT_FILENAME = "polygon_data.csv"
-INITIAL_POLYGONS: List[dict] = []
-
-
-def load_polygons(csv_path: Path) -> List[dict]:
-    """既存CSVからポリゴンを読み込む。"""
-
-    polygons: List[dict] = []
-    if not csv_path.exists():
-        return polygons
-
-    with csv_path.open(newline="", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if len(row) < 3 or len(row) % 2 == 0:
-                continue
-            name = row[0].strip() or "polygon"
-            try:
-                values = list(map(float, row[1:]))
-            except ValueError:
-                continue
-            coords = []
-            for i in range(0, len(values), 2):
-                lon, lat = values[i], values[i + 1]
-                coords.append([lat, lon])
-            polygons.append({"name": name, "coords": coords})
-    return polygons
-
-
 INDEX_HTML = """
 <!doctype html>
 <html lang=\"ja\">
@@ -88,17 +60,36 @@ INDEX_HTML = """
   <input id=\"pname\" placeholder=\"ポリゴン名\" />
   <button id=\"btnAdd\">追加</button>
   <button id=\"btnClearCurrent\">編集中の点をクリア</button>
-  <button id=\"btnClearAll\">一覧をすべて削除</button>
   <div id=\"hint\" style=\"margin-top:4px; font-size:12px;\">右クリック：スナップ　　ESC：もどる（UNDO）</div>
-  <div class=\"hint\" style=\"margin-top:6px;\">一覧をクリックすると編集用に読み込みます</div>
   <div class=\"list\" id=\"polygonList\"></div>
-  <input id=\"fname\" placeholder=\"保存ファイル名 (例: polygons.csv)\" value=\"{{ default_filename }}\" />
   <button id=\"btnSave\">CSVとして保存</button>
+  <input type=\"file\" id=\"fileInput\" accept=\".csv\" style=\"display:none\" />
 </div>
 <script>
   // ==== 初期データ ====
-  var existingPolygons = {{ polygons | tojson }};
+  var polygons = [];
   var SNAP_PX = 15;
+
+  function parseCsvText(text) {
+    var lines = text.split(/\r?\n/).filter(function(line){ return line.trim() !== ''; });
+    var result = [];
+    for (var i = 0; i < lines.length; i++) {
+      var cols = lines[i].split(',');
+      if (cols.length < 3) continue;
+      var name = cols[0].trim();
+      var coords = [];
+      for (var j = 1; j + 1 < cols.length; j += 2) {
+        var lon = parseFloat(cols[j]);
+        var lat = parseFloat(cols[j + 1]);
+        if (isNaN(lat) || isNaN(lon)) continue;
+        coords.push([lat, lon]);
+      }
+      if (coords.length >= 3) {
+        result.push({ name: name, coords: coords });
+      }
+    }
+    return result;
+  }
 
   // ==== Leaflet マップ ====
   var map = L.map('map').setView([35.069095, 134.004512], 12); // 津山市役所周辺
@@ -108,7 +99,6 @@ INDEX_HTML = """
   }).addTo(map);
 
   // ==== レイヤ & 状態管理 ====
-  var polygons = existingPolygons.slice();
   var polygonLayer = L.layerGroup().addTo(map);
   var polygonVertexLayer = L.layerGroup().addTo(map);
 
@@ -189,13 +179,6 @@ INDEX_HTML = """
       div.textContent = (i + 1) + '. ' + poly.name;
       (function(p) {
         div.onclick = function() {
-          document.getElementById('pname').value = p.name;
-          resetCurrent();
-          for (var k = 0; k < p.coords.length; k++) {
-            var c = p.coords[k]; // [lat, lon]
-            addVertex(L.latLng(c[0], c[1]));
-          }
-          redrawCurrent();
           try {
             var tmp = L.polygon(p.coords);
             map.fitBounds(tmp.getBounds(), { maxZoom: 16 });
@@ -218,6 +201,25 @@ INDEX_HTML = """
         direction:'center',
         className:'polygon-label'
       });
+
+      (function(name) {
+        layer.on('contextmenu', function(e) {
+          L.DomEvent.preventDefault(e);
+          var msg = 'ポリゴン「' + name + '」を削除しますか？';
+          if (!window.confirm(msg)) {
+            return;
+          }
+          var newList = [];
+          for (var j = 0; j < polygons.length; j++) {
+            if (polygons[j].name !== name) {
+              newList.push(polygons[j]);
+            }
+          }
+          polygons = newList;
+          resetCurrent();
+          refreshPolygons();
+        });
+      })(poly.name);
       layer.addTo(polygonLayer);
 
       for (var k = 0; k < poly.coords.length; k++) {
@@ -360,13 +362,6 @@ INDEX_HTML = """
     resetCurrent();
   };
 
-  document.getElementById('btnClearAll').onclick = function() {
-    if (!confirm('一覧を全て削除しますか？')) return;
-    polygons = [];
-    resetCurrent();
-    refreshPolygons();
-  };
-
   document.getElementById('btnAdd').onclick = function() {
     var name = (document.getElementById('pname').value || 'polygon').trim();
     if (currentVertices.length < 3) {
@@ -406,11 +401,7 @@ INDEX_HTML = """
       alert('保存するポリゴンがありません。');
       return;
     }
-    var fnameInput = document.getElementById('fname').value || '{{ default_filename }}';
-    var fname = fnameInput.trim() || '{{ default_filename }}';
-    if (fname.toLowerCase().indexOf('.csv') === -1) {
-      fname = fname + '.csv';
-    }
+    var fname = 'polygon_data.csv';
 
     var lines = [];
     for (var i = 0; i < polygons.length; i++) {
@@ -452,12 +443,39 @@ INDEX_HTML = """
       }
     } catch (e) {
       console.error(e);
-      alert('保存がキャンセルされました。');
     }
   };
 
+  function initMode() {
+    var msg = 'ポリゴンデータを読み込みますか？\n[OK]：ポリゴンデータを読み込む\n[キャンセル]：新規作成';
+    if (!window.confirm(msg)) {
+      polygons = [];
+      refreshPolygons();
+      return;
+    }
+
+    var fileInput = document.getElementById('fileInput');
+    fileInput.onchange = function(evt) {
+      var file = evt.target.files[0];
+      if (!file) {
+        polygons = [];
+        refreshPolygons();
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var text = e.target.result;
+        polygons = parseCsvText(text);
+        resetCurrent();
+        refreshPolygons();
+      };
+      reader.readAsText(file, 'utf-8');
+    };
+    fileInput.click();
+  }
+
   // ==== 初期表示 ====
-  refreshPolygons();
+  initMode();
 </script>
 </body>
 </html>
@@ -468,8 +486,7 @@ INDEX_HTML = """
 def index():
     return render_template_string(
         INDEX_HTML,
-        polygons=INITIAL_POLYGONS,
-        default_filename=DEFAULT_FILENAME,
+        polygons=[],
     )
 
 
@@ -517,22 +534,16 @@ def _open_browser(url: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Leafletでポリゴンを編集・保存")
-    parser.add_argument("--csv", type=str, default="polygon_data.csv", help="初期読み込み用CSV")
     parser.add_argument("--outdir", type=str, default=str(Path(__file__).parent), help="保存先フォルダ")
     parser.add_argument("--filename", type=str, default="polygon_data.csv", help="保存ファイル名")
     parser.add_argument("--port", type=int, default=5010)
     args = parser.parse_args()
 
-    global OUTDIR, DEFAULT_FILENAME, INITIAL_POLYGONS
+    global OUTDIR, DEFAULT_FILENAME
     OUTDIR = Path(args.outdir).expanduser().resolve()
     OUTDIR.mkdir(parents=True, exist_ok=True)
 
     DEFAULT_FILENAME = args.filename.strip() or "polygon_data.csv"
-
-    csv_path = Path(args.csv).expanduser()
-    if not csv_path.is_absolute():
-        csv_path = OUTDIR / csv_path
-    INITIAL_POLYGONS = load_polygons(csv_path)
 
     url = f"http://127.0.0.1:{args.port}/"
     threading.Timer(0.5, _open_browser, args=(url,)).start()
