@@ -450,6 +450,7 @@ INDEX_HTML = """
     var msg = 'ポリゴンデータを読み込みますか？\n[OK]：ポリゴンデータを読み込む\n[キャンセル]：新規作成';
     if (!window.confirm(msg)) {
       polygons = [];
+      resetCurrent();
       refreshPolygons();
       return;
     }
@@ -459,6 +460,7 @@ INDEX_HTML = """
       var file = evt.target.files[0];
       if (!file) {
         polygons = [];
+        resetCurrent();
         refreshPolygons();
         return;
       }
@@ -475,6 +477,7 @@ INDEX_HTML = """
   }
 
   // ==== 初期表示 ====
+  // ページ読み込み時にモード選択ダイアログを出す
   initMode();
 </script>
 </body>
