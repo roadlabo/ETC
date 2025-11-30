@@ -6,7 +6,7 @@ Flask + Leaflet でポリゴンを編集・保存するツール。
 
 ・http://127.0.0.1:<port>/ をブラウザで開いて操作します。
 ・左クリックで点追加、右クリックで直前の点を削除。
-・「ポリゴンを追加/更新」で名前付きポリゴンとして登録。
+・「追加」で名前付きポリゴンとして登録。
 ・既存CSVがあれば読み込み、同じ形式で保存します
   （1行1ポリゴン、A列: name, B以降: lon,lat の繰り返し）。
 
@@ -84,9 +84,9 @@ INDEX_HTML = """
 <div class=\"toolbar\">
   <div><strong>ポリゴン編集</strong></div>
   <div class=\"hint\">左クリック=点追加 / 右クリック=既存点へスナップ</div>
-  <div class=\"hint\">「ポリゴンを追加/更新」で一覧に登録し、最後にCSV保存</div>
+  <div class=\"hint\">「追加」で一覧に登録し、最後にCSV保存</div>
   <input id=\"pname\" placeholder=\"ポリゴン名\" />
-  <button id=\"btnAdd\">ポリゴンを追加/更新</button>
+  <button id=\"btnAdd\">追加</button>
   <button id=\"btnClearCurrent\">編集中の点をクリア</button>
   <button id=\"btnClearAll\">一覧をすべて削除</button>
   <div id=\"hint\" style=\"margin-top:4px; font-size:12px;\">右クリック：スナップ　　ESC：もどる（UNDO）</div>
@@ -119,10 +119,10 @@ INDEX_HTML = """
 
   function createMarker(latlng, color) {
     return L.circleMarker(latlng, {
-      radius: 8,
+      radius: 5,
       color: color,
       weight: 2,
-      fillColor: '#ffffff',
+      fillColor: color,
       fillOpacity: 1.0
     }).addTo(map);
   }
@@ -223,10 +223,10 @@ INDEX_HTML = """
       for (var k = 0; k < poly.coords.length; k++) {
         var c = poly.coords[k];
         L.circleMarker([c[0], c[1]], {
-          radius: 8,
+          radius: 5,
           color: '#000000',
           weight: 2,
-          fillColor: '#ffffff',
+          fillColor: '#000000',
           fillOpacity: 1.0
         }).addTo(polygonVertexLayer);
       }
@@ -382,6 +382,7 @@ INDEX_HTML = """
     for (var i = 0; i < currentVertices.length; i++) {
       coords.push([currentVertices[i].lat, currentVertices[i].lon]); // [lat, lon]
     }
+
     var replaced = false;
     for (var j = 0; j < polygons.length; j++) {
       if (polygons[j].name === name) {
@@ -393,11 +394,14 @@ INDEX_HTML = """
     if (!replaced) {
       polygons.push({ name: name, coords: coords });
     }
+
     resetCurrent();
     refreshPolygons();
+
+    document.getElementById('pname').value = '';
   };
 
-  document.getElementById('btnSave').onclick = function() {
+  document.getElementById('btnSave').onclick = async function() {
     if (!polygons.length) {
       alert('保存するポリゴンがありません。');
       return;
@@ -424,12 +428,32 @@ INDEX_HTML = """
     // UTF-8 BOM付きでダウンロード（Excel 文字化け対策）
     var bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
     var blob = new Blob([bom, csvContent], { type: 'text/csv;charset=utf-8;' });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = fname;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      if ('showSaveFilePicker' in window) {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: fname,
+          types: [
+            {
+              description: 'CSV ファイル',
+              accept: { 'text/csv': ['.csv'] }
+            }
+          ]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+      } else {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = fname;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (e) {
+      console.error(e);
+      alert('保存がキャンセルされました。');
+    }
   };
 
   // ==== 初期表示 ====
