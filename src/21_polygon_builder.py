@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import threading
 import webbrowser
 from pathlib import Path
@@ -97,7 +96,7 @@ INDEX_HTML = """
   <button id=\"btnSave\">CSVとして保存</button>
 </div>
 <script>
-  const initialPolygons = {{ polygons_json | safe }};
+  const existingPolygons = {{ polygons | tojson }};
   const SNAP_PX = 15;
   const map = L.map('map').setView([35.069095, 134.004512], 12); // 津山市役所周辺
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -105,7 +104,7 @@ INDEX_HTML = """
     attribution: '&copy; OpenStreetMap contributors'
   }).addTo(map);
 
-  const polygons = initialPolygons.slice();
+  const polygons = existingPolygons.slice();
   const polygonLayer = L.layerGroup().addTo(map);
   const polygonVertexLayer = L.layerGroup().addTo(map);
   const currentLayer = L.polygon([], {color:'red', weight:2, fill:false, dashArray:'4 4'}).addTo(map);
@@ -397,7 +396,7 @@ INDEX_HTML = """
 def index():
     return render_template_string(
         INDEX_HTML,
-        polygons_json=json.dumps(INITIAL_POLYGONS, ensure_ascii=False),
+        polygons=INITIAL_POLYGONS,
         default_filename=DEFAULT_FILENAME,
     )
 
