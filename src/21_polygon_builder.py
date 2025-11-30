@@ -96,21 +96,26 @@ INDEX_HTML = """
   <button id=\"btnSave\">CSVとして保存</button>
 </div>
 <script>
-  const existingPolygons = {{ polygons | tojson }};
-  const SNAP_PX = 15;
-  const map = L.map('map').setView([35.069095, 134.004512], 12); // 津山市役所周辺
+  // ==== 初期データ ====
+  var existingPolygons = {{ polygons | tojson }};
+  var SNAP_PX = 15;
+
+  // ==== Leaflet マップ ====
+  var map = L.map('map').setView([35.069095, 134.004512], 12); // 津山市役所周辺
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; OpenStreetMap contributors'
   }).addTo(map);
 
-  const polygons = existingPolygons.slice();
-  const polygonLayer = L.layerGroup().addTo(map);
-  const polygonVertexLayer = L.layerGroup().addTo(map);
-  const currentLayer = L.polygon([], {color:'red', weight:2, fill:false, dashArray:'4 4'}).addTo(map);
-  const currentVertices = [];
-  const currentMarkers = [];
-  const currentSegments = [];
+  // ==== レイヤ & 状態管理 ====
+  var polygons = existingPolygons.slice();
+  var polygonLayer = L.layerGroup().addTo(map);
+  var polygonVertexLayer = L.layerGroup().addTo(map);
+
+  var currentLayer = L.polygon([], {color:'red', weight:2, fill:false, dashArray:'4 4'}).addTo(map);
+  var currentVertices = [];   // {lat, lon} の配列
+  var currentMarkers  = [];   // CircleMarker
+  var currentSegments = [];   // Polyline
 
   function createMarker(latlng, color) {
     return L.circleMarker(latlng, {
@@ -118,30 +123,42 @@ INDEX_HTML = """
       color: color,
       weight: 2,
       fillColor: '#ffffff',
-      fillOpacity: 1.0,
+      fillOpacity: 1.0
     }).addTo(map);
   }
 
   function resetCurrent() {
-    currentVertices.length = 0;
-    currentMarkers.forEach(m => map.removeLayer(m));
-    currentSegments.forEach(l => map.removeLayer(l));
-    currentMarkers.length = 0;
-    currentSegments.length = 0;
+    currentVertices = [];
+    for (var i = 0; i < currentMarkers.length; i++) {
+      map.removeLayer(currentMarkers[i]);
+    }
+    for (var j = 0; j < currentSegments.length; j++) {
+      map.removeLayer(currentSegments[j]);
+    }
+    currentMarkers = [];
+    currentSegments = [];
     currentLayer.setLatLngs([]);
   }
 
   function redrawCurrent() {
-    currentLayer.setLatLngs(currentVertices.map(p => [p.lat, p.lon]));
+    var latlngs = [];
+    for (var i = 0; i < currentVertices.length; i++) {
+      latlngs.push([currentVertices[i].lat, currentVertices[i].lon]);
+    }
+    currentLayer.setLatLngs(latlngs);
   }
 
   function addVertex(latlng) {
     currentVertices.push({lat: latlng.lat, lon: latlng.lng});
-    const marker = createMarker(latlng, '#ff0000');
+    var marker = createMarker(latlng, '#ff0000');
     currentMarkers.push(marker);
+
     if (currentVertices.length > 1) {
-      const prev = currentVertices[currentVertices.length - 2];
-      const line = L.polyline([[prev.lat, prev.lon], [latlng.lat, latlng.lng]], {color:'#ff0000', weight:2}).addTo(map);
+      var prev = currentVertices[currentVertices.length - 2];
+      var line = L.polyline([[prev.lat, prev.lon], [latlng.lat, latlng.lng]], {
+        color:'#ff0000',
+        weight:2
+      }).addTo(map);
       currentSegments.push(line);
     }
     redrawCurrent();
@@ -149,10 +166,10 @@ INDEX_HTML = """
 
   function removeLastVertex() {
     if (!currentVertices.length) return;
-    const marker = currentMarkers.pop();
+    var marker = currentMarkers.pop();
     if (marker) map.removeLayer(marker);
-    const segment = currentSegments.pop();
-    if (segment) map.removeLayer(segment);
+    var seg = currentSegments.pop();
+    if (seg) map.removeLayer(seg);
     currentVertices.pop();
     if (!currentVertices.length) {
       resetCurrent();
@@ -161,52 +178,67 @@ INDEX_HTML = """
     }
   }
 
+  // ==== 一覧描画 ====
   function renderList() {
-    const list = document.getElementById('polygonList');
+    var list = document.getElementById('polygonList');
     list.innerHTML = '';
-    polygons.forEach((poly, idx) => {
-      const div = document.createElement('div');
+    for (var i = 0; i < polygons.length; i++) {
+      var poly = polygons[i];
+      var div = document.createElement('div');
       div.className = 'list-item';
-      div.textContent = `${idx + 1}. ${poly.name}`;
-      div.onclick = () => {
-        document.getElementById('pname').value = poly.name;
-        resetCurrent();
-        poly.coords.forEach(c => addVertex(L.latLng(c[0], c[1])));
-        redrawCurrent();
-        try {
-          map.fitBounds(L.polygon(poly.coords).getBounds(), { maxZoom: 16 });
-        } catch (e) {
-          // ignore
-        }
-      };
+      div.textContent = (i + 1) + '. ' + poly.name;
+      (function(p) {
+        div.onclick = function() {
+          document.getElementById('pname').value = p.name;
+          resetCurrent();
+          for (var k = 0; k < p.coords.length; k++) {
+            var c = p.coords[k]; // [lat, lon]
+            addVertex(L.latLng(c[0], c[1]));
+          }
+          redrawCurrent();
+          try {
+            var tmp = L.polygon(p.coords);
+            map.fitBounds(tmp.getBounds(), { maxZoom: 16 });
+          } catch (e) {}
+        };
+      })(poly);
       list.appendChild(div);
-    });
+    }
   }
 
   function refreshPolygons() {
     polygonLayer.clearLayers();
     polygonVertexLayer.clearLayers();
-    polygons.forEach(poly => {
-      const layer = L.polygon(poly.coords, {color:'black', weight:2, fill:false});
-      layer.bindTooltip(poly.name, {permanent:true, direction:'center', className:'polygon-label'});
+
+    for (var i = 0; i < polygons.length; i++) {
+      var poly = polygons[i];
+      var layer = L.polygon(poly.coords, {color:'black', weight:2, fill:false});
+      layer.bindTooltip(poly.name, {
+        permanent:true,
+        direction:'center',
+        className:'polygon-label'
+      });
       layer.addTo(polygonLayer);
-      poly.coords.forEach(c => {
+
+      for (var k = 0; k < poly.coords.length; k++) {
+        var c = poly.coords[k];
         L.circleMarker([c[0], c[1]], {
           radius: 8,
           color: '#000000',
           weight: 2,
           fillColor: '#ffffff',
-          fillOpacity: 1.0,
+          fillOpacity: 1.0
         }).addTo(polygonVertexLayer);
-      });
-    });
+      }
+    }
     renderList();
   }
 
+  // ==== 交差判定 ====
   function orientation(a, b, c) {
-    const val = (b.lon - a.lon) * (c.lat - a.lat) - (b.lat - a.lat) * (c.lon - a.lon);
+    var val = (b.lon - a.lon) * (c.lat - a.lat) - (b.lat - a.lat) * (c.lon - a.lon);
     if (Math.abs(val) < 1e-12) return 0;
-    return val > 0 ? 1 : -1;
+    return (val > 0) ? 1 : -1;
   }
 
   function onSegment(a, b, c) {
@@ -221,56 +253,47 @@ INDEX_HTML = """
   }
 
   function colinearOverlap(a1, a2, b1, b2) {
-    const useLon = Math.abs(a1.lon - a2.lon) >= Math.abs(a1.lat - a2.lat);
-    const aMin = Math.min(a1[useLon ? 'lon' : 'lat'], a2[useLon ? 'lon' : 'lat']);
-    const aMax = Math.max(a1[useLon ? 'lon' : 'lat'], a2[useLon ? 'lon' : 'lat']);
-    const bMin = Math.min(b1[useLon ? 'lon' : 'lat'], b2[useLon ? 'lon' : 'lat']);
-    const bMax = Math.max(b1[useLon ? 'lon' : 'lat'], b2[useLon ? 'lon' : 'lat']);
-    const overlap = Math.min(aMax, bMax) - Math.max(aMin, bMin);
-    return overlap > 0; // 重なりが線分長として存在する場合のみ
+    var useLon = Math.abs(a1.lon - a2.lon) >= Math.abs(a1.lat - a2.lat);
+    var key = useLon ? 'lon' : 'lat';
+    var aMin = Math.min(a1[key], a2[key]);
+    var aMax = Math.max(a1[key], a2[key]);
+    var bMin = Math.min(b1[key], b2[key]);
+    var bMax = Math.max(b1[key], b2[key]);
+    var overlap = Math.min(aMax, bMax) - Math.max(aMin, bMin);
+    return overlap > 0;
   }
 
   function segmentsIntersect(a1, a2, b1, b2) {
-    const o1 = orientation(a1, a2, b1);
-    const o2 = orientation(a1, a2, b2);
-    const o3 = orientation(b1, b2, a1);
-    const o4 = orientation(b1, b2, a2);
+    var o1 = orientation(a1, a2, b1);
+    var o2 = orientation(a1, a2, b2);
+    var o3 = orientation(b1, b2, a1);
+    var o4 = orientation(b1, b2, a2);
 
     if (o1 * o2 < 0 && o3 * o4 < 0) {
-      return true; // proper intersection
-    }
-
-    if (o1 === 0 && onSegment(a1, b1, a2) && !pointsEqual(b1, a1) && !pointsEqual(b1, a2)) {
       return true;
     }
-    if (o2 === 0 && onSegment(a1, b2, a2) && !pointsEqual(b2, a1) && !pointsEqual(b2, a2)) {
-      return true;
-    }
-    if (o3 === 0 && onSegment(b1, a1, b2) && !pointsEqual(a1, b1) && !pointsEqual(a1, b2)) {
-      return true;
-    }
-    if (o4 === 0 && onSegment(b1, a2, b2) && !pointsEqual(a2, b1) && !pointsEqual(a2, b2)) {
-      return true;
-    }
+    if (o1 === 0 && onSegment(a1, b1, a2) && !pointsEqual(b1, a1) && !pointsEqual(b1, a2)) return true;
+    if (o2 === 0 && onSegment(a1, b2, a2) && !pointsEqual(b2, a1) && !pointsEqual(b2, a2)) return true;
+    if (o3 === 0 && onSegment(b1, a1, b2) && !pointsEqual(a1, b1) && !pointsEqual(a1, b2)) return true;
+    if (o4 === 0 && onSegment(b1, a2, b2) && !pointsEqual(a2, b1) && !pointsEqual(a2, b2)) return true;
 
     if (o1 === 0 && o2 === 0 && o3 === 0 && o4 === 0) {
       return colinearOverlap(a1, a2, b1, b2);
     }
-
-    return false; // only share endpoints or no intersection
+    return false;
   }
 
-  function isSelfIntersecting(latlngs) {
-    const n = latlngs.length;
+  function isSelfIntersecting(points) {
+    var n = points.length;
     if (n < 4) return false;
-    for (let i = 0; i < n; i++) {
-      const a1 = latlngs[i];
-      const a2 = latlngs[(i + 1) % n];
-      for (let j = i + 1; j < n; j++) {
-        const b1 = latlngs[j];
-        const b2 = latlngs[(j + 1) % n];
-        if (i === j || (j === i + 1) || (i === j + 1) || (i === 0 && j === n - 1) || (j === 0 && i === n - 1)) {
-          continue; // 隣接辺はスキップ
+    for (var i = 0; i < n; i++) {
+      var a1 = points[i];
+      var a2 = points[(i + 1) % n];
+      for (var j = i + 1; j < n; j++) {
+        var b1 = points[j];
+        var b2 = points[(j + 1) % n];
+        if (i === j || j === i + 1 || i === j + 1 || (i === 0 && j === n - 1) || (j === 0 && i === n - 1)) {
+          continue;
         }
         if (segmentsIntersect(a1, a2, b1, b2)) {
           return true;
@@ -280,37 +303,47 @@ INDEX_HTML = """
     return false;
   }
 
+  // ==== スナップ処理 ====
   function getAllVertices() {
-    const nodes = [];
-    polygons.forEach(poly => {
-      poly.coords.forEach(c => nodes.push(L.latLng(c[0], c[1])));
-    });
-    currentVertices.forEach(v => nodes.push(L.latLng(v.lat, v.lon)));
+    var nodes = [];
+    for (var i = 0; i < polygons.length; i++) {
+      var poly = polygons[i];
+      for (var k = 0; k < poly.coords.length; k++) {
+        var c = poly.coords[k];
+        nodes.push(L.latLng(c[0], c[1]));
+      }
+    }
+    for (var j = 0; j < currentVertices.length; j++) {
+      var v = currentVertices[j];
+      nodes.push(L.latLng(v.lat, v.lon));
+    }
     return nodes;
   }
 
   function findSnap(latlng) {
-    const p = map.latLngToLayerPoint(latlng);
-    let nearest = null;
-    let minDist = Infinity;
-    getAllVertices().forEach(node => {
-      const q = map.latLngToLayerPoint(node);
-      const dist = p.distanceTo(q);
+    var p = map.latLngToLayerPoint(latlng);
+    var nearest = null;
+    var minDist = Infinity;
+    var nodes = getAllVertices();
+    for (var i = 0; i < nodes.length; i++) {
+      var q = map.latLngToLayerPoint(nodes[i]);
+      var dist = p.distanceTo(q);
       if (dist <= SNAP_PX && dist < minDist) {
         minDist = dist;
-        nearest = node;
+        nearest = nodes[i];
       }
-    });
+    }
     return nearest;
   }
 
-  map.on('click', (e) => {
+  // ==== マップイベント ====
+  map.on('click', function(e) {
     addVertex(e.latlng);
   });
 
-  map.on('contextmenu', (e) => { // 右クリック=スナップ
+  map.on('contextmenu', function(e) { // 右クリック=スナップ
     if (e.originalEvent) e.originalEvent.preventDefault();
-    const snapped = findSnap(e.latlng);
+    var snapped = findSnap(e.latlng);
     if (snapped) {
       addVertex(snapped);
     }
@@ -322,19 +355,20 @@ INDEX_HTML = """
     }
   });
 
-  document.getElementById('btnClearCurrent').onclick = () => {
+  // ==== UI ボタン ====
+  document.getElementById('btnClearCurrent').onclick = function() {
     resetCurrent();
   };
 
-  document.getElementById('btnClearAll').onclick = () => {
+  document.getElementById('btnClearAll').onclick = function() {
     if (!confirm('一覧を全て削除しますか？')) return;
-    polygons.length = 0;
+    polygons = [];
     resetCurrent();
     refreshPolygons();
   };
 
-  document.getElementById('btnAdd').onclick = () => {
-    const name = (document.getElementById('pname').value || 'polygon').trim();
+  document.getElementById('btnAdd').onclick = function() {
+    var name = (document.getElementById('pname').value || 'polygon').trim();
     if (currentVertices.length < 3) {
       alert('3点以上でポリゴンを登録してください。');
       return;
@@ -344,48 +378,62 @@ INDEX_HTML = """
       resetCurrent();
       return;
     }
-    const coords = currentVertices.map(p => [p.lat, p.lon]);
-    const existingIdx = polygons.findIndex(p => p.name === name);
-    if (existingIdx >= 0) {
-      polygons[existingIdx] = { name, coords };
-    } else {
-      polygons.push({ name, coords });
+    var coords = [];
+    for (var i = 0; i < currentVertices.length; i++) {
+      coords.push([currentVertices[i].lat, currentVertices[i].lon]); // [lat, lon]
+    }
+    var replaced = false;
+    for (var j = 0; j < polygons.length; j++) {
+      if (polygons[j].name === name) {
+        polygons[j] = { name: name, coords: coords };
+        replaced = true;
+        break;
+      }
+    }
+    if (!replaced) {
+      polygons.push({ name: name, coords: coords });
     }
     resetCurrent();
     refreshPolygons();
   };
 
-  document.getElementById('btnSave').onclick = () => {
-    if (polygons.length === 0) {
+  document.getElementById('btnSave').onclick = function() {
+    if (!polygons.length) {
       alert('保存するポリゴンがありません。');
       return;
     }
-    let fname = (document.getElementById('fname').value || '{{ default_filename }}').trim();
-    if (!fname.toLowerCase().endsWith('.csv')) {
-      fname = `${fname}.csv`;
+    var fnameInput = document.getElementById('fname').value || '{{ default_filename }}';
+    var fname = fnameInput.trim() || '{{ default_filename }}';
+    if (fname.toLowerCase().indexOf('.csv') === -1) {
+      fname = fname + '.csv';
     }
-    const lines = polygons.map(poly => {
-      const parts = [poly.name || 'polygon'];
-      poly.coords.forEach(c => {
-        parts.push(`${c[1]}`); // lon
-        parts.push(`${c[0]}`); // lat
-      });
-      return parts.join(',');
-    });
-    const csvContent = lines.join('\n');
-    const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
-    const blob = new Blob([bom, csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+
+    var lines = [];
+    for (var i = 0; i < polygons.length; i++) {
+      var poly = polygons[i];
+      var parts = [poly.name || 'polygon'];
+      for (var k = 0; k < poly.coords.length; k++) {
+        var c = poly.coords[k]; // [lat, lon]
+        parts.push(String(c[1])); // lon
+        parts.push(String(c[0])); // lat
+      }
+      lines.push(parts.join(','));
+    }
+    var csvContent = lines.join('\\n');
+
+    // UTF-8 BOM付きでダウンロード（Excel 文字化け対策）
+    var bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
+    var blob = new Blob([bom, csvContent], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
     a.href = url;
     a.download = fname;
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  // 初期表示
+  // ==== 初期表示 ====
   refreshPolygons();
-  renderList();
 </script>
 </body>
 </html>
