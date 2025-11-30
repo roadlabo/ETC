@@ -177,14 +177,14 @@ def _add_draw_controls(m: folium.Map, polygons: List[PolygonData]) -> None:
     draw_css = """
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
     """
-    draw_js = """
-    <script src="https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
-    """
+    draw_js_src = "https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.js"
 
     m.get_root().header.add_child(folium.Element(draw_css))
     m.get_root().html.add_child(folium.Element(style))
-    m.get_root().script.add_child(folium.Element(draw_js))
-    m.get_root().script.add_child(folium.Element(script))
+    m.get_root().script.add_child(
+        folium.Element(f"<script src='{draw_js_src}'></script>")
+    )
+    m.get_root().script.add_child(folium.Element(f"<script>{script}</script>"))
 
 
 def build_map(polygons: List[PolygonData], output_path: Path) -> None:
