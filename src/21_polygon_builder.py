@@ -71,7 +71,7 @@ INDEX_HTML = """
   var SNAP_PX = 15;
 
   function parseCsvText(text) {
-    var lines = text.split(/\r?\n/).filter(function(line){ return line.trim() !== ''; });
+    var lines = text.split(/\r?\n/).filter(function(line) { return line.trim() !== ''; });
     var result = [];
     for (var i = 0; i < lines.length; i++) {
       var cols = lines[i].split(',');
