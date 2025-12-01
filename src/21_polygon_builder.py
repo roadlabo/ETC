@@ -71,18 +71,29 @@ INDEX_HTML = """
   var SNAP_PX = 15;
 
   function parseCsvText(text) {
-    var lines = text.split(/\r?\n/).filter(function(line) { return line.trim() !== ''; });
+    var lines = text.split(/\r?\n/);
     var result = [];
     for (var i = 0; i < lines.length; i++) {
-      var cols = lines[i].split(',');
+      var line = lines[i].trim();
+      if (!line) continue;
+      var cols = line.split(",");
+      result.push(cols);
+    }
+    return result;
+  }
+
+  function csvRowsToPolygons(rows) {
+    var result = [];
+    for (var i = 0; i < rows.length; i++) {
+      var cols = rows[i];
       if (cols.length < 3) continue;
-      var name = cols[0].trim();
+      var name = cols[0];
       var coords = [];
       for (var j = 1; j + 1 < cols.length; j += 2) {
         var lon = parseFloat(cols[j]);
-        var lat = parseFloat(cols[j + 1]);
+        var lat = parseFloat(cols[j+1]);
         if (isNaN(lat) || isNaN(lon)) continue;
-        coords.push([lat, lon]);
+        coords.push([lat, lon]); // [lat, lon]
       }
       if (coords.length >= 3) {
         result.push({ name: name, coords: coords });
@@ -172,20 +183,53 @@ INDEX_HTML = """
   function renderList() {
     var list = document.getElementById('polygonList');
     list.innerHTML = '';
+
     for (var i = 0; i < polygons.length; i++) {
-      var poly = polygons[i];
-      var div = document.createElement('div');
-      div.className = 'list-item';
-      div.textContent = (i + 1) + '. ' + poly.name;
-      (function(p) {
-        div.onclick = function() {
+      (function(index) {
+        var poly = polygons[index];
+
+        var row = document.createElement('div');
+        row.className = 'list-item';
+
+        var label = document.createElement('span');
+        label.textContent = (index + 1) + '. ' + (poly.name || 'polygon');
+        label.style.cursor = 'pointer';
+
+        label.onclick = function() {
           try {
-            var tmp = L.polygon(p.coords);
+            var tmp = L.polygon(poly.coords);
             map.fitBounds(tmp.getBounds(), { maxZoom: 16 });
-          } catch (e) {}
+          } catch (e) {
+            console.error(e);
+          }
         };
-      })(poly);
-      list.appendChild(div);
+
+        var delBtn = document.createElement('button');
+        delBtn.textContent = '削除';
+        delBtn.style.marginLeft = '8px';
+
+        delBtn.onclick = function(e) {
+          e.stopPropagation();
+
+          var pname = poly.name || 'polygon';
+          var msg = 'ポリゴン「' + pname + '」を削除しますか？';
+          var ok = window.confirm(msg);
+          if (!ok) {
+            return;
+          }
+
+          polygons.splice(index, 1);
+
+          resetCurrent();
+
+          refreshPolygons();
+        };
+
+        row.appendChild(label);
+        row.appendChild(delBtn);
+
+        list.appendChild(row);
+      })(i);
     }
   }
 
@@ -448,7 +492,9 @@ INDEX_HTML = """
 
   function initMode() {
     var msg = 'ポリゴンデータを読み込みますか？\n[OK]：ポリゴンデータを読み込む\n[キャンセル]：新規作成';
-    if (!window.confirm(msg)) {
+    var doLoad = window.confirm(msg);
+
+    if (!doLoad) {
       polygons = [];
       resetCurrent();
       refreshPolygons();
@@ -456,6 +502,15 @@ INDEX_HTML = """
     }
 
     var fileInput = document.getElementById('fileInput');
+    if (!fileInput) {
+      alert('fileInput 要素が見つかりません。HTML に <input type="file" id="fileInput"> を追加してください。');
+      polygons = [];
+      resetCurrent();
+      refreshPolygons();
+      return;
+    }
+
+    fileInput.value = "";
     fileInput.onchange = function(evt) {
       var file = evt.target.files[0];
       if (!file) {
@@ -467,18 +522,24 @@ INDEX_HTML = """
       var reader = new FileReader();
       reader.onload = function(e) {
         var text = e.target.result;
-        polygons = parseCsvText(text);
+        var rows = parseCsvText(text);
+        polygons = csvRowsToPolygons(rows);
         resetCurrent();
         refreshPolygons();
       };
       reader.readAsText(file, 'utf-8');
     };
+
     fileInput.click();
   }
 
   // ==== 初期表示 ====
+  refreshPolygons();
+
   // ページ読み込み時にモード選択ダイアログを出す
-  initMode();
+  window.addEventListener('load', function() {
+    initMode();
+  });
 </script>
 </body>
 </html>
