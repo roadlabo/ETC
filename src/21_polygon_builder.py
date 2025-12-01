@@ -102,12 +102,7 @@ INDEX_HTML = """
 <script>
   // ==== 初期データ ====
   var polygons = [];
-  var savedFiles = {};  // { filename: true }
   var SNAP_PX = 15;
-
-  function fileExistsInBrowser(filename) {
-    return savedFiles.hasOwnProperty(filename);
-  }
 
 
   function parseCsvText(text) {
@@ -532,54 +527,41 @@ INDEX_HTML = """
       return;
     }
 
-    // ここをループにして、上書き拒否された場合は再入力へ戻る
-    while (true) {
-      var fname = window.prompt("保存するCSVファイル名（拡張子不要）を入力してください。", "");
-      if (fname === null) {
-        // キャンセル → 保存中断
+    // ファイル名入力（拡張子なし）
+    var fname = window.prompt("保存するCSVファイル名（拡張子不要）を入力してください。", "");
+    if (fname === null) {
+      // キャンセル → 保存中断
+      return;
+    }
+    fname = fname.trim();
+    if (!fname) {
+      alert("ファイル名が空です。");
+      return;
+    }
+
+    // サーバ側 /save API に投げる
+    fetch("/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: fname,
+        polygons: polygons
+      })
+    })
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      if (!data.ok) {
+        alert("保存に失敗しました: " + (data.error || "不明なエラー"));
         return;
       }
-      fname = fname.trim();
-      if (!fname) {
-        alert("ファイル名が空です。");
-        continue;
-      }
-
-      // 保存先ファイル名
-      var filename = fname + ".csv";
-
-      // 同名ファイルが存在するか → 上書き確認
-      if (fileExistsInBrowser(filename)) {
-        var overwrite = window.confirm("同名ファイル「" + filename + "」があります。上書きしますか？");
-        if (!overwrite) {
-          // 「いいえ」 → ファイル名再入力に戻る
-          continue;
-        }
-      }
-
-      // 上書きOK、またはファイルが存在しない場合 → 保存処理へ進む
-      var csv = "name,lat,lon\\n";
-      for (var i = 0; i < polygons.length; i++) {
-        var poly = polygons[i];
-        for (var j = 0; j < poly.coords.length; j++) {
-          csv += poly.name + "," + poly.coords[j][0] + "," + poly.coords[j][1] + "\\n";
-        }
-      }
-
-      var blob = new Blob([csv], { type: "text/csv" });
-      var a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = filename;
-      a.click();
-
-      alert("保存しました: " + filename);
-
-      savedFiles[filename] = true;
-
-      return; // 保存後終了
-    }
+      // 実際に保存されたパスを表示（エクスプローラーで開けるように）
+      alert("保存しました:\n" + data.path);
+    })
+    .catch(function (err) {
+      console.error("save error", err);
+      alert("保存中にエラーが発生しました。");
+    });
   };
-
   function initMode() {
     var msg = 'ポリゴンデータを読み込みますか？\\n[OK]：ポリゴンデータを読み込む\\n[キャンセル]：新規作成';
     var doLoad = window.confirm(msg);
