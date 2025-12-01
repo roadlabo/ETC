@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ポリゴン編集ツール</title>
+  <title>ポリゴン編集（12_polygon_builder）</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
@@ -60,15 +60,15 @@
 <body>
 <div id="map"></div>
 <div class="toolbar">
-  <div><strong>ポリゴン編集</strong></div>
+  <div><strong>ポリゴン編集（12_polygon_builder）</strong></div>
   <div class="hint">左クリック=点追加 / 右クリック=既存点へスナップ</div>
-  <div class="hint">「ポリゴン追加」で一覧に登録し、最後にCSV保存</div>
-  <button id="btnAdd">ポリゴン追加</button>
-  <button id="btnClearCurrent">編集中の点をクリア</button>
-  <div id="hint" style="margin-top:4px; font-size:12px;">右クリック：スナップ　　ESC：もどる（UNDO）</div>
-  <button id="btnLoad">CSVを読込</button>
+  <div class="hint">「ポリゴン登録」で一覧に登録し、最後にCSV保存</div>
+  <button id="btnAdd">ポリゴン登録</button>
+  <button id="btnClearCurrent">編集中（赤）の点を全てクリア</button>
+  <div id="hint" style="margin-top:4px; font-size:12px;">ESC：もどる（UNDO）</div>
+  <button id="btnLoad">既存のポリゴンデータを読込</button>
   <div class="list" id="polygonList"></div>
-  <button id="btnSave">CSVとして保存</button>
+  <button id="btnSave">CSVとして保存（ダウンロードフォルダへ）</button>
   <input type="file" id="fileInput" accept=".csv" style="display:none" />
 </div>
 
