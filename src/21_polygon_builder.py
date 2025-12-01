@@ -91,9 +91,8 @@ INDEX_HTML = """
 <div class=\"toolbar\">
   <div><strong>ポリゴン編集</strong></div>
   <div class=\"hint\">左クリック=点追加 / 右クリック=既存点へスナップ</div>
-  <div class=\"hint\">「追加」で一覧に登録し、最後にCSV保存</div>
-  <input id=\"pname\" placeholder=\"ポリゴン名\" />
-  <button id=\"btnAdd\">追加</button>
+  <div class=\"hint\">「ポリゴン追加」で一覧に登録し、最後にCSV保存</div>
+  <button id=\"btnAdd\">ポリゴン追加</button>
   <button id=\"btnClearCurrent\">編集中の点をクリア</button>
   <div id=\"hint\" style=\"margin-top:4px; font-size:12px;\">右クリック：スナップ　　ESC：もどる（UNDO）</div>
   <div class=\"list\" id=\"polygonList\"></div>
@@ -103,7 +102,12 @@ INDEX_HTML = """
 <script>
   // ==== 初期データ ====
   var polygons = [];
+  var savedFiles = {};  // { filename: true }
   var SNAP_PX = 15;
+
+  function fileExistsInBrowser(filename) {
+    return savedFiles.hasOwnProperty(filename);
+  }
 
 
   function parseCsvText(text) {
@@ -242,7 +246,7 @@ INDEX_HTML = """
         // 1) ポリゴン名（クリックでズーム）
         var nameSpan = document.createElement('span');
         nameSpan.className = 'poly-name';
-        nameSpan.textContent = (index + 1) + '. ' + poly.name;
+        nameSpan.textContent = poly.name;
         nameSpan.onclick = function() {
           try {
             var tmp = L.polygon(poly.coords);
@@ -293,44 +297,55 @@ INDEX_HTML = """
 
   function deletePolygon(index) {
     if (index < 0 || index >= polygons.length) return;
+
+    // いったん編集中ポリゴンをリセット
+    resetCurrent();
+
+    // 削除対象ポリゴンだけ赤色でハイライト表示
+    refreshPolygons(index);
+
     var poly = polygons[index];
-    if (!window.confirm('ポリゴン「' + poly.name + '」を削除しますか？')) {
+    var ok = window.confirm('ポリゴン「' + poly.name + '」を削除しますか？');
+    if (!ok) {
+      // キャンセル時は元の黒色表示に戻す
+      refreshPolygons();
       return;
     }
+
+    // 確定削除
     polygons.splice(index, 1);
-    resetCurrent();
     refreshPolygons();
     renderList();
   }
 
-  function refreshPolygons() {
+  function refreshPolygons(highlightIndex) {
+    if (typeof highlightIndex === 'undefined') {
+      highlightIndex = -1;
+    }
     polygonLayer.clearLayers();
     polygonVertexLayer.clearLayers();
 
     for (var i = 0; i < polygons.length; i++) {
       var poly = polygons[i];
-      var layer = L.polygon(poly.coords, {color:'black', weight:2, fill:false});
+      var isHighlight = (i === highlightIndex);
+      var mainColor = isHighlight ? '#ff0000' : '#000000';
+      var layer = L.polygon(poly.coords, {color: mainColor, weight:2, fill:false});
       layer.bindTooltip(poly.name, {
         permanent:true,
         direction:'center',
         className:'polygon-label'
       });
 
-      (function(idx) {
-        layer.on('contextmenu', function(e) {
-          L.DomEvent.preventDefault(e);
-          deletePolygon(idx);
-        });
-      })(i);
+      // 地図上の右クリック削除機能は使わないのでイベントは付けない
       layer.addTo(polygonLayer);
 
       for (var k = 0; k < poly.coords.length; k++) {
         var c = poly.coords[k];
         L.circleMarker([c[0], c[1]], {
           radius: 5,
-          color: '#000000',
+          color: mainColor,
           weight: 2,
-          fillColor: '#000000',
+          fillColor: mainColor,
           fillOpacity: 1.0
         }).addTo(polygonVertexLayer);
       }
@@ -465,21 +480,35 @@ INDEX_HTML = """
   };
 
   document.getElementById('btnAdd').onclick = function() {
-    var name = (document.getElementById('pname').value || 'polygon').trim();
     if (currentVertices.length < 3) {
       alert('3点以上でポリゴンを登録してください。');
       return;
     }
     if (isSelfIntersecting(currentVertices)) {
       alert('ポリゴンが自己交差しています。このポリゴンは無効です。');
+      // 自己交差の場合は現状どおり編集中ポリゴンはリセット
       resetCurrent();
       return;
     }
+
+    // ダイアログでポリゴン名を入力（OK / キャンセル）
+    var name = window.prompt('ポリゴン名を入力してください。', '');
+    if (name === null) {
+      // キャンセル：ポリゴンは登録せず、編集中ノードはそのまま保持
+      return;
+    }
+    name = name.trim();
+    if (!name) {
+      alert('ポリゴン名が空です。');
+      return;
+    }
+
     var coords = [];
     for (var i = 0; i < currentVertices.length; i++) {
       coords.push([currentVertices[i].lat, currentVertices[i].lon]); // [lat, lon]
     }
 
+    // 既存名があれば上書き、なければ追加
     var replaced = false;
     for (var j = 0; j < polygons.length; j++) {
       if (polygons[j].name === name) {
@@ -494,59 +523,61 @@ INDEX_HTML = """
 
     resetCurrent();
     refreshPolygons();
-
     renderList();
-
-    document.getElementById('pname').value = '';
   };
 
-  document.getElementById('btnSave').onclick = async function() {
-    if (!polygons.length) {
-      alert('保存するポリゴンがありません。');
+  document.getElementById('btnSave').onclick = function () {
+
+    if (polygons.length === 0) {
+      alert("ポリゴンがありません。");
       return;
     }
-    var fname = 'polygon_data.csv';
 
-    var lines = [];
-    for (var i = 0; i < polygons.length; i++) {
-      var poly = polygons[i];
-      var parts = [poly.name || 'polygon'];
-      for (var k = 0; k < poly.coords.length; k++) {
-        var c = poly.coords[k]; // [lat, lon]
-        parts.push(String(c[1])); // lon
-        parts.push(String(c[0])); // lat
+    // ここをループにして、上書き拒否された場合は再入力へ戻る
+    while (true) {
+      var fname = window.prompt("保存するCSVファイル名（拡張子不要）を入力してください。", "");
+      if (fname === null) {
+        // キャンセル → 保存中断
+        return;
       }
-      lines.push(parts.join(','));
-    }
-    var csvContent = lines.join('\\n');
+      fname = fname.trim();
+      if (!fname) {
+        alert("ファイル名が空です。");
+        continue;
+      }
 
-    // UTF-8 BOM付きでダウンロード（Excel 文字化け対策）
-    var bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
-    var blob = new Blob([bom, csvContent], { type: 'text/csv;charset=utf-8;' });
-    try {
-      if ('showSaveFilePicker' in window) {
-        const handle = await window.showSaveFilePicker({
-          suggestedName: fname,
-          types: [
-            {
-              description: 'CSV ファイル',
-              accept: { 'text/csv': ['.csv'] }
-            }
-          ]
-        });
-        const writable = await handle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-      } else {
-        var url = URL.createObjectURL(blob);
-        var a = document.createElement('a');
-        a.href = url;
-        a.download = fname;
-        a.click();
-        URL.revokeObjectURL(url);
+      // 保存先ファイル名
+      var filename = fname + ".csv";
+
+      // 同名ファイルが存在するか → 上書き確認
+      if (fileExistsInBrowser(filename)) {
+        var overwrite = window.confirm("同名ファイル「" + filename + "」があります。上書きしますか？");
+        if (!overwrite) {
+          // 「いいえ」 → ファイル名再入力に戻る
+          continue;
+        }
       }
-    } catch (e) {
-      console.error(e);
+
+      // 上書きOK、またはファイルが存在しない場合 → 保存処理へ進む
+      var csv = "name,lat,lon\n";
+      for (var i = 0; i < polygons.length; i++) {
+        var poly = polygons[i];
+        for (var j = 0; j < poly.coords.length; j++) {
+          csv += poly.name + "," + poly.coords[j][0] + "," + poly.coords[j][1] + "\n";
+        }
+      }
+
+      var blob = new Blob([csv], { type: "text/csv" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+
+      alert("保存しました: " + filename);
+
+      savedFiles[filename] = true;
+
+      return; // 保存後終了
     }
   };
 
