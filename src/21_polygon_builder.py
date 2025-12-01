@@ -72,11 +72,14 @@ INDEX_HTML = """
       cursor: pointer;
     }
 
+    /* ★ 一覧のボタンは必要最小限の幅にする */
     .list-item button.list-btn {
       flex: 0 0 auto;
       font-size: 11px;
       padding: 1px 6px;
       margin-left: 2px;
+      width: auto;
+      white-space: nowrap;
     }
 
     .list-item:hover { background:#eef; }
