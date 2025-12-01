@@ -95,6 +95,10 @@ INDEX_HTML = """
   <button id=\"btnAdd\">ポリゴン追加</button>
   <button id=\"btnClearCurrent\">編集中の点をクリア</button>
   <div id=\"hint\" style=\"margin-top:4px; font-size:12px;\">右クリック：スナップ　　ESC：もどる（UNDO）</div>
+
+  <!-- ★ ここに CSV 読込ボタンを追加 -->
+  <button id=\"btnLoad\">CSVを読込</button>
+
   <div class=\"list\" id=\"polygonList\"></div>
   <button id=\"btnSave\">CSVとして保存</button>
   <input type=\"file\" id=\"fileInput\" accept=\".csv\" style=\"display:none\" />
@@ -473,6 +477,44 @@ INDEX_HTML = """
     resetCurrent();
   };
 
+  // ★ CSV 読込ボタン
+  document.getElementById('btnLoad').onclick = function() {
+    var fileInput = document.getElementById('fileInput');
+    if (!fileInput) {
+      alert('fileInput 要素が見つかりません。');
+      return;
+    }
+
+    // 同じファイルを連続で選べるように毎回 value をリセット
+    fileInput.value = "";
+    fileInput.onchange = function(evt) {
+      var file = evt.target.files[0];
+      if (!file) {
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          var text = e.target.result;
+          var rows = parseCsvText(text);
+          polygons = csvRowsToPolygons(rows);
+        } catch (err) {
+          console.error('CSV 読み込みエラー', err);
+          polygons = [];
+        }
+        resetCurrent();
+        refreshPolygons();
+        renderList();
+      };
+
+      // ★ サーバが cp932 で吐いたCSVを正しく読むために shift_jis を指定
+      reader.readAsText(file, 'shift_jis');
+    };
+
+    // ★ このクリックイベントの中なので、ブラウザが許可してくれる
+    fileInput.click();
+  };
+
   document.getElementById('btnAdd').onclick = function() {
     if (currentVertices.length < 3) {
       alert('3点以上でポリゴンを登録してください。');
@@ -562,64 +604,14 @@ INDEX_HTML = """
       alert("保存中にエラーが発生しました。");
     });
   };
-    function initMode() {
-      console.log("[initMode] start");
 
-      var msg = 'ポリゴンデータを読み込みますか？\\n[OK]：ポリゴンデータを読み込む\\n[キャンセル]：新規作成';
-      var doLoad = window.confirm(msg);
-      console.log("[initMode] confirm result =", doLoad);
-
-      if (!doLoad) {
-        console.log("[initMode] user chose cancel -> new polygon mode");
-        polygons = [];
-        resetCurrent();
-        refreshPolygons();
-        return;
-      }
-
-      // ここから先が「読込」ルート
-      var fileInput = document.getElementById('fileInput');
-      console.log("[initMode] fileInput element =", fileInput);
-
-      if (!fileInput) {
-        console.error("[initMode] fileInput が見つかりません");
-        polygons = [];
-        resetCurrent();
-        refreshPolygons();
-        return;
-      }
-
-      fileInput.onchange = function(evt) {
-        console.log("[initMode] fileInput onchange fired");
-        var file = evt.target.files[0];
-        console.log("[initMode] selected file =", file && file.name);
-        if (!file) {
-          polygons = [];
-          resetCurrent();
-          refreshPolygons();
-          return;
-        }
-        var reader = new FileReader();
-        reader.onload = function(e) {
-          try {
-            var text = e.target.result;
-            var rows = parseCsvText(text);
-            polygons = csvRowsToPolygons(rows);
-          } catch (err) {
-            console.error('CSV 読み込みエラー', err);
-            polygons = [];
-          }
-          resetCurrent();
-          refreshPolygons();
-          renderList();
-        };
-        reader.readAsText(file, 'utf-8');
-      };
-
-      console.log("[initMode] before fileInput.click()");
-      fileInput.click();
-      console.log("[initMode] after fileInput.click()");
-    }
+  function initMode() {
+    // 起動時は空の状態でスタート
+    polygons = [];
+    resetCurrent();
+    refreshPolygons();
+    renderList();
+  }
 
   // ==== 初期表示 ====
   // ページ読み込み完了後にモード選択ダイアログを出す
