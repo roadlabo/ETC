@@ -104,8 +104,8 @@ INDEX_HTML = """
 
 
   function parseCsvText(text) {
-    // 改行コードで単純に split（LF=コード10）
-    var lines = text.split(String.fromCharCode(10));
+    // 改行コードで単純に split（LF=10）
+    var lines = text.split('\\n').map(function(line){ return line.replace('\\r', ''); }).filter(function(line){ return line.trim() !== ''; });
     var result = [];
 
     for (var i = 0; i < lines.length; i++) {
