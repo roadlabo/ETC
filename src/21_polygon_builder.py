@@ -562,55 +562,64 @@ INDEX_HTML = """
       alert("保存中にエラーが発生しました。");
     });
   };
-  function initMode() {
-    var msg = 'ポリゴンデータを読み込みますか？\\n[OK]：ポリゴンデータを読み込む\\n[キャンセル]：新規作成';
-    var doLoad = window.confirm(msg);
+    function initMode() {
+      console.log("[initMode] start");
 
-    if (!doLoad) {
-      polygons = [];
-      resetCurrent();
-      refreshPolygons();
-      return;
-    }
+      var msg = 'ポリゴンデータを読み込みますか？\\n[OK]：ポリゴンデータを読み込む\\n[キャンセル]：新規作成';
+      var doLoad = window.confirm(msg);
+      console.log("[initMode] confirm result =", doLoad);
 
-    // ここから先が「読込」ルート
-    var fileInput = document.getElementById('fileInput');
-    if (!fileInput) {
-      console.error('fileInput が見つかりません');
-      polygons = [];
-      resetCurrent();
-      refreshPolygons();
-      return;
-    }
-
-    fileInput.onchange = function(evt) {
-      var file = evt.target.files[0];
-      if (!file) {
+      if (!doLoad) {
+        console.log("[initMode] user chose cancel -> new polygon mode");
         polygons = [];
         resetCurrent();
         refreshPolygons();
         return;
       }
-      var reader = new FileReader();
-      reader.onload = function(e) {
-        try {
-          var text = e.target.result;
-          var rows = parseCsvText(text);
-          polygons = csvRowsToPolygons(rows);
-        } catch (err) {
-          console.error('CSV 読み込みエラー', err);
-          polygons = [];
-        }
+
+      // ここから先が「読込」ルート
+      var fileInput = document.getElementById('fileInput');
+      console.log("[initMode] fileInput element =", fileInput);
+
+      if (!fileInput) {
+        console.error("[initMode] fileInput が見つかりません");
+        polygons = [];
         resetCurrent();
         refreshPolygons();
-        renderList();
-      };
-      reader.readAsText(file, 'utf-8');
-    };
+        return;
+      }
 
-    // ダイアログでOKを押した後に即ファイル選択ダイアログを出す
-    fileInput.click();
-  }
+      fileInput.onchange = function(evt) {
+        console.log("[initMode] fileInput onchange fired");
+        var file = evt.target.files[0];
+        console.log("[initMode] selected file =", file && file.name);
+        if (!file) {
+          polygons = [];
+          resetCurrent();
+          refreshPolygons();
+          return;
+        }
+        var reader = new FileReader();
+        reader.onload = function(e) {
+          try {
+            var text = e.target.result;
+            var rows = parseCsvText(text);
+            polygons = csvRowsToPolygons(rows);
+          } catch (err) {
+            console.error('CSV 読み込みエラー', err);
+            polygons = [];
+          }
+          resetCurrent();
+          refreshPolygons();
+          renderList();
+        };
+        reader.readAsText(file, 'utf-8');
+      };
+
+      console.log("[initMode] before fileInput.click()");
+      fileInput.click();
+      console.log("[initMode] after fileInput.click()");
+    }
 
   // ==== 初期表示 ====
   // ページ読み込み完了後にモード選択ダイアログを出す
@@ -662,7 +671,9 @@ def save():
             filename = f"{filename}.csv"
         safe_name = Path(filename).name or DEFAULT_FILENAME
         out_path = OUTDIR / safe_name
-        with out_path.open("w", newline="", encoding="utf-8") as f:
+
+        # ★ Excel で文字化けしないように cp932（Shift-JIS）で保存
+        with out_path.open("w", newline="", encoding="cp932") as f:
             writer = csv.writer(f, lineterminator="\n")
             writer.writerows(rows)
         return jsonify(ok=True, path=str(out_path))
