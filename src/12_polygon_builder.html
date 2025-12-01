@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ポリゴン編集（12_polygon_builder）</title>
+  <title>ゾーニングデータ編集</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
@@ -60,12 +60,12 @@
 <body>
 <div id="map"></div>
 <div class="toolbar">
-  <div><strong>ポリゴン編集（12_polygon_builder）</strong></div>
-  <button id="btnLoad">既存のポリゴンデータを読込</button>  
+  <div><strong>ゾーニングデータ編集（12_polygon_builder）</strong></div>
+  <button id="btnLoad">既存ゾーニングデータを読込</button>  
   <div class="hint">左クリック=点追加 / 右クリック=既存点へスナップ</div>
   <div class="hint">ESC：１点だけ戻る（UNDO）</div>  
-  <div class="hint">「ポリゴン登録」で一覧に登録し、次のポリゴンを指定</div>
-  <button id="btnAdd">ポリゴン登録</button>
+  <div class="hint">「ゾーン登録」で一覧に登録し、次のゾーンを指定</div>
+  <button id="btnAdd">ゾーン登録</button>
   <button id="btnClearCurrent">編集中（赤）の点を全てクリア</button>
   <div class="list" id="polygonList"></div>
   <button id="btnSave">CSVとして保存（ダウンロードフォルダへ）</button>
@@ -253,7 +253,7 @@
   function renamePolygon(index) {
     if (index < 0 || index >= polygons.length) return;
     var poly = polygons[index];
-    var newName = window.prompt('新しいポリゴン名を入力してください。', poly.name);
+    var newName = window.prompt('新しいゾーン名を入力してください。', poly.name);
     if (!newName) return;
     newName = newName.trim();
     if (!newName) return;
@@ -270,7 +270,7 @@
     refreshPolygons(index);
 
     var poly = polygons[index];
-    var ok = window.confirm('ポリゴン「' + poly.name + '」を削除しますか？');
+    var ok = window.confirm('ゾーンポリゴン「' + poly.name + '」を削除しますか？');
     if (!ok) {
       refreshPolygons();
       return;
@@ -470,7 +470,7 @@
 
   document.getElementById('btnAdd').onclick = function() {
     if (currentVertices.length < 3) {
-      alert('3点以上でポリゴンを登録してください。');
+      alert('3点以上でゾーンポリゴンを登録してください。');
       return;
     }
     if (isSelfIntersecting(currentVertices)) {
@@ -479,11 +479,11 @@
       return;
     }
 
-    var name = window.prompt('ポリゴン名を入力してください。', '');
+    var name = window.prompt('ゾーン名を入力してください。', '');
     if (name === null) return;
     name = name.trim();
     if (!name) {
-      alert('ポリゴン名が空です。');
+      alert('ゾーン名が空です。');
       return;
     }
 
