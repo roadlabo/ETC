@@ -7,29 +7,22 @@ Flask + Leaflet でポリゴンを編集・保存するツール。
 ・http://127.0.0.1:<port>/ をブラウザで開いて操作します。
 ・左クリックで点追加、右クリックで直前の点を削除。
 ・「追加」で名前付きポリゴンとして登録。
-・起動後のダイアログで既存CSVを読み込むか新規作成かを選べます
-  （CSV形式は1行1ポリゴン、A列: name, B以降: lon,lat の繰り返し）。
+・CSV はブラウザ側で保存（1行1ポリゴン、A列: name, B以降: lon,lat 繰り返し）。
 
-起動例: python 21_polygon_builder.py --outdir "/tmp/out" --filename polygons.csv --port 5010
+起動例: python 21_polygon_builder.py --port 5010
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
 import threading
 import webbrowser
-from pathlib import Path
-from typing import List
 
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, render_template_string
 
 
 app = Flask(__name__)
 
-# Flaskハンドラが参照する保存先と既存ポリゴン
-OUTDIR = Path(__file__).parent.resolve()
-DEFAULT_FILENAME = "polygon_data.csv"
 INDEX_HTML = """
 <!doctype html>
 <html lang=\"ja\">
@@ -507,8 +500,9 @@ INDEX_HTML = """
         renderList();
       };
 
-      // ★ サーバが cp932 で吐いたCSVを正しく読むために shift_jis を指定
-      reader.readAsText(file, 'shift_jis');
+      // ★ 保存デフォルトは Shift-JIS。必要に応じて UTF-8(BOM) も選択可能にする
+      var loadUtf8 = window.confirm('UTF-8(BOM) で読み込みますか？\nキャンセルで Shift-JIS になります。');
+      reader.readAsText(file, loadUtf8 ? 'utf-8' : 'shift_jis');
     };
 
     // ★ このクリックイベントの中なので、ブラウザが許可してくれる
@@ -569,40 +563,37 @@ INDEX_HTML = """
       return;
     }
 
-    // ファイル名入力（拡張子なし）
-    var fname = window.prompt("保存するCSVファイル名（拡張子不要）を入力してください。", "");
-    if (fname === null) {
-      // キャンセル → 保存中断
-      return;
-    }
-    fname = fname.trim();
-    if (!fname) {
-      alert("ファイル名が空です。");
-      return;
-    }
+    var fname = window.prompt("保存ファイル名（拡張子不要）を入力してください。", "");
+    if (fname === null || fname.trim() === "") return;
 
-    // サーバ側 /save API に投げる
-    fetch("/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filename: fname,
-        polygons: polygons
-      })
-    })
-    .then(function (res) { return res.json(); })
-    .then(function (data) {
-      if (!data.ok) {
-        alert("保存に失敗しました: " + (data.error || "不明なエラー"));
-        return;
+    var filename = fname + ".csv";
+
+    // 文字コードを選択（デフォルトは Shift-JIS）
+    var useUtf8 = window.confirm("UTF-8(BOM) で保存しますか？\nキャンセルで Shift-JIS になります。");
+    var encoding = useUtf8 ? "utf-8-sig" : "shift_jis";
+
+    // ---- CSV 生成 ----
+    var rows = [];
+    for (var i = 0; i < polygons.length; i++) {
+      var poly = polygons[i];
+      var row = [poly.name];
+      for (var j = 0; j < poly.coords.length; j++) {
+        var lat = poly.coords[j][0];
+        var lon = poly.coords[j][1];
+        row.push(lon.toString(), lat.toString());
       }
-      // 実際に保存されたパスを表示（エクスプローラーで開けるように）
-      alert("保存しました:\\n" + data.path);
-    })
-    .catch(function (err) {
-      console.error("save error", err);
-      alert("保存中にエラーが発生しました。");
-    });
+      rows.push(row.join(","));
+    }
+    var csvText = rows.join("\r\n");
+
+    // ---- 保存ダイアログを出す ----
+    var blob = new Blob([csvText], {type: "text/csv;charset=" + encoding});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   function initMode() {
@@ -636,43 +627,6 @@ def index():
     )
 
 
-@app.route("/save", methods=["POST"])
-def save():
-    try:
-        data = request.get_json(force=True) or {}
-        filename = (data.get("filename") or DEFAULT_FILENAME).strip() or DEFAULT_FILENAME
-        polygons = data.get("polygons") or []
-        if not isinstance(polygons, list) or len(polygons) == 0:
-            return jsonify(ok=False, error="polygons must be non-empty list")
-
-        rows: List[List[str]] = []
-        for poly in polygons:
-            name = (poly.get("name") or "polygon").strip() if isinstance(poly, dict) else "polygon"
-            coords = poly.get("coords") if isinstance(poly, dict) else None
-            if not isinstance(coords, list) or len(coords) < 3:
-                return jsonify(ok=False, error=f"polygon '{name}' must have at least 3 points")
-            row: List[str] = [name]
-            try:
-                for lat, lon in coords:
-                    row.extend([f"{float(lon):.10f}", f"{float(lat):.10f}"])
-            except Exception:
-                return jsonify(ok=False, error=f"invalid coords in polygon '{name}'")
-            rows.append(row)
-
-        if not filename.lower().endswith(".csv"):
-            filename = f"{filename}.csv"
-        safe_name = Path(filename).name or DEFAULT_FILENAME
-        out_path = OUTDIR / safe_name
-
-        # ★ Excel で文字化けしないように cp932（Shift-JIS）で保存
-        with out_path.open("w", newline="", encoding="cp932") as f:
-            writer = csv.writer(f, lineterminator="\n")
-            writer.writerows(rows)
-        return jsonify(ok=True, path=str(out_path))
-    except Exception as e:
-        return jsonify(ok=False, error=str(e))
-
-
 def _open_browser(url: str) -> None:
     try:
         webbrowser.open(url, new=1)
@@ -682,16 +636,8 @@ def _open_browser(url: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Leafletでポリゴンを編集・保存")
-    parser.add_argument("--outdir", type=str, default=str(Path(__file__).parent), help="保存先フォルダ")
-    parser.add_argument("--filename", type=str, default="polygon_data.csv", help="保存ファイル名")
     parser.add_argument("--port", type=int, default=5010)
     args = parser.parse_args()
-
-    global OUTDIR, DEFAULT_FILENAME
-    OUTDIR = Path(args.outdir).expanduser().resolve()
-    OUTDIR.mkdir(parents=True, exist_ok=True)
-
-    DEFAULT_FILENAME = args.filename.strip() or "polygon_data.csv"
 
     url = f"http://127.0.0.1:{args.port}/"
     threading.Timer(0.5, _open_browser, args=(url,)).start()
