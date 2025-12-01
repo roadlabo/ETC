@@ -70,37 +70,51 @@ INDEX_HTML = """
   var polygons = [];
   var SNAP_PX = 15;
 
+
   function parseCsvText(text) {
-    var lines = text.split(/\r?\n/);
+    // 改行コードで単純に split（LF=10）
+    var lines = text.split(String.fromCharCode(10));  // '\n'
     var result = [];
+
     for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].trim();
+      var line = lines[i];
       if (!line) continue;
+      // CR(13) を念のため削除
+      line = line.replace(String.fromCharCode(13), '');
+      line = line.trim();
+      if (!line) continue;
+
       var cols = line.split(",");
       result.push(cols);
     }
     return result;
   }
 
+  // CSVの行配列 → polygons 配列（{name, coords}）に変換
   function csvRowsToPolygons(rows) {
-    var result = [];
+    var polys = [];
     for (var i = 0; i < rows.length; i++) {
       var cols = rows[i];
-      if (cols.length < 3) continue;
-      var name = cols[0];
+      if (!cols.length) continue;
+
+      var name = (cols[0] || "polygon").trim();
       var coords = [];
+
+      // B列以降は [lon, lat] のペアで並んでいる想定
       for (var j = 1; j + 1 < cols.length; j += 2) {
         var lon = parseFloat(cols[j]);
-        var lat = parseFloat(cols[j+1]);
+        var lat = parseFloat(cols[j + 1]);
         if (isNaN(lat) || isNaN(lon)) continue;
-        coords.push([lat, lon]); // [lat, lon]
+        coords.push([lat, lon]);  // [lat, lon] の順で保持
       }
+
       if (coords.length >= 3) {
-        result.push({ name: name, coords: coords });
+        polys.push({ name: name, coords: coords });
       }
     }
-    return result;
+    return polys;
   }
+
 
   // ==== Leaflet マップ ====
   var map = L.map('map').setView([35.069095, 134.004512], 12); // 津山市役所周辺
@@ -491,10 +505,8 @@ INDEX_HTML = """
   };
 
   function initMode() {
-    var msg = 'ポリゴンデータを読み込みますか？\n[OK]：ポリゴンデータを読み込む\n[キャンセル]：新規作成';
-    var doLoad = window.confirm(msg);
-
-    if (!doLoad) {
+    var msg = 'ポリゴンデータを読み込みますか？\\n[OK]：ポリゴンデータを読み込む\\n[キャンセル]：新規作成';
+    if (!window.confirm(msg)) {
       polygons = [];
       resetCurrent();
       refreshPolygons();
