@@ -45,8 +45,40 @@ INDEX_HTML = """
     .toolbar input { width: 100%; margin: 4px 0; }
     .toolbar button { margin: 2px 0; width: 100%; }
     .hint { font-size: 12px; color:#555; }
-    .list { max-height: 160px; overflow-y: auto; border:1px solid #ccc; padding:4px; margin-top:6px; }
-    .list-item { cursor:pointer; padding:2px 4px; border-radius:4px; }
+    .list {
+      margin-top: 4px;
+      border: 1px solid #ccc;
+      background: #fff;
+      overflow-y: auto;
+      /* 画面縦いっぱい使って20行程度見えるようにする */
+      max-height: calc(100vh - 260px);
+    }
+
+    .list-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px;
+      font-size: 12px;
+      padding: 2px 4px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .list-item span.poly-name {
+      flex: 1 1 auto;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+    }
+
+    .list-item button.list-btn {
+      flex: 0 0 auto;
+      font-size: 11px;
+      padding: 1px 6px;
+      margin-left: 2px;
+    }
+
     .list-item:hover { background:#eef; }
     .polygon-label { font-weight: 700; color: #111; text-shadow: 0 1px 2px #fff; }
   </style>
@@ -72,40 +104,39 @@ INDEX_HTML = """
 
 
   function parseCsvText(text) {
-    // 改行コードで単純に split（LF=10）
-    var lines = text.split(String.fromCharCode(10));  // '\n'
+    // 改行コードで単純に split（LF=コード10）
+    var lines = text.split(String.fromCharCode(10));
     var result = [];
 
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
       if (!line) continue;
-      // CR(13) を念のため削除
+
+      // CR(13) を除去
       line = line.replace(String.fromCharCode(13), '');
       line = line.trim();
       if (!line) continue;
 
-      var cols = line.split(",");
+      var cols = line.split(',');
       result.push(cols);
     }
     return result;
   }
 
-  // CSVの行配列 → polygons 配列（{name, coords}）に変換
   function csvRowsToPolygons(rows) {
     var polys = [];
     for (var i = 0; i < rows.length; i++) {
       var cols = rows[i];
-      if (!cols.length) continue;
+      if (!cols || cols.length < 5) continue; // name + lon,lat,lon,lat 以上
 
-      var name = (cols[0] || "polygon").trim();
+      var name = (cols[0] || 'polygon').trim();
       var coords = [];
 
-      // B列以降は [lon, lat] のペアで並んでいる想定
       for (var j = 1; j + 1 < cols.length; j += 2) {
         var lon = parseFloat(cols[j]);
         var lat = parseFloat(cols[j + 1]);
         if (isNaN(lat) || isNaN(lon)) continue;
-        coords.push([lat, lon]);  // [lat, lon] の順で保持
+        coords.push([lat, lon]);  // Leaflet ポリゴンは [lat, lon]
       }
 
       if (coords.length >= 3) {
@@ -205,11 +236,11 @@ INDEX_HTML = """
         var row = document.createElement('div');
         row.className = 'list-item';
 
-        var label = document.createElement('span');
-        label.textContent = (index + 1) + '. ' + (poly.name || 'polygon');
-        label.style.cursor = 'pointer';
-
-        label.onclick = function() {
+        // 1) ポリゴン名（クリックでズーム）
+        var nameSpan = document.createElement('span');
+        nameSpan.className = 'poly-name';
+        nameSpan.textContent = (index + 1) + '. ' + poly.name;
+        nameSpan.onclick = function() {
           try {
             var tmp = L.polygon(poly.coords);
             map.fitBounds(tmp.getBounds(), { maxZoom: 16 });
@@ -217,34 +248,56 @@ INDEX_HTML = """
             console.error(e);
           }
         };
+        row.appendChild(nameSpan);
 
-        var delBtn = document.createElement('button');
-        delBtn.textContent = '削除';
-        delBtn.style.marginLeft = '8px';
-
-        delBtn.onclick = function(e) {
-          e.stopPropagation();
-
-          var pname = poly.name || 'polygon';
-          var msg = 'ポリゴン「' + pname + '」を削除しますか？';
-          var ok = window.confirm(msg);
-          if (!ok) {
-            return;
-          }
-
-          polygons.splice(index, 1);
-
-          resetCurrent();
-
-          refreshPolygons();
+        // 2) リネームボタン
+        var btnRename = document.createElement('button');
+        btnRename.className = 'list-btn';
+        btnRename.textContent = 'リネーム';
+        btnRename.onclick = function(e) {
+          e.stopPropagation();  // 行クリックのズームをキャンセル
+          renamePolygon(index);
         };
+        row.appendChild(btnRename);
 
-        row.appendChild(label);
-        row.appendChild(delBtn);
+        // 3) 削除ボタン
+        var btnDelete = document.createElement('button');
+        btnDelete.className = 'list-btn';
+        btnDelete.textContent = '削除';
+        btnDelete.onclick = function(e) {
+          e.stopPropagation();  // 行クリックのズームをキャンセル
+          deletePolygon(index);
+        };
+        row.appendChild(btnDelete);
 
         list.appendChild(row);
       })(i);
     }
+  }
+
+  function renamePolygon(index) {
+    if (index < 0 || index >= polygons.length) return;
+    var poly = polygons[index];
+    var newName = window.prompt('新しいポリゴン名を入力してください。', poly.name);
+    if (!newName) return;
+    newName = newName.trim();
+    if (!newName) return;
+
+    poly.name = newName;
+    refreshPolygons();
+    renderList();
+  }
+
+  function deletePolygon(index) {
+    if (index < 0 || index >= polygons.length) return;
+    var poly = polygons[index];
+    if (!window.confirm('ポリゴン「' + poly.name + '」を削除しますか？')) {
+      return;
+    }
+    polygons.splice(index, 1);
+    resetCurrent();
+    refreshPolygons();
+    renderList();
   }
 
   function refreshPolygons() {
@@ -260,24 +313,12 @@ INDEX_HTML = """
         className:'polygon-label'
       });
 
-      (function(name) {
+      (function(idx) {
         layer.on('contextmenu', function(e) {
           L.DomEvent.preventDefault(e);
-          var msg = 'ポリゴン「' + name + '」を削除しますか？';
-          if (!window.confirm(msg)) {
-            return;
-          }
-          var newList = [];
-          for (var j = 0; j < polygons.length; j++) {
-            if (polygons[j].name !== name) {
-              newList.push(polygons[j]);
-            }
-          }
-          polygons = newList;
-          resetCurrent();
-          refreshPolygons();
+          deletePolygon(idx);
         });
-      })(poly.name);
+      })(i);
       layer.addTo(polygonLayer);
 
       for (var k = 0; k < poly.coords.length; k++) {
@@ -451,6 +492,8 @@ INDEX_HTML = """
     resetCurrent();
     refreshPolygons();
 
+    renderList();
+
     document.getElementById('pname').value = '';
   };
 
@@ -506,23 +549,25 @@ INDEX_HTML = """
 
   function initMode() {
     var msg = 'ポリゴンデータを読み込みますか？\\n[OK]：ポリゴンデータを読み込む\\n[キャンセル]：新規作成';
-    if (!window.confirm(msg)) {
+    var doLoad = window.confirm(msg);
+
+    if (!doLoad) {
       polygons = [];
       resetCurrent();
       refreshPolygons();
       return;
     }
 
+    // ここから先が「読込」ルート
     var fileInput = document.getElementById('fileInput');
     if (!fileInput) {
-      alert('fileInput 要素が見つかりません。HTML に <input type="file" id="fileInput"> を追加してください。');
+      console.error('fileInput が見つかりません');
       polygons = [];
       resetCurrent();
       refreshPolygons();
       return;
     }
 
-    fileInput.value = "";
     fileInput.onchange = function(evt) {
       var file = evt.target.files[0];
       if (!file) {
@@ -533,24 +578,33 @@ INDEX_HTML = """
       }
       var reader = new FileReader();
       reader.onload = function(e) {
-        var text = e.target.result;
-        var rows = parseCsvText(text);
-        polygons = csvRowsToPolygons(rows);
+        try {
+          var text = e.target.result;
+          var rows = parseCsvText(text);
+          polygons = csvRowsToPolygons(rows);
+        } catch (err) {
+          console.error('CSV 読み込みエラー', err);
+          polygons = [];
+        }
         resetCurrent();
         refreshPolygons();
+        renderList();
       };
       reader.readAsText(file, 'utf-8');
     };
 
+    // ダイアログでOKを押した後に即ファイル選択ダイアログを出す
     fileInput.click();
   }
 
   // ==== 初期表示 ====
-  refreshPolygons();
-
-  // ページ読み込み時にモード選択ダイアログを出す
+  // ページ読み込み完了後にモード選択ダイアログを出す
   window.addEventListener('load', function() {
-    initMode();
+    try {
+      initMode();
+    } catch (e) {
+      console.error('initMode 実行時にエラー', e);
+    }
   });
 </script>
 </body>
