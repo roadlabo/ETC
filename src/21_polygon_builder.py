@@ -336,7 +336,6 @@ INDEX_HTML = """
         className:'polygon-label'
       });
 
-      // 地図上の右クリック削除機能は使わないのでイベントは付けない
       layer.addTo(polygonLayer);
 
       for (var k = 0; k < poly.coords.length; k++) {
