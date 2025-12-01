@@ -555,7 +555,7 @@ INDEX_HTML = """
         return;
       }
       // 実際に保存されたパスを表示（エクスプローラーで開けるように）
-      alert("保存しました:\n" + data.path);
+      alert("保存しました:\\n" + data.path);
     })
     .catch(function (err) {
       console.error("save error", err);
