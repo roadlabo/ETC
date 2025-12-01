@@ -558,11 +558,11 @@ INDEX_HTML = """
       }
 
       // 上書きOK、またはファイルが存在しない場合 → 保存処理へ進む
-      var csv = "name,lat,lon\n";
+      var csv = "name,lat,lon\\n";
       for (var i = 0; i < polygons.length; i++) {
         var poly = polygons[i];
         for (var j = 0; j < poly.coords.length; j++) {
-          csv += poly.name + "," + poly.coords[j][0] + "," + poly.coords[j][1] + "\n";
+          csv += poly.name + "," + poly.coords[j][0] + "," + poly.coords[j][1] + "\\n";
         }
       }
 
