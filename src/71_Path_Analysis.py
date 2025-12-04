@@ -32,6 +32,10 @@ CROSS_THRESHOLD_M = 50.0   # 単路ポイント通過判定の距離閾値
 # パターン1：方位角（度）で指定（例：北方向=0, 東=90）
 DIRECTION_A_AZIMUTH_DEG = 0.0
 
+# パターン2：最初のトリップから自動推定するかどうか
+AUTO_DETECT_DIRECTION = True
+DIRECTION_SAMPLE_TRIPS = 100  # 自動推定に使う最大トリップ数
+
 # =========================
 
 
@@ -141,6 +145,57 @@ def classify_direction(points_xy: np.ndarray, cross_info: Dict[str, float], v_di
     return "A" if dot >= 0 else "B"
 
 
+def _estimate_direction_azimuth(files: Iterable[Path], lon0: float, lat0: float, max_samples: int = 100) -> float:
+    """最初の max_samples トリップから A方向の方位角（度）を推定する。"""
+    vectors: list[np.ndarray] = []
+
+    for idx, csv_path in enumerate(files):
+        if idx >= max_samples:
+            break
+
+        points_xy = load_single_trip(csv_path, lon0, lat0)
+        if len(points_xy) < 2:
+            continue
+
+        found, cross_info = find_crossing_point(points_xy)
+        if not found or cross_info is None:
+            continue
+
+        cross_idx = int(cross_info["index"])
+        num_points = len(points_xy)
+
+        # 通過付近の進行ベクトルを取得
+        if 0 < cross_idx < num_points - 2:
+            p_prev = points_xy[cross_idx - 1]
+            p_next = points_xy[cross_idx + 2]
+            v = p_next - p_prev
+        else:
+            p1 = points_xy[cross_idx]
+            p2 = points_xy[cross_idx + 1]
+            v = p2 - p1
+
+        norm = float(np.hypot(v[0], v[1]))
+        if norm == 0.0:
+            continue
+
+        v_norm = v / norm
+        vectors.append(v_norm)
+
+    if not vectors:
+        # 推定できなければユーザー指定値をそのまま使う
+        return DIRECTION_A_AZIMUTH_DEG
+
+    mean_vec = np.mean(np.stack(vectors, axis=0), axis=0)
+
+    # v_dir の生成で sin/cos を [x,y]=[sin,cos] としているので、
+    # 逆変換は atan2(x, y) で方位角（北=0度, 東=90度）を求める。
+    azimuth_rad = float(np.arctan2(mean_vec[0], mean_vec[1]))
+    azimuth_deg = float(np.degrees(azimuth_rad))
+    if azimuth_deg < 0.0:
+        azimuth_deg += 360.0
+    return azimuth_deg
+
+
 def _sample_segment(p1: np.ndarray, p2: np.ndarray, step: float) -> Iterable[np.ndarray]:
     vx, vy = p2 - p1
     seg_len = hypot(vx, vy)
@@ -221,17 +276,29 @@ def _read_point_file(point_file: Path) -> Tuple[float, float]:
     return lon0, lat0
 
 
-def _compute_matrix(count_array: np.ndarray) -> np.ndarray:
-    center = count_array[12, 12]
-    if center == 0:
+def _compute_matrix(count_array: np.ndarray, denom: int) -> np.ndarray:
+    """方向別のHITトリップ数 denom で正規化した 25×25 マトリクスを返す。"""
+    if denom <= 0:
         return np.zeros((25, 25), dtype=float)
-    return count_array.astype(float) / float(center) * 100.0
+    return count_array.astype(float) / float(denom) * 100.0
 
 
 def main():
     lon0, lat0 = _read_point_file(POINT_FILE)
 
-    direction_rad = radians(DIRECTION_A_AZIMUTH_DEG)
+    # 解析対象ファイルを列挙
+    files = sorted(INPUT_DIR.rglob("*.csv"))
+    total = len(files)
+
+    # 方向Aの方位角を決定（自動推定 or ユーザー指定）
+    if AUTO_DETECT_DIRECTION and total > 0:
+        est_deg = _estimate_direction_azimuth(files, lon0, lat0, max_samples=DIRECTION_SAMPLE_TRIPS)
+        print(f"[71_PathAnalysis] Estimated direction A azimuth = {est_deg:.1f} deg (user setting {DIRECTION_A_AZIMUTH_DEG:.1f} deg)")
+        direction_deg = est_deg
+    else:
+        direction_deg = DIRECTION_A_AZIMUTH_DEG
+
+    direction_rad = radians(direction_deg)
     v_dir = np.array([sin(direction_rad), cos(direction_rad)])
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -243,8 +310,10 @@ def main():
         "B_out": np.zeros((25, 25), dtype=np.int64),
     }
 
-    files = sorted(INPUT_DIR.rglob("*.csv"))
-    total = len(files)
+    # 方向別HITトリップ数カウンタ
+    total_A_hits = 0
+    total_B_hits = 0
+
     empty_files = 0
     start_time = datetime.now()
 
@@ -266,6 +335,13 @@ def main():
             continue
 
         direction = classify_direction(points_xy, cross_info, v_dir)
+
+        # 方向別 HIT トリップ数カウンタ
+        if direction == "A":
+            total_A_hits += 1
+        else:
+            total_B_hits += 1
+
         accumulate_mesh(points_xy, cross_info, direction, count_arrays)
 
         progress = idx / total * 100 if total else 100.0
@@ -279,11 +355,13 @@ def main():
     print(f"Total files={total}  Valid={total - empty_files}  Empty={empty_files}")
 
     matrices = {
-        "A_in": _compute_matrix(count_arrays["A_in"]),
-        "A_out": _compute_matrix(count_arrays["A_out"]),
-        "B_in": _compute_matrix(count_arrays["B_in"]),
-        "B_out": _compute_matrix(count_arrays["B_out"]),
+        "A_in": _compute_matrix(count_arrays["A_in"], total_A_hits),
+        "A_out": _compute_matrix(count_arrays["A_out"], total_A_hits),
+        "B_in": _compute_matrix(count_arrays["B_in"], total_B_hits),
+        "B_out": _compute_matrix(count_arrays["B_out"], total_B_hits),
     }
+
+    print(f"[71_PathAnalysis] total_A_hits={total_A_hits} total_B_hits={total_B_hits}")
 
     np.savetxt(OUTPUT_DIR / "71_path_matrix_A_in.csv", matrices["A_in"], delimiter=",", fmt="%.6f")
     np.savetxt(OUTPUT_DIR / "71_path_matrix_A_out.csv", matrices["A_out"], delimiter=",", fmt="%.6f")
