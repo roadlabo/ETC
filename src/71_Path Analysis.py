@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Dict, Iterable, Optional, Set, Tuple
 
 import csv
-import matplotlib.pyplot as plt
 import numpy as np
+import folium
+from folium.plugins import HeatMap
 
 # =========================
 # User-editable constants
@@ -48,6 +49,31 @@ def lonlat_to_xy(lon: np.ndarray, lat: np.ndarray, lon0: float, lat0: float) -> 
     x = r_earth * dlon * cos(lat0_rad)
     y = r_earth * dlat
     return x, y
+
+
+def xy_to_lonlat(x: float | np.ndarray, y: float | np.ndarray, lon0: float, lat0: float) -> Tuple[np.ndarray, np.ndarray]:
+    """ローカルXY(m) → 緯度経度の簡易逆変換。lon, lat を返す。"""
+    m_per_deg_lat = 111320.0
+    m_per_deg_lon = 111320.0 * cos(radians(lat0))
+    lat = lat0 + (y / m_per_deg_lat)
+    lon = lon0 + (x / m_per_deg_lon)
+    return lon, lat
+
+
+def generate_heatmap_points(matrix: np.ndarray, lon0: float, lat0: float) -> list[list[float]]:
+    """25×25マトリクスから folium.HeatMap 用の [lat, lon, weight] リストを生成する。"""
+    points: list[list[float]] = []
+    for iy in range(25):
+        for ix in range(25):
+            val = float(matrix[iy, ix])
+            if val <= 0.0:
+                continue
+            # セル中心のローカルXY
+            x = (ix + 0.5) * CELL_SIZE_M - MESH_HALF_SIZE_M
+            y = (iy + 0.5) * CELL_SIZE_M - MESH_HALF_SIZE_M
+            lon, lat = xy_to_lonlat(x, y, lon0, lat0)
+            points.append([float(lat), float(lon), val])
+    return points
 
 
 def load_single_trip(csv_path: Path, lon0: float, lat0: float) -> np.ndarray:
@@ -141,11 +167,28 @@ def _record_samples(points: np.ndarray, visited: Set[Tuple[int, int]]):
 
 def accumulate_mesh(points_xy: np.ndarray, cross_info: Dict[str, float], direction: str, count_arrays: Dict[str, np.ndarray]):
     idx = int(cross_info["index"])
+    cross_x, cross_y = cross_info["point"]
+    cross_point = np.array([[cross_x, cross_y]], dtype=float)
+
     visited_in: Set[Tuple[int, int]] = set()
     visited_out: Set[Tuple[int, int]] = set()
 
-    in_points = points_xy[: idx + 1]
-    out_points = points_xy[idx + 1 :]
+    # --- 進入側: 0 ～ idx まで + 仮想通過点 ---
+    if idx >= 0:
+        in_head = points_xy[: idx + 1]
+        if len(in_head) == 0:
+            in_points = cross_point.copy()
+        else:
+            in_points = np.vstack([in_head, cross_point])
+    else:
+        in_points = np.empty((0, 2), dtype=float)
+
+    # --- 退出側: 仮想通過点 + idx+1 以降 ---
+    out_tail = points_xy[idx + 1 :]
+    if len(out_tail) == 0:
+        out_points = cross_point.copy()
+    else:
+        out_points = np.vstack([cross_point, out_tail])
 
     if len(in_points) >= 2:
         _record_samples(in_points, visited_in)
@@ -247,33 +290,56 @@ def main():
     np.savetxt(OUTPUT_DIR / "71_path_matrix_B_in.csv", matrices["B_in"], delimiter=",", fmt="%.6f")
     np.savetxt(OUTPUT_DIR / "71_path_matrix_B_out.csv", matrices["B_out"], delimiter=",", fmt="%.6f")
 
-    fig_a, axes_a = plt.subplots(1, 2, figsize=(10, 4))
-    im_a1 = axes_a[0].imshow(
-        matrices["A_in"], origin="lower", extent=[-MESH_HALF_SIZE_M, MESH_HALF_SIZE_M, -MESH_HALF_SIZE_M, MESH_HALF_SIZE_M]
-    )
-    axes_a[0].set_title("Direction A - In")
-    fig_a.colorbar(im_a1, ax=axes_a[0])
-    im_a2 = axes_a[1].imshow(
-        matrices["A_out"], origin="lower", extent=[-MESH_HALF_SIZE_M, MESH_HALF_SIZE_M, -MESH_HALF_SIZE_M, MESH_HALF_SIZE_M]
-    )
-    axes_a[1].set_title("Direction A - Out")
-    fig_a.colorbar(im_a2, ax=axes_a[1])
-    fig_a.tight_layout()
-    fig_a.savefig(OUTPUT_DIR / "71_path_heatmap_direction_A.png")
+    # ---- folium HeatMap 用データ生成 ----
+    A_in_points = generate_heatmap_points(matrices["A_in"], lon0, lat0)
+    A_out_points = generate_heatmap_points(matrices["A_out"], lon0, lat0)
+    B_in_points = generate_heatmap_points(matrices["B_in"], lon0, lat0)
+    B_out_points = generate_heatmap_points(matrices["B_out"], lon0, lat0)
 
-    fig_b, axes_b = plt.subplots(1, 2, figsize=(10, 4))
-    im_b1 = axes_b[0].imshow(
-        matrices["B_in"], origin="lower", extent=[-MESH_HALF_SIZE_M, MESH_HALF_SIZE_M, -MESH_HALF_SIZE_M, MESH_HALF_SIZE_M]
-    )
-    axes_b[0].set_title("Direction B - In")
-    fig_b.colorbar(im_b1, ax=axes_b[0])
-    im_b2 = axes_b[1].imshow(
-        matrices["B_out"], origin="lower", extent=[-MESH_HALF_SIZE_M, MESH_HALF_SIZE_M, -MESH_HALF_SIZE_M, MESH_HALF_SIZE_M]
-    )
-    axes_b[1].set_title("Direction B - Out")
-    fig_b.colorbar(im_b2, ax=axes_b[1])
-    fig_b.tight_layout()
-    fig_b.savefig(OUTPUT_DIR / "71_path_heatmap_direction_B.png")
+    # ---- 個別ヒートマップ（A/B × in/out） ----
+    def _save_folium_map(points: list[list[float]], filename: str, title: str) -> None:
+        m = folium.Map(location=[lat0, lon0], zoom_start=16, tiles="OpenStreetMap")
+        if points:
+            HeatMap(points, radius=25, blur=30, max_zoom=18).add_to(m)
+        folium.map.LayerControl().add_to(m)
+        m.get_root().html.add_child(folium.Element(f"<h3>{title}</h3>"))
+        m.save(str(OUTPUT_DIR / filename))
+
+    _save_folium_map(A_in_points,  "71_heatmap_A_in.html",  "Direction A - In")
+    _save_folium_map(A_out_points, "71_heatmap_A_out.html", "Direction A - Out")
+    _save_folium_map(B_in_points,  "71_heatmap_B_in.html",  "Direction B - In")
+    _save_folium_map(B_out_points, "71_heatmap_B_out.html", "Direction B - Out")
+
+    # ---- A/B を左右に並べた HTML（in / out それぞれ） ----
+    in_html = f"""
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Direction A & B - In</title></head>
+<body>
+<h3>Direction A &amp; B - In</h3>
+<div style="display:flex; flex-direction:row; width:100%; height:600px;">
+  <iframe src="71_heatmap_A_in.html" style="flex:1; border:none;"></iframe>
+  <iframe src="71_heatmap_B_in.html" style="flex:1; border:none;"></iframe>
+</div>
+</body>
+</html>
+"""
+    (OUTPUT_DIR / "71_heatmap_in_AB.html").write_text(in_html, encoding="utf-8")
+
+    out_html = f"""
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Direction A & B - Out</title></head>
+<body>
+<h3>Direction A &amp; B - Out</h3>
+<div style="display:flex; flex-direction:row; width:100%; height:600px;">
+  <iframe src="71_heatmap_A_out.html" style="flex:1; border:none;"></iframe>
+  <iframe src="71_heatmap_B_out.html" style="flex:1; border:none;"></iframe>
+</div>
+</body>
+</html>
+"""
+    (OUTPUT_DIR / "71_heatmap_out_AB.html").write_text(out_html, encoding="utf-8")
 
 
 if __name__ == "__main__":
