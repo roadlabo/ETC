@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import math
 from math import cos, hypot, radians, sin
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Set, Tuple
@@ -10,6 +11,7 @@ from typing import Dict, Iterable, Optional, Set, Tuple
 import csv
 import numpy as np
 import folium
+from folium.plugins import PolyLineTextPath
 
 # =========================
 # User-editable constants
@@ -72,27 +74,66 @@ def value_to_color(value: int, vmax: int) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def add_direction_arrow(m: folium.Map, lon0: float, lat0: float,
-                        azimuth_deg: float, color: str, label: str,
-                        length_m: float = 200.0) -> None:
+def add_direction_arrow(
+    m: folium.Map,
+    lon0: float,
+    lat0: float,
+    azimuth_deg: float,
+    color: str,
+    label: str,
+    length_m: float = 40.0,  # ★ 矢印は短め（約40m）
+) -> None:
     """
-    中心から azimuth_deg 方向に length_m 伸ばした線分を描く。
-    label は終点近くに表示する。
+    中心から azimuth_deg 方向に length_m 伸ばした矢印付きの線を描き、
+    終点付近に白丸背景付きのラベルを表示する。
     """
-    rad = radians(azimuth_deg)
-    dx = length_m * np.sin(rad)
-    dy = length_m * np.cos(rad)
+
+    # 終点座標を計算
+    rad = math.radians(azimuth_deg)
+    dx = length_m * math.sin(rad)
+    dy = length_m * math.cos(rad)
     lon1, lat1 = xy_to_lonlat(dx, dy, lon0, lat0)
 
-    folium.PolyLine(
+    # 基本の線（ベクトル本体）
+    line = folium.PolyLine(
         locations=[[lat0, lon0], [lat1, lon1]],
         color=color,
         weight=5,
     ).add_to(m)
 
+    # 線上に矢じり（▶）を1つだけ描く
+    PolyLineTextPath(
+        line,
+        "▶",                 # 矢じりの文字
+        repeat=False,        # 繰り返さない
+        offset=12,           # 矢印の位置（線の終点寄りに調整）
+        attributes={
+            "fill": color,
+            "stroke": color,
+            "font-weight": "bold",
+            "font-size": "18px",
+        },
+    ).add_to(m)
+
+    # ラベル（A / B）の白丸アイコン
+    label_html = (
+        "<div style='"
+        "display:flex;align-items:center;justify-content:center;"
+        "width:40px;height:40px;"          # ★ 白丸のサイズ
+        "border-radius:50%;"
+        f"border:3px solid {color};"
+        "background-color:white;"
+        "font-weight:bold;"
+        f"color:{color};"
+        "font-size:2.5rem;"                # ★ 文字を大きく
+        "text-shadow:0 0 4px white;"
+        "'>"
+        f"{label}</div>"
+    )
+
     folium.Marker(
         location=[lat1, lon1],
-        icon=folium.DivIcon(html=f"<div style='font-weight:bold;color:{color};'>{label}</div>")
+        icon=folium.DivIcon(html=label_html),
     ).add_to(m)
 
 
@@ -122,8 +163,6 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
             lon_max, lat_max = xy_to_lonlat(x_max, y_max, lon0, lat0)
 
             color = value_to_color(val, vmax)
-            if color.endswith("00"):
-                continue
 
             folium.Rectangle(
                 bounds=[[lat_min, lon_min], [lat_max, lon_max]],
@@ -293,14 +332,18 @@ def _read_point_file(path: Path) -> tuple[float, float, float, float]:
 
 def _compute_matrix(count_array: np.ndarray, denom: int) -> np.ndarray:
     """
-    方向別ヒット数 denom で正規化した GRID_SIZE×GRID_SIZE マトリクスを返す。
-    値は round(100 * count / denom) の整数 [%]。
+    方向別ヒット数 denom で正規化した整数％マトリクスを返す。
+    denom==0 の場合は、count_array の合計を分母に使う。
+    count_array に値が全く無ければゼロ行列。
     """
     if denom <= 0:
-        return np.zeros((GRID_SIZE, GRID_SIZE), dtype=int)
+        denom = int(count_array.sum())
+
+    if denom <= 0:
+        return np.zeros_like(count_array, dtype=int)
+
     ratio = count_array.astype(float) / float(denom)
-    matrix = np.rint(ratio * 100.0).astype(int)
-    return matrix
+    return np.rint(ratio * 100.0).astype(int)
 
 
 def classify_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
@@ -421,6 +464,11 @@ def main():
         "B_in": _compute_matrix(count_arrays["B_in"], total_B_hits),
         "B_out": _compute_matrix(count_arrays["B_out"], total_B_hits),
     }
+
+    for key, arr in matrices.items():
+        nz = int((arr > 0).sum())
+        vmax = int(arr.max())
+        print(f"[71_PathAnalysis] {key}: nonzero_cells={nz}, max={vmax}%")
 
     print(f"[71_PathAnalysis] total_A_hits={total_A_hits} total_B_hits={total_B_hits}")
 
