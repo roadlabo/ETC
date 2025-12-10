@@ -260,6 +260,17 @@ HEADER = [
 ]
 
 
+# 様式1-2（ヘッダ無し）の列インデックス（0 始まり）
+COL_DATE = 2          # C列: 運行日 YYYYMMDD
+COL_RUN_ID = 3        # D列: 運行ID
+COL_VEHICLE_TYPE = 4  # E列: 自動車の種別
+COL_VEHICLE_USE = 5   # F列: 自動車の用途
+COL_GPS_TIME = 6      # G列: GPS時刻 YYYYMMDDhhmmss
+COL_TRIP_NO = 8       # I列: トリップ番号
+COL_LON = 14          # O列: 経度
+COL_LAT = 15          # P列: 緯度
+
+
 def main() -> None:
     WINDOW = 5  # 5点前後
 
@@ -280,27 +291,57 @@ def main() -> None:
 
             # 様式1-2 CSV を全部処理
             for trip_csv in sorted(trip_folder.glob("*.csv")):
-                df = pd.read_csv(trip_csv, dtype=str, encoding="cp932")
+                # 第2スクリーニング様式1-2（ヘッダ無し）を読み込む
+                df = pd.read_csv(trip_csv, dtype=str, encoding="cp932", header=None)
 
-                # TRIP_ID ごとにグループ化
-                for trip_id, g in df.groupby("TRIP_ID"):
-                    # 運行日・曜日の算出
-                    trip_date = str(g.iloc[0]["TRIP_DATE"])
-                    weekday = weekday_abbr(trip_date[:8])
+                if df.empty:
+                    continue
+
+                # I列（COL_TRIP_NO）にトリップ番号が入っている前提で groupby
+                if COL_TRIP_NO < df.shape[1]:
+                    trip_groups = df.groupby(df[COL_TRIP_NO])
+                else:
+                    # 念のため：トリップ列が無ければファイル全体を1トリップとして扱う
+                    trip_groups = [("ALL", df)]
+
+                for trip_key, g in trip_groups:
+                    # --- 運行日・曜日の算出 ---
+                    trip_date = ""
+                    if COL_DATE < g.shape[1]:
+                        trip_date = str(g.iloc[0, COL_DATE])  # C列: YYYYMMDD
+                    weekday = weekday_abbr(trip_date[:8]) if trip_date else ""
 
                     # 曜日フィルタ：TARGET_WEEKDAYS が空でなければ、その中に含まれるものだけ処理
                     if TARGET_WEEKDAYS and weekday not in TARGET_WEEKDAYS:
                         continue
 
-                    # 座標列とGPS時刻列を構成
-                    points = []
-                    gps_times = []
+                    # 運行ID・トリップID・車種・用途
+                    run_id = str(g.iloc[0, COL_RUN_ID]) if COL_RUN_ID < g.shape[1] else ""
+                    trip_id = str(trip_key)
+                    vehicle_type = str(g.iloc[0, COL_VEHICLE_TYPE]) if COL_VEHICLE_TYPE < g.shape[1] else ""
+                    vehicle_use = str(g.iloc[0, COL_VEHICLE_USE]) if COL_VEHICLE_USE < g.shape[1] else ""
+
+                    # --- 座標列とGPS時刻列を構成 ---
+                    points: list[tuple[float, float]] = []
+                    gps_times: list[str] = []
                     for _, row in g.iterrows():
-                        # 様式1-2 の O列=経度, P列=緯度, G列=GPS時刻 を想定
-                        lat = float(row["P"])
-                        lon = float(row["O"])
+                        try:
+                            lon_str = row[COL_LON]
+                            lat_str = row[COL_LAT]
+                        except Exception:
+                            continue
+
+                        if lon_str == "" or lat_str == "":
+                            continue
+
+                        try:
+                            lon = float(lon_str)
+                            lat = float(lat_str)
+                        except Exception:
+                            continue
+
                         points.append((lat, lon))
-                        gps_times.append(str(row["G"]))  # YYYYMMDDhhmmss を想定
+                        gps_times.append(str(row[COL_GPS_TIME]) if COL_GPS_TIME < len(row) else "")
 
                     if not points:
                         continue
@@ -337,8 +378,8 @@ def main() -> None:
                     # ⑤ 道なり距離・所要時間・速度
                     dist_m = accum_distance(points, idx_s, idx_e)
 
-                    t_start = parse_dt14(gps_times[idx_s])
-                    t_end = parse_dt14(gps_times[idx_e])
+                    t_start = parse_dt14(gps_times[idx_s]) if gps_times[idx_s] else None
+                    t_end = parse_dt14(gps_times[idx_e]) if gps_times[idx_e] else None
                     elapsed = (t_end - t_start).total_seconds() if (t_start and t_end) else None
                     speed_kmh = dist_m / elapsed * 3.6 if (elapsed and elapsed > 0) else None
 
@@ -347,33 +388,31 @@ def main() -> None:
                         crossroad_path.name,         # 交差点ファイル名
                         cross.cross_id,              # 交差点ID
                         trip_csv.name,               # 抽出CSVファイル名
-                        trip_date,                   # 運行日
+                        trip_date,                   # 運行日(C列)
                         weekday,                     # 曜日(MON〜SUN)
-                        trip_id,                     # 運行ID
-                        g.iloc[0]["TRIP_NO"],        # トリップID
-                        g.iloc[0]["VEHICLE_TYPE"],  # 自動車の種別
-                        g.iloc[0]["VEHICLE_USE"],   # 用途
-                        in_branch,                   # 流入枝番
-                        out_branch,                  # 流出枝番
+                        run_id,                      # 運行ID(D列)
+                        trip_id,                     # トリップID(I列)
+                        vehicle_type,                # 自動車の種別(E列)
+                        vehicle_use,                 # 用途(F列)
+                        str(in_branch),              # 流入枝番
+                        str(out_branch),             # 流出枝番
                         f"{dist_m:.3f}",
                         f"{elapsed:.3f}" if elapsed else "",
                         f"{speed_kmh:.3f}" if speed_kmh else "",
                     ]
 
-                    # ⑦ 前後5点の経度・緯度・GPS時刻を右側に追加
-                    #    範囲外は空欄
-                    def safe(idx):
+                    # ⑦ 前後5点の経度・緯度・GPS時刻を右側に追加（範囲外は空欄）
+                    def safe(idx: int) -> tuple[str, str, str]:
                         if 0 <= idx < len(points):
                             lat, lon = points[idx]
-                            t = gps_times[idx]
+                            t = gps_times[idx] if idx < len(gps_times) else ""
                             # 出力順は「経度, 緯度, GPS時刻」
-                            return lon, lat, t
-                        else:
-                            return "", "", ""
+                            return f"{lon}", f"{lat}", t
+                        return "", "", ""
 
-                    for offset in range(-5, 6):  # -5, -4, ..., 0, ..., +5
-                        lon, lat, t = safe(idx_center + offset)
-                        row_out.extend([lon, lat, t])
+                    for offset in range(-5, 6):  # -5 ～ +5
+                        lon_s, lat_s, t_s = safe(idx_center + offset)
+                        row_out.extend([lon_s, lat_s, t_s])
 
                     writer.writerow(row_out)
 
