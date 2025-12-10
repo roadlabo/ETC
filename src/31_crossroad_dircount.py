@@ -52,6 +52,12 @@ UP_DOWN_IDX = 35
 
 EARTH_RADIUS_M = 6_371_000.0
 
+# 交差点通過判定用のしきい値
+# 16_trip_extractor_point.py の THRESH_M / MIN_HITS と同じ値に揃えること
+CROSSROAD_HIT_DIST_M = 20.0        # 点が交差点中心からこの距離以内ならヒット
+CROSSROAD_SEG_HIT_DIST_M = 20.0    # 線分距離がこの距離以内ならヒット
+CROSSROAD_MIN_HITS = 1             # 通過とみなす最小ヒット数（16側と同じ値にする）
+
 
 # ---------------------------------------------------------------------------
 # Data containers
@@ -328,6 +334,76 @@ def _accum_distance(points: List[Tuple[float, float]], start_idx: int, end_idx: 
     return dist
 
 
+def _trip_passes_crossroad(
+    coords: List[Tuple[float, float]],
+    center_lat: float,
+    center_lon: float,
+    thresh_point_m: float = CROSSROAD_HIT_DIST_M,
+    thresh_seg_m: float = CROSSROAD_SEG_HIT_DIST_M,
+    min_hits: int = CROSSROAD_MIN_HITS,
+) -> bool:
+    """
+    16_trip_extractor_point.py と同じ思想で、
+    「このトリップが交差点を通過したかどうか」だけを判定する関数。
+
+    判定基準:
+    - どこか1点でも中心から thresh_point_m 以内ならヒット
+    - 連続する2点の線分が中心から thresh_seg_m 以内ならヒット
+    - ヒット数(point + segment) が min_hits 以上であれば通過とみなす
+    """
+    center = (center_lat, center_lon)
+    valid_indices = [i for i, c in enumerate(coords) if not (math.isnan(c[0]) or math.isnan(c[1]))]
+    if not valid_indices:
+        return False
+
+    hits = 0
+
+    for k, idx in enumerate(valid_indices):
+        p = coords[idx]
+        dist_p = _haversine_m(p, center)
+        if dist_p <= thresh_point_m:
+            hits += 1
+
+        if k < len(valid_indices) - 1:
+            idx_next = valid_indices[k + 1]
+            p_next = coords[idx_next]
+            seg_dist = _point_to_segment_distance_m(center, p, p_next)
+            if seg_dist <= thresh_seg_m:
+                hits += 1
+
+        if hits >= min_hits:
+            return True
+
+    return False
+
+
+def _closest_center_index(
+    coords: List[Tuple[float, float]],
+    center_lat: float,
+    center_lon: float,
+) -> Optional[int]:
+    """
+    通過していることが分かったトリップについて、
+    交差点中心に最も近い有効なポイントの index を返す。
+
+    ・座標が NaN のポイントは無視
+    ・1点も有効なポイントがなければ None
+    """
+    center = (center_lat, center_lon)
+    best_idx: Optional[int] = None
+    best_dist = float("inf")
+
+    for idx, p in enumerate(coords):
+        if math.isnan(p[0]) or math.isnan(p[1]):
+            continue
+        dist = _haversine_m(p, center)
+        if dist < best_dist:
+            best_dist = dist
+            best_idx = idx
+
+    return best_idx
+
+
 # ---------------------------------------------------------------------------
 # Processing per trip
 # ---------------------------------------------------------------------------
@@ -341,106 +417,111 @@ def _process_trip(
     route_name: str,
     debounce_sec: int,
 ) -> List[List[str]]:
+    """
+    1トリップについて交差点通過を判定し、通過している場合のみ
+    ・中心に最も近いポイントを中心点とみなして
+    ・branch_in / branch_out / 時刻 / 距離 / 速度 を1レコードとして返す。
+
+    通過判定のロジックは 16_trip_extractor_point.py と同じ思想
+    （点距離 + 線分距離 + MIN_HITS）に揃える。
+    """
+
     coords: List[Tuple[float, float]] = []
     for row in rows:
         c = _valid_coord(row)
         coords.append(c if c else (math.nan, math.nan))
 
+    # 有効な座標が1点もなければ通過判定不能
     valid_indices = [i for i, c in enumerate(coords) if not (math.isnan(c[0]) or math.isnan(c[1]))]
     if not valid_indices:
         return []
 
-    center_tuple = (crossroad.center_lat, crossroad.center_lon)
-    hits: List[List[str]] = []
-    last_center_time: Optional[datetime] = None
+    center_lat = crossroad.center_lat
+    center_lon = crossroad.center_lon
 
-    cursor = 0
-    while cursor < len(valid_indices):
-        idx = valid_indices[cursor]
-        pt = coords[idx]
-        dist_center = _haversine_m(pt, center_tuple)
-        idx_center: Optional[int] = None
+    # ① 通過判定：16_trip_extractor_point.py と同じ思想で YES/NO を決める
+    passed = _trip_passes_crossroad(
+        coords,
+        center_lat=center_lat,
+        center_lon=center_lon,
+        thresh_point_m=CROSSROAD_HIT_DIST_M,
+        thresh_seg_m=CROSSROAD_SEG_HIT_DIST_M,
+        min_hits=CROSSROAD_MIN_HITS,
+    )
 
-        if dist_center <= 20.0:
-            idx_center = idx
-        elif cursor < len(valid_indices) - 1:
-            idx_next = valid_indices[cursor + 1]
-            pt_next = coords[idx_next]
-            if dist_center <= 200.0 and _haversine_m(pt_next, center_tuple) <= 200.0:
-                seg_dist = _point_to_segment_distance_m(center_tuple, pt, pt_next)
-                if seg_dist <= 20.0:
-                    idx_center = idx if _haversine_m(pt, center_tuple) <= _haversine_m(pt_next, center_tuple) else idx_next
+    # 通過していないトリップはここで「該当なし」として終了
+    if not passed:
+        return []
 
-        if idx_center is None:
-            cursor += 1
-            continue
+    # ② 通過しているトリップについては、中心点に最も近いポイントを center とみなす
+    idx_center = _closest_center_index(coords, center_lat=center_lat, center_lon=center_lon)
+    if idx_center is None:
+        # 理論上ほぼ起こらないが、安全のため
+        return []
 
-        idx_before = max(0, idx_center - 2)
-        idx_after = min(len(rows) - 1, idx_center + 2)
-        if idx_center - idx_before < 2 and idx_center > 0:
-            idx_before = idx_center - 1
-        if idx_after - idx_center < 2 and idx_center + 1 < len(rows):
-            idx_after = idx_center + 1
+    # 前後のポイント index を決定（最大 ±2点を確保するが、端では縮む）
+    idx_before = max(0, idx_center - 2)
+    idx_after = min(len(rows) - 1, idx_center + 2)
+    if idx_center - idx_before < 2 and idx_center > 0:
+        idx_before = idx_center - 1
+    if idx_after - idx_center < 2 and idx_center + 1 < len(rows):
+        idx_after = idx_center + 1
 
-        p_before = coords[idx_before]
-        p_center = coords[idx_center]
-        p_after = coords[idx_after]
-        if any(math.isnan(v) for v in p_before + p_center + p_after):
-            cursor += 1
-            continue
+    p_before = coords[idx_before]
+    p_center = coords[idx_center]
+    p_after = coords[idx_after]
 
-        dt_before = _parse_dt14(rows[idx_before].get(GPS_TIME_IDX))
-        dt_center = _parse_dt14(rows[idx_center].get(GPS_TIME_IDX))
-        dt_after = _parse_dt14(rows[idx_after].get(GPS_TIME_IDX))
+    # どこか1つでも座標欠損があれば、このトリップは通過判定はYESだが中心点が取れないので無視
+    if any(math.isnan(v) for v in p_before + p_center + p_after):
+        return []
 
-        if dt_center and last_center_time and (dt_center - last_center_time).total_seconds() < debounce_sec:
-            cursor += 1
-            continue
+    # 時刻を取得
+    dt_before = _parse_dt14(rows[idx_before].get(GPS_TIME_IDX))
+    dt_center = _parse_dt14(rows[idx_center].get(GPS_TIME_IDX))
+    dt_after = _parse_dt14(rows[idx_after].get(GPS_TIME_IDX))
 
-        dir_in = _bearing_deg(p_before, p_center)
-        dir_out = _bearing_deg(p_center, p_after)
-        branch_in = _closest_branch(dir_in, crossroad.branches)
-        branch_out = _closest_branch(dir_out, crossroad.branches)
+    # 方位角から branch_in / branch_out を決定（角度の許容誤差ロジックは既存のまま）
+    dir_in = _bearing_deg(p_before, p_center)
+    dir_out = _bearing_deg(p_center, p_after)
+    branch_in = _closest_branch(dir_in, crossroad.branches)
+    branch_out = _closest_branch(dir_out, crossroad.branches)
 
-        dist_m = _accum_distance(coords, idx_before, idx_after)
+    # before〜after 間の距離と速度を計算
+    dist_m = _accum_distance(coords, idx_before, idx_after)
 
-        delta_t_sec = None
-        if dt_before and dt_after:
-            delta_t_sec = (dt_after - dt_before).total_seconds()
-        speed_kmh = None
-        if delta_t_sec and delta_t_sec > 0:
-            speed_kmh = dist_m / delta_t_sec * 3.6
+    delta_t_sec = None
+    if dt_before and dt_after:
+        delta_t_sec = (dt_after - dt_before).total_seconds()
 
-        trip_date, trip_id, trip_no = trip_key
-        weekday = _weekday_abbr(trip_date[:8] if len(trip_date) >= 8 else "") or ""
-        vehicle_type = rows[idx_center].get(VEHICLE_TYPE_IDX) or ""
-        vehicle_use = rows[idx_center].get(VEHICLE_USE_IDX) or ""
+    speed_kmh = None
+    if delta_t_sec and delta_t_sec > 0:
+        speed_kmh = dist_m / delta_t_sec * 3.6
 
-        hits.append(
-            [
-                screening_label,
-                route_name,
-                weekday,
-                trip_id,
-                trip_date,
-                trip_no,
-                vehicle_type,
-                vehicle_use,
-                str(branch_in),
-                str(branch_out),
-                rows[idx_before].get(GPS_TIME_IDX) or "",
-                rows[idx_center].get(GPS_TIME_IDX) or "",
-                rows[idx_after].get(GPS_TIME_IDX) or "",
-                f"{dist_m:.3f}",
-                f"{speed_kmh:.3f}" if speed_kmh is not None else "",
-            ]
-        )
+    # その他の情報をセット
+    trip_date, trip_id, trip_no = trip_key
+    weekday = _weekday_abbr(trip_date[:8] if len(trip_date) >= 8 else "") or ""
+    vehicle_type = rows[idx_center].get(VEHICLE_TYPE_IDX) or ""
+    vehicle_use = rows[idx_center].get(VEHICLE_USE_IDX) or ""
 
-        if dt_center:
-            last_center_time = dt_center
-        cursor += 3  # skip a few samples to avoid double counting nearby points
+    hit_row = [
+        screening_label,
+        route_name,
+        weekday,
+        trip_id,
+        trip_date,
+        trip_no,
+        vehicle_type,
+        vehicle_use,
+        str(branch_in),
+        str(branch_out),
+        rows[idx_before].get(GPS_TIME_IDX) or "",
+        rows[idx_center].get(GPS_TIME_IDX) or "",
+        rows[idx_after].get(GPS_TIME_IDX) or "",
+        f"{dist_m:.3f}",
+        f"{speed_kmh:.3f}" if speed_kmh is not None else "",
+    ]
 
-    return hits
+    return [hit_row]
 
 
 # ---------------------------------------------------------------------------
@@ -600,7 +681,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w", encoding="utf-8-sig", newline="") as f:
+    with args.output.open("w", encoding="cp932", errors="ignore", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(header)
         writer.writerows(output_rows)
