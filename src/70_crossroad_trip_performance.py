@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List
@@ -274,7 +275,24 @@ COL_LAT = 15          # P列: 緯度
 def main() -> None:
     WINDOW = 5  # 5点前後
 
-    for cfg in CONFIG:
+    # -------------------- 全体開始 --------------------
+    start_all = time.time()
+    start_all_str = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    print("=== 交差点性能解析: 70_crossroad_trip_performance ===")
+    print(f"開始時間: {start_all_str}")
+    print(f"出力フォルダ: {OUTPUT_BASE_DIR}")
+    print(f"設定セット数: {len(CONFIG)}")
+    if TARGET_WEEKDAYS:
+        print(f"対象曜日: {', '.join(TARGET_WEEKDAYS)}")
+    else:
+        print("対象曜日: 全曜日")
+    print("--------------------------------------------------")
+
+    # ==============================================================
+    #   各 CONFIG セット（交差点ごと）の処理
+    # ==============================================================
+    for cfg_idx, cfg in enumerate(CONFIG, start=1):
         trip_folder = Path(cfg["trip_folder"])
         crossroad_path = Path(cfg["crossroad_file"])
 
@@ -282,139 +300,177 @@ def main() -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         out_csv = out_dir / f"{crossroad_path.stem}_performance.csv"
 
+        trip_files = sorted(trip_folder.glob("*.csv"))
+        total_files = len(trip_files)
+
+        if total_files == 0:
+            print(f"[{cfg_idx}/{len(CONFIG)}] 交差点: {crossroad_path.name}  入力CSVなし（スキップ）")
+            continue
+
+        # -------------------- セット開始 --------------------
+        cfg_start = time.time()
+        cfg_start_str = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        # カウンタ類
+        total_trips = 0
+        hit_trips = 0
+        nopass_trips = 0
+
+        print(f"\n[{cfg_idx}/{len(CONFIG)}] 交差点: {crossroad_path.name}")
+        print(f"  入力フォルダ: {trip_folder}")
+        print(f"  対象CSVファイル数: {total_files}")
+        print(f"  セット開始時間: {cfg_start_str}")
+        if TARGET_WEEKDAYS:
+            print(f"  曜日フィルタ: {', '.join(TARGET_WEEKDAYS)}")
+        else:
+            print("  曜日フィルタ: なし（全曜日）")
+
         with out_csv.open("w", encoding="cp932", errors="ignore", newline="") as fw:
             writer = csv.writer(fw)
             writer.writerow(HEADER)
 
-            # 交差点CSVの読み込み（dir_deg を持つ枝一覧など）
             cross = load_crossroad_file(crossroad_path)
 
-            # 様式1-2 CSV を全部処理
-            for trip_csv in sorted(trip_folder.glob("*.csv")):
-                # 第2スクリーニング様式1-2（ヘッダ無し）を読み込む
+            # ====================== CSVループ ======================
+            for file_idx, trip_csv in enumerate(trip_files, start=1):
                 df = pd.read_csv(trip_csv, dtype=str, encoding="cp932", header=None)
 
                 if df.empty:
                     continue
 
-                # I列（COL_TRIP_NO）にトリップ番号が入っている前提で groupby
                 if COL_TRIP_NO < df.shape[1]:
                     trip_groups = df.groupby(df[COL_TRIP_NO])
                 else:
-                    # 念のため：トリップ列が無ければファイル全体を1トリップとして扱う
                     trip_groups = [("ALL", df)]
 
+                # ------------------- トリップごとの処理 -------------------
                 for trip_key, g in trip_groups:
-                    # --- 運行日・曜日の算出 ---
-                    trip_date = ""
-                    if COL_DATE < g.shape[1]:
-                        trip_date = str(g.iloc[0, COL_DATE])  # C列: YYYYMMDD
+                    trip_date = str(g.iloc[0, COL_DATE])
                     weekday = weekday_abbr(trip_date[:8]) if trip_date else ""
 
-                    # 曜日フィルタ：TARGET_WEEKDAYS が空でなければ、その中に含まれるものだけ処理
                     if TARGET_WEEKDAYS and weekday not in TARGET_WEEKDAYS:
                         continue
 
-                    # 運行ID・トリップID・車種・用途
-                    run_id = str(g.iloc[0, COL_RUN_ID]) if COL_RUN_ID < g.shape[1] else ""
-                    trip_id = str(trip_key)
-                    vehicle_type = str(g.iloc[0, COL_VEHICLE_TYPE]) if COL_VEHICLE_TYPE < g.shape[1] else ""
-                    vehicle_use = str(g.iloc[0, COL_VEHICLE_USE]) if COL_VEHICLE_USE < g.shape[1] else ""
+                    total_trips += 1
 
-                    # --- 座標列とGPS時刻列を構成 ---
-                    points: list[tuple[float, float]] = []
-                    gps_times: list[str] = []
+                    run_id = str(g.iloc[0, COL_RUN_ID])
+                    trip_id = str(trip_key)
+                    vehicle_type = str(g.iloc[0, COL_VEHICLE_TYPE])
+                    vehicle_use = str(g.iloc[0, COL_VEHICLE_USE])
+
+                    # 座標と時刻
+                    points = []
+                    gps_times = []
                     for _, row in g.iterrows():
                         try:
-                            lon_str = row[COL_LON]
-                            lat_str = row[COL_LAT]
-                        except Exception:
+                            lon = float(row[COL_LON])
+                            lat = float(row[COL_LAT])
+                        except:
                             continue
-
-                        if lon_str == "" or lat_str == "":
-                            continue
-
-                        try:
-                            lon = float(lon_str)
-                            lat = float(lat_str)
-                        except Exception:
-                            continue
-
                         points.append((lat, lon))
-                        gps_times.append(str(row[COL_GPS_TIME]) if COL_GPS_TIME < len(row) else "")
+                        gps_times.append(str(row[COL_GPS_TIME]))
 
                     if not points:
+                        nopass_trips += 1
                         continue
 
-                    # ① 通過判定（16/31 と同じ）
                     if not trip_passes_crossroad(points, cross.center_lat, cross.center_lon):
+                        nopass_trips += 1
                         continue
 
-                    # ② 中心点 index
+                    hit_trips += 1
+
                     idx_center = closest_center_index(points, cross.center_lat, cross.center_lon)
                     if idx_center is None:
+                        nopass_trips += 1
                         continue
 
-                    # ③ 前後5点の index 範囲
                     idx_s = max(0, idx_center - WINDOW)
-                    idx_e = min(len(points) - 1, idx_center + WINDOW)
+                    idx_e = min(len(points)-1, idx_center + WINDOW)
 
-                    # ④ 流入・流出方向の判定（中心の1つ前と1つ後から方位角を算出）
                     idx_b = max(0, idx_center - 1)
-                    idx_a = min(len(points) - 1, idx_center + 1)
+                    idx_a = min(len(points)-1, idx_center + 1)
 
-                    in_angle = bearing_deg(
-                        points[idx_b][0], points[idx_b][1],
-                        points[idx_center][0], points[idx_center][1],
-                    )
-                    out_angle = bearing_deg(
-                        points[idx_center][0], points[idx_center][1],
-                        points[idx_a][0], points[idx_a][1],
-                    )
+                    in_angle = bearing_deg(points[idx_b][0], points[idx_b][1],
+                                           points[idx_center][0], points[idx_center][1])
+                    out_angle = bearing_deg(points[idx_center][0], points[idx_center][1],
+                                            points[idx_a][0], points[idx_a][1])
 
                     in_branch = find_nearest_branch(in_angle, cross.branches)
                     out_branch = find_nearest_branch(out_angle, cross.branches)
 
-                    # ⑤ 道なり距離・所要時間・速度
                     dist_m = accum_distance(points, idx_s, idx_e)
 
-                    t_start = parse_dt14(gps_times[idx_s]) if gps_times[idx_s] else None
-                    t_end = parse_dt14(gps_times[idx_e]) if gps_times[idx_e] else None
+                    t_start = parse_dt14(gps_times[idx_s])
+                    t_end = parse_dt14(gps_times[idx_e])
                     elapsed = (t_end - t_start).total_seconds() if (t_start and t_end) else None
-                    speed_kmh = dist_m / elapsed * 3.6 if (elapsed and elapsed > 0) else None
+                    speed_kmh = dist_m / elapsed * 3.6 if elapsed and elapsed > 0 else None
 
-                    # ⑥ 性能部分の基本カラム
                     row_out = [
-                        crossroad_path.name,         # 交差点ファイル名
-                        cross.cross_id,              # 交差点ID
-                        trip_csv.name,               # 抽出CSVファイル名
-                        trip_date,                   # 運行日(C列)
-                        weekday,                     # 曜日(MON〜SUN)
-                        run_id,                      # 運行ID(D列)
-                        trip_id,                     # トリップID(I列)
-                        vehicle_type,                # 自動車の種別(E列)
-                        vehicle_use,                 # 用途(F列)
-                        str(in_branch),              # 流入枝番
-                        str(out_branch),             # 流出枝番
+                        crossroad_path.name,
+                        cross.cross_id,
+                        trip_csv.name,
+                        trip_date,
+                        weekday,
+                        run_id,
+                        trip_id,
+                        vehicle_type,
+                        vehicle_use,
+                        str(in_branch),
+                        str(out_branch),
                         f"{dist_m:.3f}",
                         f"{elapsed:.3f}" if elapsed else "",
                         f"{speed_kmh:.3f}" if speed_kmh else "",
                     ]
 
-                    # ⑦ 前後5点の経度・緯度・GPS時刻を右側に追加（範囲外は空欄）
-                    def safe(idx: int) -> tuple[str, str, str]:
+                    def safe(idx):
                         if 0 <= idx < len(points):
                             lat, lon = points[idx]
-                            t = gps_times[idx] if idx < len(gps_times) else ""
-                            # 出力順は「経度, 緯度, GPS時刻」
+                            t = gps_times[idx]
                             return f"{lon}", f"{lat}", t
                         return "", "", ""
 
-                    for offset in range(-5, 6):  # -5 ～ +5
+                    for offset in range(-5, 6):
                         lon_s, lat_s, t_s = safe(idx_center + offset)
                         row_out.extend([lon_s, lat_s, t_s])
 
                     writer.writerow(row_out)
+
+                # ----------- 進捗表示（1行上書き） -----------
+                progress = file_idx / total_files * 100.0
+                elapsed_cfg = time.time() - cfg_start
+
+                print(
+                    f"\r  進捗: {file_idx:4d}/{total_files:4d} "
+                    f"({progress:5.1f}%)  "
+                    f"対象トリップ: {total_trips:6d}  HIT: {hit_trips:6d}  "
+                    f"該当なし: {nopass_trips:6d}  "
+                    f"経過時間: {elapsed_cfg/60:5.1f}分",
+                    end="",
+                    flush=True,
+                )
+
+        # --------------- セット終了情報 ---------------
+        cfg_end = time.time()
+        cfg_end_str = time.strftime("%Y-%m-%d %H:%M:%S")
+        cfg_minutes = (cfg_end - cfg_start) / 60
+
+        print()  # 強制改行
+        print(f"  セット終了時間: {cfg_end_str}")
+        print(
+            f"  完了: ファイル={total_files}, 対象トリップ={total_trips}, "
+            f"HIT={hit_trips}, 該当なし={nopass_trips}, 所要時間={cfg_minutes:5.1f}分"
+        )
+
+    # -------------------- 全体終了 --------------------
+    end_all = time.time()
+    end_all_str = time.strftime("%Y-%m-%d %H:%M:%S")
+    total_minutes = (end_all - start_all) / 60
+
+    print("--------------------------------------------------")
+    print(f"終了時間: {end_all_str}")
+    print(f"総所要時間: {total_minutes:5.1f}分")
+    print("=== 全セット完了 ===")
 
 
 if __name__ == "__main__":
