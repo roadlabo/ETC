@@ -43,8 +43,8 @@
    - 第2スクリーニング（1 トリップ → 1 CSV）
 4. `30_build_performance.py`
    - 20 m ピッチ × 1 時間の性能分析（速度・件数）
-5. `31_crossroad_dircount.py`
-   - 交差点方向別トリップ数
+5. `70_crossroad_trip_performance.py`
+   - 交差点性能分析（流入/流出方向・所要時間・速度・詳細ポイントの出力）
 6. `51_od_heatmap_viewer.py` / `16_trip_od_screening.py`
    - 起終点（OD）ヒートマップ
 
@@ -87,7 +87,8 @@
 - `16_trip_extractor_point.py`：ポイント通過トリップ抽出（第2スクリーニング）。
 - `16_trip_od_screening.py`：OD ヒートマップ向けの第2スクリーニング補助。
 - `30_build_performance.py`：20 m × 1 h の性能分析（速度・件数）。
-- `31_crossroad_dircount.py`：交差点方向別カウント集計（最大 21 行形式）。
+- `70_crossroad_trip_performance.py`：交差点性能分析（流入/流出・道なり距離・所要時間・速度・前後 5 点の詳細出力）。
+- `31_crossroad_dircount.py`：旧版の交差点方向別カウント集計（新 70 に統合済、必要なら old/ へ退避）。
 - `51_od_heatmap_viewer.py`：OD ヒートマップ表示。
 
 ## 8. 性能分析（20 m × 1 h）
@@ -95,10 +96,14 @@
 - 指定ルートを 20 m ごとに分割し、1 時間単位の平均速度・データ数を算出。
 - Excel 形式で出力し、渋滞箇所の把握や比較評価に利用。
 
-## 9. 交差点方向別カウント
-- スクリプト：`31_crossroad_dircount.py`
-- 第2スクリーニング結果（ポイント版）を入力し、交差点の方向別トリップ数を集計。
-- AI カウントとの比較検証にも使用可能。
+## 9. 交差点性能分析（新：70_crossroad_trip_performance）
+- スクリプト：`70_crossroad_trip_performance.py`（正式版、`31_crossroad_dircount.py` を統合）。
+- 通過判定は `16_trip_extractor_point.py` と同じ点距離・線分距離 20 m 判定、MIN_HITS=1。
+- 中心点＝交差点に最も近い点を採用し、前後 5 点の経度・緯度・GPS 時刻をすべて出力。
+- 交差点 CSV の `dir_deg` を用いて流入/流出枝を判定し、道なり距離・所要時間・通過速度を高精度に出力。
+- 曜日フィルタに対応（例：火水木のみ）し、cp932 で保存するため Excel で文字化けなし。
+- 旧 `31_crossroad_dircount.py` は廃止予定。必要であれば `old/` 配下へ移動して保管してください。
+- 詳細手順は `docs/70_crossroad_trip_performance.md` を参照してください。
 
 ## 10. OD ヒートマップ（9 パターン）
 - スクリプト：`51_od_heatmap_viewer.py` / `16_trip_od_screening.py`
@@ -136,7 +141,7 @@ ETC2.0/
 4. `python 15_trip_extractor_route.py`
 5. `python 16_trip_extractor_point.py`
 6. `python 30_build_performance.py`
-7. `python 31_crossroad_dircount.py`
+7. `python 70_crossroad_trip_performance.py`
 8. `python 51_od_heatmap_viewer.py`
 
 ---
