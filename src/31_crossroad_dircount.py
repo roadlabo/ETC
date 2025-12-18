@@ -1,4 +1,13 @@
-"""Crossroad passage extractor for "様式1-2" screened CSV files.
+"""DEPRECATED
+
+本スクリプトは過去に使用されていた交差点通過抽出スクリプトです。
+現在は、より多くの検証・可視化用情報を出力できる
+70_crossroad_trip_performance.py を正としています。
+
+本ファイルは設計経緯の保存および参考用として残していますが、
+新規解析・再実行には使用しません。
+
+Crossroad passage extractor for "様式1-2" screened CSV files.
 
 Reads trip CSV files, detects passages through predefined crossroads
 (crossroadXXX.csv), and outputs per-passage metrics such as approach/exit
