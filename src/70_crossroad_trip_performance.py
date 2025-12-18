@@ -391,8 +391,11 @@ def main() -> None:
                     idx_b = max(0, idx_center - 1)
                     idx_a = min(len(points)-1, idx_center + 1)
 
-                    in_angle = bearing_deg(points[idx_b][0], points[idx_b][1],
-                                           points[idx_center][0], points[idx_center][1])
+                    # dir_deg（center → branch）と同じ座標系で比較するため、
+                    # in_angle も交差点中心から流入元ブランチ方向を取る
+                    in_angle = bearing_deg(points[idx_center][0], points[idx_center][1],
+                                           points[idx_b][0], points[idx_b][1])
+                    # out_angle は交差点中心から流出先ブランチ方向
                     out_angle = bearing_deg(points[idx_center][0], points[idx_center][1],
                                             points[idx_a][0], points[idx_a][1])
 
