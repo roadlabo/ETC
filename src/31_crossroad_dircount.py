@@ -481,7 +481,8 @@ def _process_trip(
     dt_after = _parse_dt14(rows[idx_after].get(GPS_TIME_IDX))
 
     # 方位角から branch_in / branch_out を決定（角度の許容誤差ロジックは既存のまま）
-    dir_in = _bearing_deg(p_before, p_center)
+    # crossroad 定義 (dir_deg) は center→branch の方位角なので、流入も同じ向きに合わせる
+    dir_in = _bearing_deg(p_center, p_before)
     dir_out = _bearing_deg(p_center, p_after)
     branch_in = _closest_branch(dir_in, crossroad.branches)
     branch_out = _closest_branch(dir_out, crossroad.branches)
