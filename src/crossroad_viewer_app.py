@@ -9,6 +9,7 @@ from matplotlib.figure import Figure
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor, QPixmap, QTextCharFormat
 from PySide6.QtWidgets import (
+    QListWidget,
     QApplication,
     QCalendarWidget,
     QFileDialog,
@@ -83,6 +84,7 @@ class CrossroadViewer(QMainWindow):
         self.clean_df = pd.DataFrame()
         self.grouped_df = pd.DataFrame()
         self.unique_dates: list[datetime.date] = []
+        self.unique_qdates: list[QDate] = []
 
         self._setup_ui()
         self._load_and_prepare()
@@ -92,18 +94,17 @@ class CrossroadViewer(QMainWindow):
         self.setCentralWidget(main_widget)
 
         main_layout = QVBoxLayout(main_widget)
-        header_layout = QGridLayout()
+        header_layout = QVBoxLayout()
 
         self.crossroad_label = QLabel("Crossroad file: -")
         self.performance_label = QLabel("Performance file: -")
         self.total_days_label = QLabel("総日数: -")
         self.total_records_label = QLabel("総レコード数: -")
 
-        header_layout.addWidget(self.crossroad_label, 0, 0)
-        header_layout.addWidget(self.performance_label, 0, 1)
-        header_layout.addWidget(self.total_days_label, 1, 0)
-        header_layout.addWidget(self.total_records_label, 1, 1)
-
+        header_layout.addWidget(self.crossroad_label)
+        header_layout.addWidget(self.performance_label)
+        header_layout.addWidget(self.total_days_label)
+        header_layout.addWidget(self.total_records_label)
         main_layout.addLayout(header_layout)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -117,8 +118,21 @@ class CrossroadViewer(QMainWindow):
         self.image_label.setMinimumHeight(200)
         left_splitter.addWidget(self.image_label)
 
+        # Calendar + date list (right half)
+        cal_container = QWidget()
+        cal_layout = QGridLayout(cal_container)
+        cal_layout.setContentsMargins(0, 0, 0, 0)
+
         self.calendar = QCalendarWidget()
-        left_splitter.addWidget(self.calendar)
+        # remove week numbers (vertical header)
+        self.calendar.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+
+        self.date_list = QListWidget()
+        self.date_list.setMinimumWidth(180)
+
+        cal_layout.addWidget(self.calendar, 0, 0)
+        cal_layout.addWidget(self.date_list, 0, 1)
+        left_splitter.addWidget(cal_container)
 
         # Right splitter with table and histogram
         right_splitter = QSplitter(Qt.Vertical)
@@ -163,6 +177,7 @@ class CrossroadViewer(QMainWindow):
         self._populate_header()
         self._populate_table()
         self._highlight_calendar()
+        self._populate_date_list_and_jump()
 
     def _load_crossroad_definition(self) -> pd.DataFrame | None:
         encodings = ["shift_jis", "cp932", "utf-8"]
@@ -194,6 +209,10 @@ class CrossroadViewer(QMainWindow):
 
             self.clean_df = data
             self.unique_dates = sorted({d for d in data["date"]})
+            # Cache QDate list for calendar/list usage
+            self.unique_qdates = [
+                QDate(d.year, d.month, d.day) for d in self.unique_dates
+            ]
 
             total_days = len(self.unique_dates)
             grouped = data.groupby(["in_b", "out_b"]).agg(
@@ -226,9 +245,12 @@ class CrossroadViewer(QMainWindow):
         df = self.grouped_df
         self.table.setRowCount(len(df))
         for row, (_, rec) in enumerate(df.iterrows()):
-            self.table.setItem(row, 0, QTableWidgetItem(str(rec["in_b"])))
-            self.table.setItem(row, 1, QTableWidgetItem(str(rec["out_b"])))
-            self.table.setItem(row, 2, QTableWidgetItem(str(rec["総台数"])))
+            # Ensure integer display (avoid "3.0" -> int("3.0") crash)
+            in_b = int(rec["in_b"])
+            out_b = int(rec["out_b"])
+            self.table.setItem(row, 0, QTableWidgetItem(str(in_b)))
+            self.table.setItem(row, 1, QTableWidgetItem(str(out_b)))
+            self.table.setItem(row, 2, QTableWidgetItem(str(int(rec["総台数"]))))
             self.table.setItem(row, 3, QTableWidgetItem(f"{rec['日あたり台数']:.2f}"))
             self.table.setItem(row, 4, QTableWidgetItem(f"{rec['平均速度']:.2f}"))
         self.table.resizeColumnsToContents()
@@ -236,10 +258,21 @@ class CrossroadViewer(QMainWindow):
     def _highlight_calendar(self) -> None:
         highlight_format = QTextCharFormat()
         highlight_format.setBackground(QColor("pink"))
-        for day in self.unique_dates:
-            qdate = QDate.fromString(day.strftime("%Y-%m-%d"), "yyyy-MM-dd")
-            if qdate.isValid():
-                self.calendar.setDateTextFormat(qdate, highlight_format)
+        for qd in self.unique_qdates:
+            if qd.isValid():
+                self.calendar.setDateTextFormat(qd, highlight_format)
+
+    def _populate_date_list_and_jump(self) -> None:
+        # Right half list: all existing dates
+        self.date_list.clear()
+        for d in self.unique_dates:
+            self.date_list.addItem(d.strftime("%Y-%m-%d"))
+
+        # Default month: jump to the first existing date's month
+        if self.unique_qdates:
+            first = self.unique_qdates[0]
+            self.calendar.setSelectedDate(first)
+            self.calendar.setCurrentPage(first.year(), first.month())
 
     def _on_row_clicked(self, row: int, column: int) -> None:  # noqa: ARG002
         try:
@@ -247,8 +280,9 @@ class CrossroadViewer(QMainWindow):
             out_b_item = self.table.item(row, 1)
             if not in_b_item or not out_b_item:
                 return
-            in_b = int(in_b_item.text())
-            out_b = int(out_b_item.text())
+            # Extra-safe parse (in case text becomes "3.0" again in future)
+            in_b = int(float(in_b_item.text()))
+            out_b = int(float(out_b_item.text()))
             self._draw_histogram(in_b, out_b)
         except Exception as exc:
             self._show_error(f"ヒストグラム描画に失敗しました: {exc}")
@@ -261,15 +295,47 @@ class CrossroadViewer(QMainWindow):
             self.canvas.draw()
             return
 
-        speeds = subset["spd"].tolist()
+        speeds = subset["spd"].dropna().astype(float).tolist()
+        if not speeds:
+            self.canvas.clear()
+            self.canvas.ax.text(0.5, 0.5, "速度データなし", ha="center", va="center")
+            self.canvas.draw()
+            return
+
         count = len(speeds)
         avg_speed = subset["spd"].mean()
 
+        # Fixed bins as percentages:
+        # 0-10,10-20,20-30,30-40,40-50,50-60,60+
+        labels = ["0-10", "10-20", "20-30", "30-40", "40-50", "50-60", "60+"]
+        counts = [0] * 7
+        for v in speeds:
+            if v < 10:
+                counts[0] += 1
+            elif v < 20:
+                counts[1] += 1
+            elif v < 30:
+                counts[2] += 1
+            elif v < 40:
+                counts[3] += 1
+            elif v < 50:
+                counts[4] += 1
+            elif v < 60:
+                counts[5] += 1
+            else:
+                counts[6] += 1
+        perc = [c * 100.0 / count for c in counts]
+
         self.canvas.clear()
-        self.canvas.ax.hist(speeds, bins=20, color="skyblue", edgecolor="black")
+        # vertical bar chart of percentages
+        self.canvas.ax.bar(labels, perc)
+        self.canvas.ax.set_ylim(0, max(perc) * 1.2 if max(perc) > 0 else 1)
         self.canvas.ax.set_title(f"{in_b}→{out_b} / 台数:{count} / 平均速度:{avg_speed:.1f} km/h")
-        self.canvas.ax.set_xlabel("速度(km/h)")
-        self.canvas.ax.set_ylabel("頻度")
+        self.canvas.ax.set_xlabel("速度帯(km/h)")
+        self.canvas.ax.set_ylabel("割合(%)")
+        # show values on top
+        for i, p in enumerate(perc):
+            self.canvas.ax.text(i, p, f"{p:.1f}%", ha="center", va="bottom", fontsize=9)
         self.canvas.fig.tight_layout()
         self.canvas.draw()
 
