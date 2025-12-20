@@ -4,9 +4,9 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor, QPixmap, QTextCharFormat
 from PySide6.QtWidgets import (
     QApplication,
@@ -237,7 +237,7 @@ class CrossroadViewer(QMainWindow):
         highlight_format = QTextCharFormat()
         highlight_format.setBackground(QColor("pink"))
         for day in self.unique_dates:
-            qdate = self.calendar.selectedDate().fromString(day.strftime("%Y-%m-%d"), "yyyy-MM-dd")
+            qdate = QDate.fromString(day.strftime("%Y-%m-%d"), "yyyy-MM-dd")
             if qdate.isValid():
                 self.calendar.setDateTextFormat(qdate, highlight_format)
 
