@@ -371,7 +371,11 @@ def classify_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
     if norm == 0.0:
         return "A"
 
-    v_trip = v / norm
+    # NOTE:
+    # A/B 方向は「中心点 → 外側（center → outside）」で定義されている。
+    # 流入方向は「外側 → 中心点（outside → center）」であるため、
+    # A/B 判定に使用するトリップベクトルは反転して比較する。
+    v_trip = (-v) / norm
 
     cosA = float(np.dot(v_trip, v_dir_A))
     cosB = float(np.dot(v_trip, v_dir_B))
