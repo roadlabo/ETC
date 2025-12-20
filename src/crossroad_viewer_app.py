@@ -11,6 +11,7 @@ from PySide6.QtGui import QColor, QPixmap, QTextCharFormat
 from PySide6.QtWidgets import (
     QApplication,
     QCalendarWidget,
+    QFileDialog,
     QGridLayout,
     QLabel,
     QMainWindow,
@@ -70,13 +71,12 @@ class MatplotlibCanvas(FigureCanvas):
 
 
 class CrossroadViewer(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, crossroad_csv: Path, crossroad_jpg: Path, performance_csv: Path) -> None:
         super().__init__()
         self.setWindowTitle("Crossroad Performance Viewer")
-        self.base_dir = Path(__file__).resolve().parent
-        self.performance_path = self.base_dir / "01nomura_performance.csv"
-        self.crossroad_path = self.base_dir / "01nomura.csv"
-        self.image_path = self.base_dir / "01nomura.jpg"
+        self.crossroad_path = crossroad_csv
+        self.image_path = crossroad_jpg
+        self.performance_path = performance_csv
 
         self.performance_df = pd.DataFrame()
         self.crossroad_df = pd.DataFrame()
@@ -297,9 +297,59 @@ class CrossroadViewer(QMainWindow):
         QMessageBox.critical(self, "Error", message)
 
 
+def pick_three_files() -> tuple[Path, Path, Path] | None:
+    while True:
+        csv_path, _ = QFileDialog.getOpenFileName(
+            None, "交差点ファイル（*.csv）を選択", "", "CSV (*.csv)"
+        )
+        if not csv_path:
+            return None
+
+        img_path, _ = QFileDialog.getOpenFileName(
+            None,
+            "交差点画像（*.jpg）を選択",
+            str(Path(csv_path).parent),
+            "Images (*.jpg *.jpeg *.png *.bmp)",
+        )
+        if not img_path:
+            return None
+
+        perf_path, _ = QFileDialog.getOpenFileName(
+            None,
+            "交差点パフォーマンス（*_performance.csv）を選択",
+            str(Path(csv_path).parent),
+            "CSV (*.csv)",
+        )
+        if not perf_path:
+            return None
+
+        csv_p = Path(csv_path)
+        img_p = Path(img_path)
+        perf_p = Path(perf_path)
+
+        base = csv_p.stem
+        ok = (img_p.stem == base) and (perf_p.stem == f"{base}_performance")
+        if ok:
+            return csv_p, img_p, perf_p
+
+        QMessageBox.warning(
+            None,
+            "ファイル名が一致しません",
+            f"選択ルール：\n"
+            f"- {base}.csv\n"
+            f"- {base}.jpg\n"
+            f"- {base}_performance.csv\n\n"
+            f"もう一度選び直してください。",
+        )
+
+
 def main() -> None:
     app = QApplication(sys.argv)
-    viewer = CrossroadViewer()
+    picked = pick_three_files()
+    if picked is None:
+        sys.exit(0)
+    crossroad_csv, crossroad_jpg, performance_csv = picked
+    viewer = CrossroadViewer(crossroad_csv, crossroad_jpg, performance_csv)
     viewer.resize(1200, 800)
     viewer.show()
     sys.exit(app.exec())
