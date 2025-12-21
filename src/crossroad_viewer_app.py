@@ -141,6 +141,8 @@ class CrossroadViewer(QMainWindow):
         self.image_path = crossroad_jpg
         self.performance_path = performance_csv
 
+        self._last_table_row = -1
+
         self.performance_df = pd.DataFrame()
         self.crossroad_df = pd.DataFrame()
         self.clean_df = pd.DataFrame()
@@ -229,6 +231,7 @@ class CrossroadViewer(QMainWindow):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.cellClicked.connect(self._on_row_clicked)
+        self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
         table_layout.addWidget(self.table)
         right_top_splitter.addWidget(table_container)
 
@@ -240,6 +243,7 @@ class CrossroadViewer(QMainWindow):
         self.file_list = QListWidget()
         self.file_list.setMinimumWidth(420)
         self.file_list.itemClicked.connect(self._on_file_clicked)
+        self.file_list.currentItemChanged.connect(self._on_file_current_changed)
         side_layout.addWidget(self.file_list, stretch=3)
         detail_title = QLabel("選択ファイル詳細")
         side_layout.addWidget(detail_title)
@@ -399,6 +403,15 @@ class CrossroadViewer(QMainWindow):
         self.calendar.setCurrentPage(qdate.year(), qdate.month())
 
     def _on_row_clicked(self, row: int, column: int) -> None:  # noqa: ARG002
+        self._update_for_pair_by_row(row)
+
+    def _on_table_selection_changed(self) -> None:
+        row = self.table.currentRow()
+        if row == -1 or row == self._last_table_row:
+            return
+        self._update_for_pair_by_row(row)
+
+    def _update_for_pair_by_row(self, row: int) -> None:
         try:
             in_b_item = self.table.item(row, 0)
             out_b_item = self.table.item(row, 1)
@@ -407,6 +420,7 @@ class CrossroadViewer(QMainWindow):
             # Extra-safe parse (in case text becomes "3.0" again in future)
             in_b = int(float(in_b_item.text()))
             out_b = int(float(out_b_item.text()))
+            self._last_table_row = row
             self._draw_histogram(in_b, out_b)
             self._update_file_list(in_b, out_b)
         except Exception as exc:
@@ -525,6 +539,17 @@ class CrossroadViewer(QMainWindow):
             self._show_error(f"ファイル一覧の更新に失敗しました: {exc}")
 
     def _on_file_clicked(self, item: QListWidgetItem) -> None:
+        self._update_file_detail(item)
+
+    def _on_file_current_changed(
+        self, current: QListWidgetItem | None, previous: QListWidgetItem | None
+    ) -> None:  # noqa: ARG002
+        if current is None:
+            self.detail_text.setPlainText("")
+            return
+        self._update_file_detail(current)
+
+    def _update_file_detail(self, item: QListWidgetItem) -> None:
         try:
             row_index = item.data(Qt.UserRole)
             if row_index is None:
@@ -627,7 +652,7 @@ class CrossroadViewer(QMainWindow):
 
     def _configure_report_sheet(self, ws) -> None:
         ws.page_setup.paperSize = ws.PAPERSIZE_A4
-        ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+        ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
         ws.page_setup.fitToWidth = 1
         ws.page_setup.fitToHeight = 0
         ws.page_margins.left = 0.3
@@ -635,9 +660,7 @@ class CrossroadViewer(QMainWindow):
         ws.page_margins.top = 0.3
         ws.page_margins.bottom = 0.3
         ws.print_options.horizontalCentered = True
-        ws.print_title_rows = "1:12"
-
-        widths = [8, 8, 10, 10, 10] + [6] * 20
+        widths = [6, 6, 8, 10, 10] + [6] * 20
         for idx, width in enumerate(widths, start=1):
             ws.column_dimensions[get_column_letter(idx)].width = width
 
@@ -724,6 +747,10 @@ class CrossroadViewer(QMainWindow):
             for label, perc in zip(TIME_LABELS, combo["time_percent"]):
                 ws.append(base_info + ["time", label, perc])
 
+        for row in ws.iter_rows(min_row=2, min_col=4, max_col=5):
+            for cell in row:
+                cell.number_format = "0.0"
+
     def _populate_report_sheet(self, ws, combos: list[dict]) -> None:
         current_row = 1
         combo_index = 0
@@ -787,8 +814,12 @@ class CrossroadViewer(QMainWindow):
             ws.cell(row=row_idx, column=1, value=int(rec.in_b)).alignment = Alignment(horizontal="right")
             ws.cell(row=row_idx, column=2, value=int(rec.out_b)).alignment = Alignment(horizontal="right")
             ws.cell(row=row_idx, column=3, value=int(rec.総台数)).alignment = Alignment(horizontal="right")
-            ws.cell(row=row_idx, column=4, value=float(rec.日あたり台数)).alignment = Alignment(horizontal="right")
-            ws.cell(row=row_idx, column=5, value=float(rec.平均速度)).alignment = Alignment(horizontal="right")
+            daily_cell = ws.cell(row=row_idx, column=4, value=float(rec.日あたり台数))
+            daily_cell.alignment = Alignment(horizontal="right")
+            daily_cell.number_format = "0.0"
+            avg_cell = ws.cell(row=row_idx, column=5, value=float(rec.平均速度))
+            avg_cell.alignment = Alignment(horizontal="right")
+            avg_cell.number_format = "0.0"
         return header_row + len(self.grouped_df) + 1
 
     def _write_speed_table(self, ws, combos: list[dict], start_row: int) -> int:
@@ -814,6 +845,8 @@ class CrossroadViewer(QMainWindow):
                 cell = ws.cell(row=row_idx, column=col, value=val)
                 align = Alignment(horizontal="center") if col <= 2 else Alignment(horizontal="right")
                 cell.alignment = align
+                if col in (4, 5) or col > 5:
+                    cell.number_format = "0.0"
             row_idx += 1
         return row_idx
 
@@ -840,6 +873,8 @@ class CrossroadViewer(QMainWindow):
                 cell = ws.cell(row=row_idx, column=col, value=val)
                 align = Alignment(horizontal="center") if col <= 2 else Alignment(horizontal="right")
                 cell.alignment = align
+                if col in (4, 5) or col > 5:
+                    cell.number_format = "0.0"
             row_idx += 1
         return row_idx
 
