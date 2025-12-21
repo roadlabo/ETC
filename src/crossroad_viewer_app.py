@@ -45,6 +45,7 @@ COL_OUT_BRANCH = 10
 COL_DIST = 11
 COL_TIME = 12
 COL_SPEED = 13
+COL_CENTER_TIME = 31  # AF列：中心点_GPS時刻
 
 # Column indices for crossroad definition data
 COL_BRANCH_NO = 3
@@ -77,14 +78,37 @@ class ScaledPixmapLabel(QLabel):
 
 class MatplotlibCanvas(FigureCanvas):
     def __init__(self, parent: QWidget | None = None) -> None:
-        self.fig = Figure(figsize=(5, 4))
-        self.ax = self.fig.add_subplot(111)
+        self.fig = Figure(figsize=(8, 4))
         super().__init__(self.fig)
         self.setParent(parent)
 
     def clear(self) -> None:
         self.fig.clear()
-        self.ax = self.fig.add_subplot(111)
+
+
+def parse_center_datetime(val) -> datetime | None:
+    if val is None:
+        return None
+    if pd.isna(val):
+        return None
+    text = str(val).strip()
+    if not text:
+        return None
+
+    patterns = [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y%m%d%H%M%S",
+        "%H:%M:%S",
+        "%H:%M",
+    ]
+
+    for fmt in patterns:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 class CrossroadViewer(QMainWindow):
@@ -151,7 +175,7 @@ class CrossroadViewer(QMainWindow):
         cal_layout.addWidget(self.date_list, 0, 1)
         left_splitter.addWidget(cal_container)
 
-        # Right splitter with table and histogram
+        # Right splitter with table on top and horizontal split below
         right_splitter = QSplitter(Qt.Vertical)
         splitter.addWidget(right_splitter)
 
@@ -177,29 +201,39 @@ class CrossroadViewer(QMainWindow):
         right_top_layout.addWidget(self.table)
         right_splitter.addWidget(right_top_container)
 
-        right_bottom_container = QWidget()
-        right_bottom_layout = QVBoxLayout(right_bottom_container)
-        right_bottom_layout.setContentsMargins(0, 0, 0, 0)
+        right_bottom_splitter = QSplitter(Qt.Horizontal)
+        right_splitter.addWidget(right_bottom_splitter)
 
+        graph_container = QWidget()
+        graph_layout = QVBoxLayout(graph_container)
+        graph_layout.setContentsMargins(0, 0, 0, 0)
         self.canvas = MatplotlibCanvas()
-        right_bottom_layout.addWidget(self.canvas)
+        graph_layout.addWidget(self.canvas)
+        right_bottom_splitter.addWidget(graph_container)
 
+        file_splitter = QSplitter(Qt.Vertical)
+        right_bottom_splitter.addWidget(file_splitter)
+
+        file_list_container = QWidget()
+        file_list_layout = QVBoxLayout(file_list_container)
+        file_list_layout.setContentsMargins(0, 0, 0, 0)
         file_list_title = QLabel("該当ファイル一覧")
-        right_bottom_layout.addWidget(file_list_title)
-
+        file_list_layout.addWidget(file_list_title)
         self.file_list = QListWidget()
         self.file_list.setMinimumWidth(420)
         self.file_list.itemClicked.connect(self._on_file_clicked)
-        right_bottom_layout.addWidget(self.file_list)
+        file_list_layout.addWidget(self.file_list)
+        file_splitter.addWidget(file_list_container)
 
+        detail_container = QWidget()
+        detail_layout = QVBoxLayout(detail_container)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
         detail_title = QLabel("選択ファイル詳細")
-        right_bottom_layout.addWidget(detail_title)
-
+        detail_layout.addWidget(detail_title)
         self.detail_label = QLabel("")
         self.detail_label.setWordWrap(True)
-        right_bottom_layout.addWidget(self.detail_label)
-
-        right_splitter.addWidget(right_bottom_container)
+        detail_layout.addWidget(self.detail_label)
+        file_splitter.addWidget(detail_container)
 
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
@@ -241,6 +275,7 @@ class CrossroadViewer(QMainWindow):
             in_branch = pd.to_numeric(self.performance_df.iloc[:, COL_IN_BRANCH], errors="coerce")
             out_branch = pd.to_numeric(self.performance_df.iloc[:, COL_OUT_BRANCH], errors="coerce")
             speed = pd.to_numeric(self.performance_df.iloc[:, COL_SPEED], errors="coerce")
+            center_time = self.performance_df.iloc[:, COL_CENTER_TIME]
 
             data = pd.DataFrame({
                 "date": date_series,
@@ -249,6 +284,7 @@ class CrossroadViewer(QMainWindow):
                 "spd": speed,
             })
             data = data.dropna()
+            data["center_time"] = center_time.loc[data.index].values
 
             data["in_b"] = data["in_b"].astype(int)
             data["out_b"] = data["out_b"].astype(int)
@@ -353,21 +389,21 @@ class CrossroadViewer(QMainWindow):
 
     def _draw_histogram(self, in_b: int, out_b: int) -> None:
         subset = self.clean_df[(self.clean_df["in_b"] == in_b) & (self.clean_df["out_b"] == out_b)]
+        self.canvas.clear()
+        fig = self.canvas.fig
+        ax_speed = fig.add_subplot(1, 2, 1)
+        ax_time = fig.add_subplot(1, 2, 2)
+
         if subset.empty:
-            self.canvas.clear()
-            self.canvas.ax.text(0.5, 0.5, "データなし", ha="center", va="center")
+            for ax in (ax_speed, ax_time):
+                ax.axis("off")
+                ax.text(0.5, 0.5, "データなし", ha="center", va="center")
             self.canvas.draw()
             return
 
         speeds = subset["spd"].dropna().astype(float).tolist()
-        if not speeds:
-            self.canvas.clear()
-            self.canvas.ax.text(0.5, 0.5, "速度データなし", ha="center", va="center")
-            self.canvas.draw()
-            return
-
-        count = len(speeds)
         avg_speed = subset["spd"].mean()
+        count = len(speeds)
 
         # Fixed bins as percentages:
         # 0-10,10-20,20-30,30-40,40-50,50-60,60+
@@ -388,19 +424,56 @@ class CrossroadViewer(QMainWindow):
                 counts[5] += 1
             else:
                 counts[6] += 1
-        perc = [c * 100.0 / count for c in counts]
+        perc = [c * 100.0 / count for c in counts] if count else [0.0] * 7
 
-        self.canvas.clear()
-        # vertical bar chart of percentages
-        self.canvas.ax.bar(labels, perc)
-        self.canvas.ax.set_ylim(0, max(perc) * 1.2 if max(perc) > 0 else 1)
-        self.canvas.ax.set_title(f"{in_b}→{out_b} / 台数:{count} / 平均速度:{avg_speed:.1f} km/h")
-        self.canvas.ax.set_xlabel("速度帯(km/h)")
-        self.canvas.ax.set_ylabel("割合(%)")
-        # show values on top
-        for i, p in enumerate(perc):
-            self.canvas.ax.text(i, p, f"{p:.1f}%", ha="center", va="bottom", fontsize=9)
-        self.canvas.fig.tight_layout()
+        if speeds:
+            ax_speed.bar(labels, perc)
+            ax_speed.set_ylim(0, max(perc) * 1.2 if max(perc) > 0 else 1)
+            ax_speed.set_ylabel("割合(%)")
+            for i, p in enumerate(perc):
+                ax_speed.text(i, p, f"{p:.1f}%", ha="center", va="bottom", fontsize=9)
+        else:
+            ax_speed.axis("off")
+            ax_speed.text(0.5, 0.5, "速度データなし", ha="center", va="center")
+
+        time_labels = ["0-3", "3-6", "6-9", "9-12", "12-15", "15-18", "18-21", "21-24"]
+        time_counts = [0] * 8
+        parsed_times = [
+            dt for dt in subset["center_time"].apply(parse_center_datetime).tolist() if dt is not None
+        ]
+        for dt in parsed_times:
+            hour = dt.hour
+            if hour < 3:
+                time_counts[0] += 1
+            elif hour < 6:
+                time_counts[1] += 1
+            elif hour < 9:
+                time_counts[2] += 1
+            elif hour < 12:
+                time_counts[3] += 1
+            elif hour < 15:
+                time_counts[4] += 1
+            elif hour < 18:
+                time_counts[5] += 1
+            elif hour < 21:
+                time_counts[6] += 1
+            elif hour < 24:
+                time_counts[7] += 1
+
+        if parsed_times:
+            time_total = len(parsed_times)
+            time_perc = [c * 100.0 / time_total for c in time_counts]
+            ax_time.bar(time_labels, time_perc)
+            ax_time.set_ylim(0, max(time_perc) * 1.2 if max(time_perc) > 0 else 1)
+            ax_time.set_ylabel("割合(%)")
+            for i, p in enumerate(time_perc):
+                ax_time.text(i, p, f"{p:.1f}%", ha="center", va="bottom", fontsize=9)
+        else:
+            ax_time.axis("off")
+            ax_time.text(0.5, 0.5, "時刻データなし", ha="center", va="center")
+
+        fig.suptitle(f"{in_b}→{out_b} / 台数:{count} / 平均速度:{avg_speed:.1f} km/h")
+        fig.tight_layout(rect=[0, 0, 1, 0.92])
         self.canvas.draw()
 
     def _update_file_list(self, in_b: int, out_b: int) -> None:
