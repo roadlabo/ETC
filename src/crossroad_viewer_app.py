@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
     QHBoxLayout,
@@ -202,16 +203,19 @@ class CrossroadViewer(QMainWindow):
         cal_layout.addWidget(self.date_list, 0, 1)
         left_splitter.addWidget(cal_container)
 
-        # Right splitter with table on top and horizontal split below
+        # Right splitter with table+side on top and graph below
         right_splitter = QSplitter(Qt.Vertical)
         splitter.addWidget(right_splitter)
 
-        right_top_container = QWidget()
-        right_top_layout = QVBoxLayout(right_top_container)
-        right_top_layout.setContentsMargins(0, 0, 0, 0)
+        right_top_splitter = QSplitter(Qt.Horizontal)
+        right_splitter.addWidget(right_top_splitter)
+
+        table_container = QWidget()
+        table_layout = QVBoxLayout(table_container)
+        table_layout.setContentsMargins(0, 0, 0, 0)
 
         title_label = QLabel("交差点パフォーマンス表")
-        right_top_layout.addWidget(title_label)
+        table_layout.addWidget(title_label)
 
         self.table = QTableWidget()
         self.table.setColumnCount(5)
@@ -225,42 +229,36 @@ class CrossroadViewer(QMainWindow):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.cellClicked.connect(self._on_row_clicked)
-        right_top_layout.addWidget(self.table)
-        right_splitter.addWidget(right_top_container)
+        table_layout.addWidget(self.table)
+        right_top_splitter.addWidget(table_container)
 
-        right_bottom_splitter = QSplitter(Qt.Horizontal)
-        right_splitter.addWidget(right_bottom_splitter)
+        side_container = QWidget()
+        side_layout = QVBoxLayout(side_container)
+        side_layout.setContentsMargins(0, 0, 0, 0)
+        file_list_title = QLabel("該当ファイル一覧")
+        side_layout.addWidget(file_list_title)
+        self.file_list = QListWidget()
+        self.file_list.setMinimumWidth(420)
+        self.file_list.itemClicked.connect(self._on_file_clicked)
+        side_layout.addWidget(self.file_list, stretch=3)
+        detail_title = QLabel("選択ファイル詳細")
+        side_layout.addWidget(detail_title)
+        self.detail_text = QTextEdit()
+        self.detail_text.setReadOnly(True)
+        side_layout.addWidget(self.detail_text, stretch=2)
+        right_top_splitter.addWidget(side_container)
 
         graph_container = QWidget()
         graph_layout = QVBoxLayout(graph_container)
         graph_layout.setContentsMargins(0, 0, 0, 0)
         self.canvas = MatplotlibCanvas()
         graph_layout.addWidget(self.canvas)
-        right_bottom_splitter.addWidget(graph_container)
+        right_splitter.addWidget(graph_container)
 
-        file_splitter = QSplitter(Qt.Vertical)
-        right_bottom_splitter.addWidget(file_splitter)
-
-        file_list_container = QWidget()
-        file_list_layout = QVBoxLayout(file_list_container)
-        file_list_layout.setContentsMargins(0, 0, 0, 0)
-        file_list_title = QLabel("該当ファイル一覧")
-        file_list_layout.addWidget(file_list_title)
-        self.file_list = QListWidget()
-        self.file_list.setMinimumWidth(420)
-        self.file_list.itemClicked.connect(self._on_file_clicked)
-        file_list_layout.addWidget(self.file_list)
-        file_splitter.addWidget(file_list_container)
-
-        detail_container = QWidget()
-        detail_layout = QVBoxLayout(detail_container)
-        detail_layout.setContentsMargins(0, 0, 0, 0)
-        detail_title = QLabel("選択ファイル詳細")
-        detail_layout.addWidget(detail_title)
-        self.detail_label = QLabel("")
-        self.detail_label.setWordWrap(True)
-        detail_layout.addWidget(self.detail_label)
-        file_splitter.addWidget(detail_container)
+        right_top_splitter.setStretchFactor(0, 4)
+        right_top_splitter.setStretchFactor(1, 2)
+        right_splitter.setStretchFactor(0, 3)
+        right_splitter.setStretchFactor(1, 2)
 
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
@@ -505,7 +503,7 @@ class CrossroadViewer(QMainWindow):
 
     def _update_file_list(self, in_b: int, out_b: int) -> None:
         self.file_list.clear()
-        self.detail_label.setText("")
+        self.detail_text.setPlainText("")
         try:
             in_series = pd.to_numeric(self.performance_df.iloc[:, COL_IN_BRANCH], errors="coerce")
             out_series = pd.to_numeric(self.performance_df.iloc[:, COL_OUT_BRANCH], errors="coerce")
@@ -566,7 +564,7 @@ class CrossroadViewer(QMainWindow):
                 f"交差点通過速度(km/h)：{_format_value(speed_val, '{:.1f}')}",
             ]
 
-            self.detail_label.setText("\n".join(detail_lines))
+            self.detail_text.setPlainText("\n".join(detail_lines))
         except Exception as exc:
             self._show_error(f"詳細表示の更新に失敗しました: {exc}")
 
