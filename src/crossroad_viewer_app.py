@@ -11,8 +11,6 @@ from matplotlib.figure import Figure
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Font, Side, Border
-from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.pagebreak import Break
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor, QPixmap, QTextCharFormat
 from PySide6.QtWidgets import (
@@ -71,9 +69,6 @@ SPEED_BINS = [
 SPEED_LABELS = ["0-10", "10-20", "20-30", "30-40", "40-50", "50-60", "60+"]
 TIME_BINS = [(0, 3), (3, 6), (6, 9), (9, 12), (12, 15), (15, 18), (18, 21), (21, 24)]
 TIME_LABELS = ["0-3", "3-6", "6-9", "9-12", "12-15", "15-18", "18-21", "21-24"]
-COMBOS_PER_PAGE = 20
-COL_WIDTH_PX = 60
-EXCEL_COL_WIDTH = 8.5  # Approximate width matching 60px in Excel
 
 
 class ScaledPixmapLabel(QLabel):
@@ -669,8 +664,10 @@ class CrossroadViewer(QMainWindow):
         ws.page_margins.top = 0.3
         ws.page_margins.bottom = 0.3
         ws.print_options.horizontalCentered = True
-        for col in range(1, 14):  # A..M
-            ws.column_dimensions[get_column_letter(col)].width = EXCEL_COL_WIDTH
+        ws.column_dimensions["A"].width = 4.88
+        ws.column_dimensions["B"].width = 4.88
+        for col in ["C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M"]:
+            ws.column_dimensions[col].width = 7.0
 
     def _collect_combination_data(self) -> list[dict]:
         total_days = len(self.unique_dates)
@@ -760,40 +757,29 @@ class CrossroadViewer(QMainWindow):
                 cell.number_format = "0.0"
 
     def _populate_report_sheet(self, ws, combos: list[dict]) -> None:
-        current_row = self._write_page_header(ws, 1, include_summary=True)
-
-        combo_index = 0
-        while combo_index < len(combos):
-            batch = combos[combo_index : combo_index + COMBOS_PER_PAGE]
-            current_row = self._write_speed_table(ws, batch, current_row)
-            current_row += 2
-            current_row = self._write_time_table(ws, batch, current_row)
-
-            combo_index += len(batch)
-            if combo_index < len(combos):
-                ws.row_breaks.append(Break(id=current_row))
-                current_row += 3
-                current_row = self._write_page_header(ws, current_row, include_summary=False)
-
-    def _write_page_header(self, ws, start_row: int, include_summary: bool) -> int:
-        title_cell = ws.cell(row=start_row, column=1, value="Crossroad Performance Report")
+        title_cell = ws.cell(row=1, column=1, value="Crossroad Performance Report")
         title_cell.font = Font(size=16, bold=True)
-        ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=13)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=13)
         title_cell.alignment = Alignment(horizontal="center")
 
-        next_row = start_row + 1
-        if include_summary:
-            next_row = self._write_summary_block(ws, next_row)
-            map_anchor_row = max(next_row + 1, start_row + 6)
-            image_obj = self._create_resized_image()
-            image_rows = 0
-            if image_obj:
-                ws.add_image(image_obj, f"A{map_anchor_row}")
-                image_rows = max(12, int(image_obj.height / 18))
-            next_row = map_anchor_row + image_rows + 1
-        else:
-            next_row += 1
-        return next_row
+        self._write_summary_block(ws, 2)
+        image_obj = self._create_resized_image()
+        if image_obj:
+            ws.add_image(image_obj, "A8")
+
+        speed_title_row = 32
+        speed_header_row = 33
+        self._write_section_title(ws, speed_title_row, "通過平均速度ヒストグラム")
+        time_header_row = self._write_speed_table(ws, combos, speed_header_row) + 1
+
+        time_title_row = time_header_row - 1
+        self._write_section_title(ws, time_title_row, "時間帯ヒストグラム")
+        self._write_time_table(ws, combos, time_header_row)
+
+    def _write_section_title(self, ws, row: int, title: str) -> None:
+        title_cell = ws.cell(row=row, column=1, value=title)
+        title_cell.font = Font(size=12, bold=True)
+        title_cell.alignment = Alignment(horizontal="left")
 
     def _write_summary_block(self, ws, start_row: int) -> int:
         info_pairs = [
@@ -883,11 +869,11 @@ class CrossroadViewer(QMainWindow):
             width_ratio = max_width / float(original_width)
             height_ratio = max_height / float(original_height)
             ratio = min(1.0, width_ratio, height_ratio)
-            image.width = int(original_width * ratio)
-            image.height = int(original_height * ratio)
-        if image.width and image.height:
-            image.width = int(image.width * 0.9)
-            image.height = int(image.height * 0.9)
+            image.width = max(1, int(original_width * ratio * 0.8))
+            image.height = max(1, int(original_height * ratio * 0.8))
+        elif image.width and image.height:
+            image.width = max(1, int(image.width * 0.8))
+            image.height = max(1, int(image.height * 0.8))
         return image
 
 
