@@ -162,6 +162,11 @@ class CrossroadViewer(QMainWindow):
         top_bar = QHBoxLayout()
         self.export_button = QPushButton("エクセル出力")
         self.export_button.clicked.connect(self.export_to_excel)
+        self.export_button.setMinimumSize(140, 40)
+        btn_font = self.export_button.font()
+        btn_font.setPointSize(btn_font.pointSize() + 3)
+        self.export_button.setFont(btn_font)
+        self.export_button.setStyleSheet("padding: 8px 12px;")
         top_bar.addStretch(1)
         top_bar.addWidget(self.export_button)
         header_layout.addLayout(top_bar)
@@ -465,8 +470,9 @@ class CrossroadViewer(QMainWindow):
                 counts[6] += 1
         perc = [c * 100.0 / count for c in counts] if count else [0.0] * 7
 
+        ax_speed.set_title("通過平均速度ヒストグラム")
         if speeds:
-            ax_speed.bar(labels, perc)
+            ax_speed.bar(labels, perc, color="red")
             ax_speed.set_ylim(0, max(perc) * 1.2 if max(perc) > 0 else 1)
             ax_speed.set_ylabel("割合(%)")
             for i, p in enumerate(perc):
@@ -499,10 +505,11 @@ class CrossroadViewer(QMainWindow):
             elif hour < 24:
                 time_counts[7] += 1
 
+        ax_time.set_title("時間帯ヒストグラム")
         if parsed_times:
             time_total = len(parsed_times)
             time_perc = [c * 100.0 / time_total for c in time_counts]
-            ax_time.bar(time_labels, time_perc)
+            ax_time.bar(time_labels, time_perc, color="blue")
             ax_time.set_ylim(0, max(time_perc) * 1.2 if max(time_perc) > 0 else 1)
             ax_time.set_ylabel("割合(%)")
             for i, p in enumerate(time_perc):
@@ -660,7 +667,7 @@ class CrossroadViewer(QMainWindow):
         ws.page_margins.top = 0.3
         ws.page_margins.bottom = 0.3
         ws.print_options.horizontalCentered = True
-        widths = [6, 6, 8, 10, 10] + [6] * 20
+        widths = [18, 26, 10, 10, 10] + [6] * 20
         for idx, width in enumerate(widths, start=1):
             ws.column_dimensions[get_column_letter(idx)].width = width
 
@@ -752,53 +759,58 @@ class CrossroadViewer(QMainWindow):
                 cell.number_format = "0.0"
 
     def _populate_report_sheet(self, ws, combos: list[dict]) -> None:
-        current_row = 1
+        current_row = self._write_page_header(ws, 1, include_summary=True)
+        current_row = self._write_overview_table(ws, current_row)
+        current_row += 2
+
         combo_index = 0
-        page_index = 0
-
         while combo_index < len(combos):
-            current_row = self._write_page_header(ws, current_row)
-            if page_index == 0:
-                current_row = self._write_overview_table(ws, current_row)
-                current_row += 2
-
             batch = combos[combo_index : combo_index + COMBOS_PER_PAGE]
             current_row = self._write_speed_table(ws, batch, current_row)
             current_row += 2
             current_row = self._write_time_table(ws, batch, current_row)
 
             combo_index += len(batch)
-            page_index += 1
             if combo_index < len(combos):
                 ws.row_breaks.append(Break(id=current_row))
                 current_row += 3
+                current_row = self._write_page_header(ws, current_row, include_summary=False)
 
-    def _write_page_header(self, ws, start_row: int) -> int:
+    def _write_page_header(self, ws, start_row: int, include_summary: bool) -> int:
         title_cell = ws.cell(row=start_row, column=1, value="Crossroad Performance Report")
         title_cell.font = Font(size=16, bold=True)
         ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=18)
         title_cell.alignment = Alignment(horizontal="center")
 
+        next_row = start_row + 1
+        if include_summary:
+            next_row = self._write_summary_block(ws, next_row)
+            map_anchor_row = max(next_row + 1, start_row + 6)
+            image_obj = self._create_resized_image()
+            image_rows = 0
+            if image_obj:
+                ws.add_image(image_obj, f"A{map_anchor_row}")
+                image_rows = max(12, int(image_obj.height / 18))
+            next_row = map_anchor_row + image_rows + 1
+        else:
+            next_row += 1
+        return next_row
+
+    def _write_summary_block(self, ws, start_row: int) -> int:
         info_pairs = [
             ("Crossroad file", self.crossroad_path.name),
             ("Performance file", self.performance_path.name),
             ("総日数", len(self.unique_dates)),
             ("総レコード数", len(self.clean_df)),
         ]
-        info_row = start_row + 1
-        info_col = 14
-        for label, value in info_pairs:
-            ws.cell(row=info_row, column=info_col, value=f"{label}:").font = Font(bold=True)
-            ws.cell(row=info_row, column=info_col + 1, value=value)
-            info_row += 1
 
-        map_row = start_row + 2
-        image_obj = self._create_resized_image()
-        image_rows = 0
-        if image_obj:
-            ws.add_image(image_obj, f"A{map_row}")
-            image_rows = max(12, int(image_obj.height / 18))
-        return map_row + image_rows + 1
+        for offset, (label, value) in enumerate(info_pairs):
+            row_idx = start_row + offset
+            label_cell = ws.cell(row=row_idx, column=1, value=f"{label}:")
+            label_cell.font = Font(bold=True)
+            ws.cell(row=row_idx, column=2, value=value).alignment = Alignment(wrap_text=False)
+
+        return start_row + len(info_pairs)
 
     def _write_overview_table(self, ws, start_row: int) -> int:
         headers = ["流入枝番", "流出枝番", "総台数", "日あたり台数", "平均速度(km/h)"]
@@ -887,10 +899,13 @@ class CrossroadViewer(QMainWindow):
             original_height = image.height
         except Exception:
             return image
-        max_width = 900
-        if original_width and original_width > max_width:
-            ratio = max_width / float(original_width)
-            image.width = max_width
+        max_width = 850
+        max_height = 520
+        if original_width and original_height:
+            width_ratio = max_width / float(original_width)
+            height_ratio = max_height / float(original_height)
+            ratio = min(1.0, width_ratio, height_ratio)
+            image.width = int(original_width * ratio)
             image.height = int(original_height * ratio)
         return image
 
