@@ -8,6 +8,11 @@ import matplotlib.font_manager as font_manager
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XLImage
+from openpyxl.styles import Alignment, Font, Side, Border
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.pagebreak import Break
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor, QPixmap, QTextCharFormat
 from PySide6.QtWidgets import (
@@ -20,11 +25,13 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
+    QHBoxLayout,
 )
 
 preferred_fonts = ["Meiryo", "Yu Gothic", "MS Gothic"]
@@ -50,6 +57,20 @@ COL_CENTER_TIME = 31  # AF列：中心点_GPS時刻
 # Column indices for crossroad definition data
 COL_BRANCH_NO = 3
 COL_DIR_DEG = 5
+
+SPEED_BINS = [
+    (0, 10),
+    (10, 20),
+    (20, 30),
+    (30, 40),
+    (40, 50),
+    (50, 60),
+    (60, None),
+]
+SPEED_LABELS = ["0-10", "10-20", "20-30", "30-40", "40-50", "50-60", "60+"]
+TIME_BINS = [(0, 3), (3, 6), (6, 9), (9, 12), (12, 15), (15, 18), (18, 21), (21, 24)]
+TIME_LABELS = ["0-3", "3-6", "6-9", "9-12", "12-15", "15-18", "18-21", "21-24"]
+COMBOS_PER_PAGE = 20
 
 
 class ScaledPixmapLabel(QLabel):
@@ -135,6 +156,12 @@ class CrossroadViewer(QMainWindow):
 
         main_layout = QVBoxLayout(main_widget)
         header_layout = QVBoxLayout()
+        top_bar = QHBoxLayout()
+        self.export_button = QPushButton("エクセル出力")
+        self.export_button.clicked.connect(self.export_to_excel)
+        top_bar.addStretch(1)
+        top_bar.addWidget(self.export_button)
+        header_layout.addLayout(top_bar)
 
         self.crossroad_label = QLabel("Crossroad file: -")
         self.performance_label = QLabel("Performance file: -")
@@ -565,6 +592,274 @@ class CrossroadViewer(QMainWindow):
 
     def _show_error(self, message: str) -> None:
         QMessageBox.critical(self, "Error", message)
+
+    def export_to_excel(self) -> None:
+        if self.clean_df.empty:
+            self._show_error("出力するデータがありません。先にファイルを読み込んでください。")
+            return
+
+        default_name = f"{self.crossroad_path.stem}_report.xlsx"
+        save_path_str, _ = QFileDialog.getSaveFileName(
+            self,
+            "Excelレポートを保存",
+            str(self.crossroad_path.with_name(default_name)),
+            "Excel Files (*.xlsx)",
+        )
+        if not save_path_str:
+            return
+
+        try:
+            self._create_excel_report(Path(save_path_str))
+            QMessageBox.information(self, "完了", "エクセルレポートを出力しました。")
+        except Exception as exc:  # pragma: no cover - UI path
+            self._show_error(f"エクセル出力に失敗しました: {exc}")
+
+    def _create_excel_report(self, save_path: Path) -> None:
+        wb = Workbook()
+        ws_report = wb.active
+        ws_report.title = "Report"
+        ws_data = wb.create_sheet("Data")
+
+        self._configure_report_sheet(ws_report)
+        combos = self._collect_combination_data()
+        self._populate_data_sheet(ws_data, combos)
+        self._populate_report_sheet(ws_report, combos)
+
+        wb.save(save_path)
+
+    def _configure_report_sheet(self, ws) -> None:
+        ws.page_setup.paperSize = ws.PAPERSIZE_A4
+        ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.page_margins.left = 0.3
+        ws.page_margins.right = 0.3
+        ws.page_margins.top = 0.3
+        ws.page_margins.bottom = 0.3
+        ws.print_options.horizontalCentered = True
+        ws.print_title_rows = "1:12"
+
+        widths = [8, 8, 10, 10, 10] + [6] * 20
+        for idx, width in enumerate(widths, start=1):
+            ws.column_dimensions[get_column_letter(idx)].width = width
+
+    def _collect_combination_data(self) -> list[dict]:
+        total_days = len(self.unique_dates)
+        combos: list[dict] = []
+        grouped = self.clean_df.groupby(["in_b", "out_b"])
+        for (in_b, out_b), subset in grouped:
+            count_total = len(subset)
+            daily_count = count_total / total_days if total_days else 0
+            avg_speed = subset["spd"].mean() if not subset.empty else 0
+
+            speed_perc = self._calc_speed_percent(subset["spd"])
+            time_perc = self._calc_time_percent(subset["center_time"])
+
+            combos.append(
+                {
+                    "in_b": int(in_b),
+                    "out_b": int(out_b),
+                    "count_total": count_total,
+                    "daily_count": daily_count,
+                    "avg_speed": avg_speed,
+                    "speed_percent": speed_perc,
+                    "time_percent": time_perc,
+                }
+            )
+
+        combos.sort(key=lambda x: (-x["count_total"], x["in_b"], x["out_b"]))
+        return combos
+
+    def _calc_speed_percent(self, speed_series: pd.Series) -> list[float]:
+        speeds = pd.to_numeric(speed_series, errors="coerce").dropna().astype(float).tolist()
+        counts = [0 for _ in SPEED_BINS]
+        for v in speeds:
+            for idx, (low, high) in enumerate(SPEED_BINS):
+                if high is None:
+                    if v >= low:
+                        counts[idx] += 1
+                        break
+                elif low <= v < high:
+                    counts[idx] += 1
+                    break
+        total = sum(counts)
+        if total == 0:
+            return [0.0 for _ in SPEED_BINS]
+        return [c * 100.0 / total for c in counts]
+
+    def _calc_time_percent(self, time_series: pd.Series) -> list[float]:
+        parsed = [parse_center_datetime(v) for v in time_series.tolist()]
+        valid_hours = [dt.hour for dt in parsed if dt is not None]
+        counts = [0 for _ in TIME_BINS]
+        for hour in valid_hours:
+            for idx, (low, high) in enumerate(TIME_BINS):
+                if low <= hour < high:
+                    counts[idx] += 1
+                    break
+        total = sum(counts)
+        if total == 0:
+            return [0.0 for _ in TIME_BINS]
+        return [c * 100.0 / total for c in counts]
+
+    def _populate_data_sheet(self, ws, combos: list[dict]) -> None:
+        headers = [
+            "in_b",
+            "out_b",
+            "count_total",
+            "daily_count",
+            "avg_speed",
+            "metric_type",
+            "bin_label",
+            "percent",
+        ]
+        ws.append(headers)
+        for combo in combos:
+            base_info = [
+                combo["in_b"],
+                combo["out_b"],
+                combo["count_total"],
+                combo["daily_count"],
+                combo["avg_speed"],
+            ]
+            for label, perc in zip(SPEED_LABELS, combo["speed_percent"]):
+                ws.append(base_info + ["speed", label, perc])
+            for label, perc in zip(TIME_LABELS, combo["time_percent"]):
+                ws.append(base_info + ["time", label, perc])
+
+    def _populate_report_sheet(self, ws, combos: list[dict]) -> None:
+        current_row = 1
+        combo_index = 0
+        page_index = 0
+
+        while combo_index < len(combos):
+            current_row = self._write_page_header(ws, current_row)
+            if page_index == 0:
+                current_row = self._write_overview_table(ws, current_row)
+                current_row += 2
+
+            batch = combos[combo_index : combo_index + COMBOS_PER_PAGE]
+            current_row = self._write_speed_table(ws, batch, current_row)
+            current_row += 2
+            current_row = self._write_time_table(ws, batch, current_row)
+
+            combo_index += len(batch)
+            page_index += 1
+            if combo_index < len(combos):
+                ws.row_breaks.append(Break(id=current_row))
+                current_row += 3
+
+    def _write_page_header(self, ws, start_row: int) -> int:
+        title_cell = ws.cell(row=start_row, column=1, value="Crossroad Performance Report")
+        title_cell.font = Font(size=16, bold=True)
+        ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=18)
+        title_cell.alignment = Alignment(horizontal="center")
+
+        info_pairs = [
+            ("Crossroad file", self.crossroad_path.name),
+            ("Performance file", self.performance_path.name),
+            ("総日数", len(self.unique_dates)),
+            ("総レコード数", len(self.clean_df)),
+        ]
+        info_row = start_row + 1
+        info_col = 14
+        for label, value in info_pairs:
+            ws.cell(row=info_row, column=info_col, value=f"{label}:").font = Font(bold=True)
+            ws.cell(row=info_row, column=info_col + 1, value=value)
+            info_row += 1
+
+        map_row = start_row + 2
+        image_obj = self._create_resized_image()
+        image_rows = 0
+        if image_obj:
+            ws.add_image(image_obj, f"A{map_row}")
+            image_rows = max(12, int(image_obj.height / 18))
+        return map_row + image_rows + 1
+
+    def _write_overview_table(self, ws, start_row: int) -> int:
+        headers = ["流入枝番", "流出枝番", "総台数", "日あたり台数", "平均速度(km/h)"]
+        header_row = start_row
+        for col, text in enumerate(headers, start=1):
+            cell = ws.cell(row=header_row, column=col, value=text)
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center")
+            cell.border = Border(bottom=Side(style="thin"))
+
+        for offset, rec in enumerate(self.grouped_df.itertuples(index=False), start=1):
+            row_idx = header_row + offset
+            ws.cell(row=row_idx, column=1, value=int(rec.in_b)).alignment = Alignment(horizontal="right")
+            ws.cell(row=row_idx, column=2, value=int(rec.out_b)).alignment = Alignment(horizontal="right")
+            ws.cell(row=row_idx, column=3, value=int(rec.総台数)).alignment = Alignment(horizontal="right")
+            ws.cell(row=row_idx, column=4, value=float(rec.日あたり台数)).alignment = Alignment(horizontal="right")
+            ws.cell(row=row_idx, column=5, value=float(rec.平均速度)).alignment = Alignment(horizontal="right")
+        return header_row + len(self.grouped_df) + 1
+
+    def _write_speed_table(self, ws, combos: list[dict], start_row: int) -> int:
+        headers = ["in_b", "out_b", "count", "/day", "avg_spd"] + SPEED_LABELS
+        header_row = start_row
+        for col, text in enumerate(headers, start=1):
+            cell = ws.cell(row=header_row, column=col, value=text)
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center")
+            cell.border = Border(bottom=Side(style="thin"))
+
+        row_idx = header_row + 1
+        for combo in combos:
+            values = [
+                combo["in_b"],
+                combo["out_b"],
+                combo["count_total"],
+                combo["daily_count"],
+                combo["avg_speed"],
+                *[round(v, 1) for v in combo["speed_percent"]],
+            ]
+            for col, val in enumerate(values, start=1):
+                cell = ws.cell(row=row_idx, column=col, value=val)
+                align = Alignment(horizontal="center") if col <= 2 else Alignment(horizontal="right")
+                cell.alignment = align
+            row_idx += 1
+        return row_idx
+
+    def _write_time_table(self, ws, combos: list[dict], start_row: int) -> int:
+        headers = ["in_b", "out_b", "count", "/day", "avg_spd"] + TIME_LABELS
+        header_row = start_row
+        for col, text in enumerate(headers, start=1):
+            cell = ws.cell(row=header_row, column=col, value=text)
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center")
+            cell.border = Border(bottom=Side(style="thin"))
+
+        row_idx = header_row + 1
+        for combo in combos:
+            values = [
+                combo["in_b"],
+                combo["out_b"],
+                combo["count_total"],
+                combo["daily_count"],
+                combo["avg_speed"],
+                *[round(v, 1) for v in combo["time_percent"]],
+            ]
+            for col, val in enumerate(values, start=1):
+                cell = ws.cell(row=row_idx, column=col, value=val)
+                align = Alignment(horizontal="center") if col <= 2 else Alignment(horizontal="right")
+                cell.alignment = align
+            row_idx += 1
+        return row_idx
+
+    def _create_resized_image(self) -> XLImage | None:
+        if not self.image_path.exists():
+            return None
+        image = XLImage(str(self.image_path))
+        try:
+            original_width = image.width
+            original_height = image.height
+        except Exception:
+            return image
+        max_width = 900
+        if original_width and original_width > max_width:
+            ratio = max_width / float(original_width)
+            image.width = max_width
+            image.height = int(original_height * ratio)
+        return image
 
 
 def pick_three_files() -> tuple[Path, Path, Path] | None:
