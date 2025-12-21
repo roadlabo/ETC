@@ -893,17 +893,13 @@ class CrossroadViewer(QMainWindow):
             original_height = image.height
         except Exception:
             return image
-        max_width = 850
-        max_height = 520
+
         if original_width and original_height:
-            width_ratio = max_width / float(original_width)
-            height_ratio = max_height / float(original_height)
-            ratio = min(0.77, width_ratio, height_ratio)
-            image.width = max(1, int(original_width * ratio))
-            image.height = max(1, int(original_height * ratio))
+            image.width = max(1, int(original_width * 0.33))
+            image.height = max(1, int(original_height * 0.33))
         elif image.width and image.height:
-            image.width = max(1, int(image.width * 0.77))
-            image.height = max(1, int(image.height * 0.77))
+            image.width = max(1, int(image.width * 0.33))
+            image.height = max(1, int(image.height * 0.33))
         return image
 
 
