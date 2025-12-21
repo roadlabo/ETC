@@ -1,6 +1,6 @@
 import sys
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -659,10 +659,12 @@ class CrossroadViewer(QMainWindow):
         ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
         ws.page_setup.fitToWidth = 1
         ws.page_setup.fitToHeight = 0
-        ws.page_margins.left = 0.3
-        ws.page_margins.right = 0.3
-        ws.page_margins.top = 0.3
-        ws.page_margins.bottom = 0.3
+        ws.page_margins.left = 0.7
+        ws.page_margins.right = 0.7
+        ws.page_margins.top = 0.75
+        ws.page_margins.bottom = 0.75
+        ws.page_margins.header = 0.3
+        ws.page_margins.footer = 0.3
         ws.print_options.horizontalCentered = True
         ws.column_dimensions["A"].width = 4.88
         ws.column_dimensions["B"].width = 4.88
@@ -757,22 +759,25 @@ class CrossroadViewer(QMainWindow):
                 cell.number_format = "0.0"
 
     def _populate_report_sheet(self, ws, combos: list[dict]) -> None:
-        title_cell = ws.cell(row=1, column=1, value="Crossroad Performance Report")
+        title_cell = ws.cell(row=1, column=1, value="交差点パフォーマンス調査")
         title_cell.font = Font(size=16, bold=True)
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=13)
         title_cell.alignment = Alignment(horizontal="center")
 
-        self._write_summary_block(ws, 2)
+        self._write_summary_block(ws, 4)
         image_obj = self._create_resized_image()
         if image_obj:
-            ws.add_image(image_obj, "A8")
+            ws.add_image(image_obj, "A10")
 
         speed_title_row = 32
         speed_header_row = 33
         self._write_section_title(ws, speed_title_row, "通過平均速度ヒストグラム")
-        time_header_row = self._write_speed_table(ws, combos, speed_header_row) + 1
+        speed_table_last_row = self._write_speed_table(ws, combos, speed_header_row)
 
-        time_title_row = time_header_row - 1
+        blank_row = speed_table_last_row + 1
+        time_title_row = speed_table_last_row + 2
+        time_header_row = speed_table_last_row + 3
+        ws.cell(row=blank_row, column=1, value="")
         self._write_section_title(ws, time_title_row, "時間帯ヒストグラム")
         self._write_time_table(ws, combos, time_header_row)
 
@@ -782,21 +787,46 @@ class CrossroadViewer(QMainWindow):
         title_cell.alignment = Alignment(horizontal="left")
 
     def _write_summary_block(self, ws, start_row: int) -> int:
+        start_date, end_date = (None, None)
+        if self.unique_dates:
+            start_date = self.unique_dates[0]
+            end_date = self.unique_dates[-1]
+
+        weekday_map = {0: "月", 1: "火", 2: "水", 3: "木", 4: "金", 5: "土", 6: "日"}
+        weekday_order = [0, 1, 2, 3, 4, 5, 6]
+        weekdays = ""
+        if self.unique_dates:
+            unique_weekdays = sorted({d.weekday() for d in self.unique_dates}, key=weekday_order.index)
+            weekdays = "・".join(weekday_map[d] for d in unique_weekdays)
+
         info_pairs = [
-            ("Crossroad file", self.crossroad_path.name),
-            ("Performance file", self.performance_path.name),
-            ("総日数", len(self.unique_dates)),
-            ("総レコード数", len(self.clean_df)),
+            ("Crossroad file", self.crossroad_path.name, None),
+            ("Performance file", self.performance_path.name, None),
+            ("総日数", f"{len(self.unique_dates)}日", self._format_date_range(start_date, end_date)),
+            ("対象曜日", weekdays, None),
+            ("総レコード数", len(self.clean_df), None),
         ]
 
-        for offset, (label, value) in enumerate(info_pairs):
+        for offset, (label, value, extra) in enumerate(info_pairs):
             row_idx = start_row + offset
             label_cell = ws.cell(row=row_idx, column=1, value=f"{label}:")
             label_cell.font = Font(bold=True)
             label_cell.alignment = Alignment(wrap_text=False)
-            ws.cell(row=row_idx, column=4, value=value).alignment = Alignment(wrap_text=False)
+            value_cell = ws.cell(row=row_idx, column=4, value=value)
+            value_cell.alignment = Alignment(wrap_text=False)
+            if extra is not None:
+                extra_cell = ws.cell(row=row_idx, column=5, value=extra)
+                extra_cell.alignment = Alignment(wrap_text=False)
 
         return start_row + len(info_pairs)
+
+    @staticmethod
+    def _format_date_range(start_date: date | None, end_date: date | None) -> str:
+        if not start_date or not end_date:
+            return ""
+        start_text = f"{start_date.year}年{start_date.month}月{start_date.day}日"
+        end_text = f"{end_date.year}年{end_date.month}月{end_date.day}日"
+        return f"({start_text}～{end_text})"
 
     def _write_speed_table(self, ws, combos: list[dict], start_row: int) -> int:
         headers = ["in_b", "out_b", "count", "/day", "avg_spd"] + SPEED_LABELS
@@ -824,7 +854,7 @@ class CrossroadViewer(QMainWindow):
                 if col in (4, 5) or col > 5:
                     cell.number_format = "0.0"
             row_idx += 1
-        return row_idx
+        return row_idx - 1
 
     def _write_time_table(self, ws, combos: list[dict], start_row: int) -> int:
         headers = ["in_b", "out_b", "count", "/day", "avg_spd"] + TIME_LABELS
@@ -868,12 +898,12 @@ class CrossroadViewer(QMainWindow):
         if original_width and original_height:
             width_ratio = max_width / float(original_width)
             height_ratio = max_height / float(original_height)
-            ratio = min(1.0, width_ratio, height_ratio)
-            image.width = max(1, int(original_width * ratio * 0.8))
-            image.height = max(1, int(original_height * ratio * 0.8))
+            ratio = min(0.77, width_ratio, height_ratio)
+            image.width = max(1, int(original_width * ratio))
+            image.height = max(1, int(original_height * ratio))
         elif image.width and image.height:
-            image.width = max(1, int(image.width * 0.8))
-            image.height = max(1, int(image.height * 0.8))
+            image.width = max(1, int(image.width * 0.77))
+            image.height = max(1, int(image.height * 0.77))
         return image
 
 
