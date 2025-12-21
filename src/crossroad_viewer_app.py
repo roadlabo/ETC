@@ -4,12 +4,15 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import matplotlib.font_manager as font_manager
+import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor, QPixmap, QTextCharFormat
 from PySide6.QtWidgets import (
     QListWidget,
+    QListWidgetItem,
     QApplication,
     QCalendarWidget,
     QFileDialog,
@@ -24,10 +27,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+preferred_fonts = ["Meiryo", "Yu Gothic", "MS Gothic"]
+installed_fonts = {f.name for f in font_manager.fontManager.ttflist}
+for font_name in preferred_fonts:
+    if font_name in installed_fonts:
+        plt.rcParams["font.family"] = font_name
+        break
+plt.rcParams["axes.unicode_minus"] = False
+
 # Column indices for performance data
+COL_FILE = 2
 COL_DATE = 3
+COL_VTYPE = 7
+COL_USE = 8
 COL_IN_BRANCH = 9
 COL_OUT_BRANCH = 10
+COL_DIST = 11
+COL_TIME = 12
 COL_SPEED = 13
 
 # Column indices for crossroad definition data
@@ -129,6 +145,7 @@ class CrossroadViewer(QMainWindow):
 
         self.date_list = QListWidget()
         self.date_list.setMinimumWidth(180)
+        self.date_list.itemClicked.connect(self._on_date_clicked)
 
         cal_layout.addWidget(self.calendar, 0, 0)
         cal_layout.addWidget(self.date_list, 0, 1)
@@ -137,6 +154,13 @@ class CrossroadViewer(QMainWindow):
         # Right splitter with table and histogram
         right_splitter = QSplitter(Qt.Vertical)
         splitter.addWidget(right_splitter)
+
+        right_top_container = QWidget()
+        right_top_layout = QVBoxLayout(right_top_container)
+        right_top_layout.setContentsMargins(0, 0, 0, 0)
+
+        title_label = QLabel("交差点パフォーマンス表")
+        right_top_layout.addWidget(title_label)
 
         self.table = QTableWidget()
         self.table.setColumnCount(5)
@@ -150,10 +174,32 @@ class CrossroadViewer(QMainWindow):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.cellClicked.connect(self._on_row_clicked)
-        right_splitter.addWidget(self.table)
+        right_top_layout.addWidget(self.table)
+        right_splitter.addWidget(right_top_container)
+
+        right_bottom_container = QWidget()
+        right_bottom_layout = QVBoxLayout(right_bottom_container)
+        right_bottom_layout.setContentsMargins(0, 0, 0, 0)
 
         self.canvas = MatplotlibCanvas()
-        right_splitter.addWidget(self.canvas)
+        right_bottom_layout.addWidget(self.canvas)
+
+        file_list_title = QLabel("該当ファイル一覧")
+        right_bottom_layout.addWidget(file_list_title)
+
+        self.file_list = QListWidget()
+        self.file_list.setMinimumWidth(420)
+        self.file_list.itemClicked.connect(self._on_file_clicked)
+        right_bottom_layout.addWidget(self.file_list)
+
+        detail_title = QLabel("選択ファイル詳細")
+        right_bottom_layout.addWidget(detail_title)
+
+        self.detail_label = QLabel("")
+        self.detail_label.setWordWrap(True)
+        right_bottom_layout.addWidget(self.detail_label)
+
+        right_splitter.addWidget(right_bottom_container)
 
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
@@ -248,11 +294,20 @@ class CrossroadViewer(QMainWindow):
             # Ensure integer display (avoid "3.0" -> int("3.0") crash)
             in_b = int(rec["in_b"])
             out_b = int(rec["out_b"])
-            self.table.setItem(row, 0, QTableWidgetItem(str(in_b)))
-            self.table.setItem(row, 1, QTableWidgetItem(str(out_b)))
-            self.table.setItem(row, 2, QTableWidgetItem(str(int(rec["総台数"]))))
-            self.table.setItem(row, 3, QTableWidgetItem(f"{rec['日あたり台数']:.2f}"))
-            self.table.setItem(row, 4, QTableWidgetItem(f"{rec['平均速度']:.2f}"))
+            in_item = QTableWidgetItem(str(in_b))
+            out_item = QTableWidgetItem(str(out_b))
+            total_item = QTableWidgetItem(str(int(rec["総台数"])))
+            daily_item = QTableWidgetItem(f"{rec['日あたり台数']:.2f}")
+            avg_item = QTableWidgetItem(f"{rec['平均速度']:.2f}")
+
+            for item in (in_item, out_item, total_item, daily_item, avg_item):
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+            self.table.setItem(row, 0, in_item)
+            self.table.setItem(row, 1, out_item)
+            self.table.setItem(row, 2, total_item)
+            self.table.setItem(row, 3, daily_item)
+            self.table.setItem(row, 4, avg_item)
         self.table.resizeColumnsToContents()
 
     def _highlight_calendar(self) -> None:
@@ -274,6 +329,14 @@ class CrossroadViewer(QMainWindow):
             self.calendar.setSelectedDate(first)
             self.calendar.setCurrentPage(first.year(), first.month())
 
+    def _on_date_clicked(self, item) -> None:
+        text = item.text()
+        qdate = QDate.fromString(text, "yyyy-MM-dd")
+        if not qdate.isValid():
+            return
+        self.calendar.setSelectedDate(qdate)
+        self.calendar.setCurrentPage(qdate.year(), qdate.month())
+
     def _on_row_clicked(self, row: int, column: int) -> None:  # noqa: ARG002
         try:
             in_b_item = self.table.item(row, 0)
@@ -284,6 +347,7 @@ class CrossroadViewer(QMainWindow):
             in_b = int(float(in_b_item.text()))
             out_b = int(float(out_b_item.text()))
             self._draw_histogram(in_b, out_b)
+            self._update_file_list(in_b, out_b)
         except Exception as exc:
             self._show_error(f"ヒストグラム描画に失敗しました: {exc}")
 
@@ -338,6 +402,73 @@ class CrossroadViewer(QMainWindow):
             self.canvas.ax.text(i, p, f"{p:.1f}%", ha="center", va="bottom", fontsize=9)
         self.canvas.fig.tight_layout()
         self.canvas.draw()
+
+    def _update_file_list(self, in_b: int, out_b: int) -> None:
+        self.file_list.clear()
+        self.detail_label.setText("")
+        try:
+            in_series = pd.to_numeric(self.performance_df.iloc[:, COL_IN_BRANCH], errors="coerce")
+            out_series = pd.to_numeric(self.performance_df.iloc[:, COL_OUT_BRANCH], errors="coerce")
+            mask = (in_series == in_b) & (out_series == out_b)
+            filtered = self.performance_df[mask]
+            if filtered.empty:
+                return
+
+            file_series = filtered.iloc[:, COL_FILE].fillna("").astype(str)
+            seen: set[str] = set()
+            for idx, file_name in zip(filtered.index, file_series):
+                if not file_name or file_name in seen:
+                    continue
+                seen.add(file_name)
+                item = QListWidgetItem(file_name)
+                item.setData(Qt.UserRole, idx)
+                self.file_list.addItem(item)
+        except Exception as exc:
+            self._show_error(f"ファイル一覧の更新に失敗しました: {exc}")
+
+    def _on_file_clicked(self, item: QListWidgetItem) -> None:
+        try:
+            row_index = item.data(Qt.UserRole)
+            if row_index is None:
+                return
+            row = self.performance_df.loc[row_index]
+
+            vtype_map = {0: "軽二輪", 1: "大型", 2: "普通", 3: "小型", 4: "軽自動車"}
+            use_map = {0: "未使用", 1: "乗用", 2: "貨物", 3: "特殊", 4: "乗合"}
+
+            def _format_value(value, fmt: str = "{}") -> str:
+                if pd.isna(value):
+                    return "不明"
+                return fmt.format(value)
+
+            file_name = _format_value(row.iloc[COL_FILE])
+
+            vtype_val = pd.to_numeric(row.iloc[COL_VTYPE], errors="coerce")
+            vtype_int = int(vtype_val) if not pd.isna(vtype_val) else None
+            vtype_text = vtype_map.get(vtype_int, "不明") if vtype_int is not None else "不明"
+            vtype_display = f"{vtype_int}" if vtype_int is not None else "不明"
+
+            use_val = pd.to_numeric(row.iloc[COL_USE], errors="coerce")
+            use_int = int(use_val) if not pd.isna(use_val) else None
+            use_text = use_map.get(use_int, "不明") if use_int is not None else "不明"
+            use_display = f"{use_int}" if use_int is not None else "不明"
+
+            dist_val = pd.to_numeric(row.iloc[COL_DIST], errors="coerce")
+            time_val = pd.to_numeric(row.iloc[COL_TIME], errors="coerce")
+            speed_val = pd.to_numeric(row.iloc[COL_SPEED], errors="coerce")
+
+            detail_lines = [
+                f"ファイル名：{file_name}",
+                f"自動車の種別：{vtype_display}（{vtype_text}）",
+                f"用途：{use_display}（{use_text}）",
+                f"道なり距離(m)：{_format_value(dist_val, '{:.0f}')}",
+                f"所要時間(s)：{_format_value(time_val, '{:.0f}')}",
+                f"交差点通過速度(km/h)：{_format_value(speed_val, '{:.1f}')}",
+            ]
+
+            self.detail_label.setText("\n".join(detail_lines))
+        except Exception as exc:
+            self._show_error(f"詳細表示の更新に失敗しました: {exc}")
 
     def _parse_date(self, value: str):
         text = str(value).strip()
