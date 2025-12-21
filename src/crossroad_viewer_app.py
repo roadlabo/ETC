@@ -72,6 +72,8 @@ SPEED_LABELS = ["0-10", "10-20", "20-30", "30-40", "40-50", "50-60", "60+"]
 TIME_BINS = [(0, 3), (3, 6), (6, 9), (9, 12), (12, 15), (15, 18), (18, 21), (21, 24)]
 TIME_LABELS = ["0-3", "3-6", "6-9", "9-12", "12-15", "15-18", "18-21", "21-24"]
 COMBOS_PER_PAGE = 20
+COL_WIDTH_PX = 60
+EXCEL_COL_WIDTH = 8.5  # Approximate width matching 60px in Excel
 
 
 class ScaledPixmapLabel(QLabel):
@@ -667,9 +669,8 @@ class CrossroadViewer(QMainWindow):
         ws.page_margins.top = 0.3
         ws.page_margins.bottom = 0.3
         ws.print_options.horizontalCentered = True
-        widths = [18, 26, 10, 10, 10] + [6] * 20
-        for idx, width in enumerate(widths, start=1):
-            ws.column_dimensions[get_column_letter(idx)].width = width
+        for col in range(1, 14):  # A..M
+            ws.column_dimensions[get_column_letter(col)].width = EXCEL_COL_WIDTH
 
     def _collect_combination_data(self) -> list[dict]:
         total_days = len(self.unique_dates)
@@ -760,8 +761,6 @@ class CrossroadViewer(QMainWindow):
 
     def _populate_report_sheet(self, ws, combos: list[dict]) -> None:
         current_row = self._write_page_header(ws, 1, include_summary=True)
-        current_row = self._write_overview_table(ws, current_row)
-        current_row += 2
 
         combo_index = 0
         while combo_index < len(combos):
@@ -779,7 +778,7 @@ class CrossroadViewer(QMainWindow):
     def _write_page_header(self, ws, start_row: int, include_summary: bool) -> int:
         title_cell = ws.cell(row=start_row, column=1, value="Crossroad Performance Report")
         title_cell.font = Font(size=16, bold=True)
-        ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=18)
+        ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=13)
         title_cell.alignment = Alignment(horizontal="center")
 
         next_row = start_row + 1
@@ -808,31 +807,10 @@ class CrossroadViewer(QMainWindow):
             row_idx = start_row + offset
             label_cell = ws.cell(row=row_idx, column=1, value=f"{label}:")
             label_cell.font = Font(bold=True)
-            ws.cell(row=row_idx, column=2, value=value).alignment = Alignment(wrap_text=False)
+            label_cell.alignment = Alignment(wrap_text=False)
+            ws.cell(row=row_idx, column=4, value=value).alignment = Alignment(wrap_text=False)
 
         return start_row + len(info_pairs)
-
-    def _write_overview_table(self, ws, start_row: int) -> int:
-        headers = ["流入枝番", "流出枝番", "総台数", "日あたり台数", "平均速度(km/h)"]
-        header_row = start_row
-        for col, text in enumerate(headers, start=1):
-            cell = ws.cell(row=header_row, column=col, value=text)
-            cell.font = Font(bold=True)
-            cell.alignment = Alignment(horizontal="center")
-            cell.border = Border(bottom=Side(style="thin"))
-
-        for offset, rec in enumerate(self.grouped_df.itertuples(index=False), start=1):
-            row_idx = header_row + offset
-            ws.cell(row=row_idx, column=1, value=int(rec.in_b)).alignment = Alignment(horizontal="right")
-            ws.cell(row=row_idx, column=2, value=int(rec.out_b)).alignment = Alignment(horizontal="right")
-            ws.cell(row=row_idx, column=3, value=int(rec.総台数)).alignment = Alignment(horizontal="right")
-            daily_cell = ws.cell(row=row_idx, column=4, value=float(rec.日あたり台数))
-            daily_cell.alignment = Alignment(horizontal="right")
-            daily_cell.number_format = "0.0"
-            avg_cell = ws.cell(row=row_idx, column=5, value=float(rec.平均速度))
-            avg_cell.alignment = Alignment(horizontal="right")
-            avg_cell.number_format = "0.0"
-        return header_row + len(self.grouped_df) + 1
 
     def _write_speed_table(self, ws, combos: list[dict], start_row: int) -> int:
         headers = ["in_b", "out_b", "count", "/day", "avg_spd"] + SPEED_LABELS
@@ -907,6 +885,9 @@ class CrossroadViewer(QMainWindow):
             ratio = min(1.0, width_ratio, height_ratio)
             image.width = int(original_width * ratio)
             image.height = int(original_height * ratio)
+        if image.width and image.height:
+            image.width = int(image.width * 0.9)
+            image.height = int(image.height * 0.9)
         return image
 
 
