@@ -7,16 +7,18 @@ This script ties together three inputs:
 - 様式1-3 CSV files that contain O/D coordinates keyed by (運行ID1, トリップ番号)
 - Zone polygon CSV exported from ``12_polygon_builder.html``
 
-It produces three outputs under ``OUTPUT_DIR``:
+It produces four outputs under ``OUTPUT_DIR``:
 
 - ``od_long.csv``: per (opid, trip_no) record with zones and coordinates
 - ``od_matrix.csv``: zone-to-zone matrix (rows=zone_o, cols=zone_d)
 - ``zone_production_attraction.csv``: production (row sum) and attraction
   (column sum) per zone
+- ``zone_master.csv``: zone_id to zone_name mapping used in the matrix labels
 
 Zone assignment is performed with a lightweight ray-casting point-in-polygon
 implementation (no external GIS dependencies). Points outside any polygon are
-labeled ``OUT``. When no 様式1-3 entry exists, the zone is ``MISSING`` and the
+assigned to a directional fallback zone (east/west/north/south) relative to the
+津山市中心 point. When no 様式1-3 entry exists, the zone is ``MISSING`` and the
 record is preserved in the outputs.
 """
 
@@ -24,33 +26,50 @@ from __future__ import annotations
 
 import csv
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Iterator, Mapping, Sequence
+from typing import Iterator, Mapping, Sequence
 
 
 # ---------------------------------------------------------------------------
 # Configuration (edit before running)
 # ---------------------------------------------------------------------------
 
-# 第1スクリーニング分割ファイル群フォルダ（01_split_by_opid_streaming.py 出力先）
-SPLIT_DIR = Path(r"D:\path\to\01_split_output")
-
-# 様式1-3（CSV）フォルダ
-STYLE13_DIR = Path(r"D:\path\to\style1-3_csvs")
+# 集計対象データセット（分割CSVと様式1-3CSVのペアを複数指定可能）
+# 必要に応じて追加・削除してください。
+DATASETS = [
+    {"name": "R7_02", "split_dir": Path(r"D:\path\to\01_split_output"), "style13_dir": Path(r"D:\path\to\style1-3_csvs")},
+]
 
 # ゾーンポリゴンCSV（12_polygon_builder.html 出力）
 POLYGON_CSV = Path(r"D:\path\to\zones.csv")
 
+# 津山市中心（基準点）座標（東西南北ゾーンの判定に使用）
+TSUYAMA_CENTER_LON = 133.93
+TSUYAMA_CENTER_LAT = 35.07
+
 # 出力先フォルダ
 OUTPUT_DIR = Path(r"D:\path\to\od_output")
+
+# 集計対象曜日（分割CSVの運行日YYYYMMDDから判定）
+TARGET_WEEKDAYS = {"火", "水", "木"}
 
 # (opid, trip_no) を一意にカウントするかどうか
 COUNT_UNIQUE_TRIP = True
 
 # 入力で試行するエンコーディング（順に試す）
 ENCODINGS = ("utf-8-sig", "utf-8", "cp932")
+
+# ---------------------------------------------------------------------------
+# Directional zones
+# ---------------------------------------------------------------------------
+
+EAST_ZONE = "東方面ゾーン"
+WEST_ZONE = "西方面ゾーン"
+NORTH_ZONE = "北方面ゾーン"
+SOUTH_ZONE = "南方面ゾーン"
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +92,64 @@ class PolygonZone:
 def log(message: str) -> None:
     now = datetime.now().strftime("%H:%M:%S")
     print(f"[{now}] {message}")
+
+
+# ---------------------------------------------------------------------------
+# Progress helpers
+# ---------------------------------------------------------------------------
+
+
+class ProgressTracker:
+    def __init__(self, total_files: int) -> None:
+        self.total_files = total_files
+        self.done_files = 0
+        self.hits = 0
+        self.missing = 0
+        self.phase = ""
+        self.start_time = time.time()
+        self.start_label = datetime.now().strftime("%H:%M:%S")
+        self.last_print = 0.0
+
+    def _format_time(self, seconds: float) -> str:
+        if seconds < 0 or seconds != seconds:
+            return "--:--:--"
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+    def update(self, *, phase: str | None = None, increment_done: int = 0, hits: int | None = None, missing: int | None = None, force: bool = False) -> None:
+        if phase is not None:
+            self.phase = phase
+        self.done_files += increment_done
+        if hits is not None:
+            self.hits = hits
+        if missing is not None:
+            self.missing = missing
+
+        now = time.time()
+        if not force and now - self.last_print < 0.5:
+            return
+        self.last_print = now
+
+        elapsed = now - self.start_time
+        if self.done_files > 0 and self.total_files > 0:
+            eta = elapsed * (self.total_files / self.done_files - 1)
+        else:
+            eta = float("nan")
+        percent = (self.done_files / self.total_files * 100) if self.total_files else 0
+
+        line = (
+            f"\r[{self.start_label}] elapsed:{self._format_time(elapsed)} "
+            f"ETA:{self._format_time(eta)} {percent:5.1f}% "
+            f"HIT:{self.hits} MISSING:{self.missing} "
+            f"phase:{self.phase} files:{self.done_files}/{self.total_files}"
+        )
+        print(line, end="", flush=True)
+
+    def finalize(self) -> None:
+        self.update(force=True)
+        print()
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +186,17 @@ def parse_float(value: str) -> float | None:
         return float((value or "").strip())
     except Exception:
         return None
+
+
+def get_weekday_jp(date_text: str) -> str | None:
+    s = (date_text or "").strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.strptime(s, "%Y%m%d")
+    except Exception:
+        return None
+    return "月火水木金土日"[dt.weekday()]
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +254,14 @@ def load_polygons(csv_path: Path) -> list[PolygonZone]:
     return polygons
 
 
+def directional_zone(lon: float, lat: float) -> str:
+    dx = lon - TSUYAMA_CENTER_LON
+    dy = lat - TSUYAMA_CENTER_LAT
+    if abs(dx) >= abs(dy):
+        return EAST_ZONE if dx > 0 else WEST_ZONE
+    return NORTH_ZONE if dy > 0 else SOUTH_ZONE
+
+
 def assign_zone(lon: float | None, lat: float | None, polygons: Sequence[PolygonZone]) -> str:
     if lon is None or lat is None:
         return "MISSING"
@@ -175,7 +271,7 @@ def assign_zone(lon: float | None, lat: float | None, polygons: Sequence[Polygon
             continue
         if point_in_polygon(lon, lat, poly.points):
             return poly.name
-    return "OUT"
+    return directional_zone(lon, lat)
 
 
 # ---------------------------------------------------------------------------
@@ -183,49 +279,71 @@ def assign_zone(lon: float | None, lat: float | None, polygons: Sequence[Polygon
 # ---------------------------------------------------------------------------
 
 
-def collect_trip_counts(directory: Path) -> dict[tuple[str, int], int]:
+def list_csv_files(directory: Path) -> list[Path]:
+    if not directory.exists():
+        log(f"[WARN] Directory not found: {directory}")
+        return []
+    return sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() == ".csv")
+
+
+def collect_trip_counts(
+    datasets: Sequence[Mapping[str, Path]],
+    split_files: Mapping[str, list[Path]],
+    progress: ProgressTracker,
+) -> tuple[dict[tuple[str, int], int], int]:
     counts: dict[tuple[str, int], int] = {}
-    if not directory.exists():
-        log(f"[WARN] Split directory not found: {directory}")
-        return counts
+    invalid_date_count = 0
+    for ds in datasets:
+        name = ds["name"]
+        files = split_files.get(name, [])
+        for csv_path in files:
+            for row in iter_csv_rows(csv_path, ENCODINGS):
+                if len(row) <= 8:
+                    continue
+                op_date = (row[2] or "").strip()
+                weekday = get_weekday_jp(op_date)
+                if weekday is None:
+                    invalid_date_count += 1
+                    continue
+                if weekday not in TARGET_WEEKDAYS:
+                    continue
 
-    files = sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() == ".csv")
-    for csv_path in files:
-        for row in iter_csv_rows(csv_path, ENCODINGS):
-            if len(row) <= 8:
-                continue
-            opid = (row[3] or "").strip()
-            trip_no = normalize_trip_no(row[8])
-            if not opid or trip_no is None:
-                continue
-            key = (opid, trip_no)
-            counts[key] = counts.get(key, 0) + 1
+                opid = (row[3] or "").strip()
+                trip_no = normalize_trip_no(row[8])
+                if not opid or trip_no is None:
+                    continue
+                key = (opid, trip_no)
+                counts[key] = counts.get(key, 0) + 1
+            progress.update(phase="split収集", increment_done=1)
     log(f"Collected trip keys: {len(counts)} unique pairs")
-    return counts
+    return counts, invalid_date_count
 
 
-def load_od_lookup(directory: Path) -> dict[tuple[str, int], tuple[float, float, float, float]]:
+def load_od_lookup(
+    datasets: Sequence[Mapping[str, Path]],
+    style_files: Mapping[str, list[Path]],
+    progress: ProgressTracker,
+) -> dict[tuple[str, int], tuple[float, float, float, float]]:
     lookup: dict[tuple[str, int], tuple[float, float, float, float]] = {}
-    if not directory.exists():
-        log(f"[WARN] STYLE1-3 directory not found: {directory}")
-        return lookup
-
-    files = sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() == ".csv")
-    for csv_path in files:
-        for row in iter_csv_rows(csv_path, ENCODINGS):
-            if len(row) <= 14:
-                continue
-            opid = (row[1] or "").strip()
-            trip_no = normalize_trip_no(row[7])
-            if not opid or trip_no is None:
-                continue
-            o_lon = parse_float(row[11])
-            o_lat = parse_float(row[12])
-            d_lon = parse_float(row[13])
-            d_lat = parse_float(row[14])
-            if None in (o_lon, o_lat, d_lon, d_lat):
-                continue
-            lookup[(opid, trip_no)] = (o_lon, o_lat, d_lon, d_lat)
+    for ds in datasets:
+        name = ds["name"]
+        files = style_files.get(name, [])
+        for csv_path in files:
+            for row in iter_csv_rows(csv_path, ENCODINGS):
+                if len(row) <= 14:
+                    continue
+                opid = (row[1] or "").strip()
+                trip_no = normalize_trip_no(row[7])
+                if not opid or trip_no is None:
+                    continue
+                o_lon = parse_float(row[11])
+                o_lat = parse_float(row[12])
+                d_lon = parse_float(row[13])
+                d_lat = parse_float(row[14])
+                if None in (o_lon, o_lat, d_lon, d_lat):
+                    continue
+                lookup[(opid, trip_no)] = (o_lon, o_lat, d_lon, d_lat)
+            progress.update(phase="style1-3検索", increment_done=1)
     log(f"Loaded STYLE1-3 records: {len(lookup)} keys")
     return lookup
 
@@ -244,11 +362,13 @@ def build_od_outputs(
     od_lookup: Mapping[tuple[str, int], tuple[float, float, float, float]],
     polygons: Sequence[PolygonZone],
     output_dir: Path,
+    progress: ProgressTracker,
 ) -> None:
     ensure_output_dir(output_dir)
     od_long_path = output_dir / "od_long.csv"
     od_matrix_path = output_dir / "od_matrix.csv"
     prod_attr_path = output_dir / "zone_production_attraction.csv"
+    zone_master_path = output_dir / "zone_master.csv"
 
     matrix: dict[str, dict[str, float]] = {}
     col_sums: dict[str, float] = {}
@@ -257,8 +377,6 @@ def build_od_outputs(
     unique_total = len(trip_counts)
     found_keys = 0
     missing_keys = 0
-    out_origin = 0
-    out_dest = 0
 
     with od_long_path.open("w", encoding="utf-8-sig", newline="") as f_long:
         writer = csv.writer(f_long)
@@ -278,14 +396,11 @@ def build_od_outputs(
                 o_lon, o_lat, d_lon, d_lat = coords
                 zone_o = assign_zone(o_lon, o_lat, polygons)
                 zone_d = assign_zone(d_lon, d_lat, polygons)
-                if zone_o == "OUT":
-                    out_origin += 1
-                if zone_d == "OUT":
-                    out_dest += 1
 
             zones_set.update([zone_o, zone_d])
             matrix.setdefault(zone_o, {})[zone_d] = matrix.get(zone_o, {}).get(zone_d, 0) + weight
             col_sums[zone_d] = col_sums.get(zone_d, 0) + weight
+            progress.update(phase="style1-3検索", hits=found_keys, missing=missing_keys)
 
             writer.writerow([
                 opid,
@@ -300,18 +415,29 @@ def build_od_outputs(
             ])
 
     zones = sorted(zones_set)
-    # Keep OUT and MISSING at the end for readability.
-    for special in ["MISSING", "OUT"]:
-        if special in zones:
-            zones.remove(special)
-            zones.append(special)
+    if "MISSING" in zones:
+        zones.remove("MISSING")
+        zones.append("MISSING")
+
+    zone_master: list[tuple[int, str]] = []
+    for idx, name in enumerate(zones, start=1):
+        zone_master.append((idx, name))
+    zone_to_id = {name: idx for idx, name in zone_master}
+
+    with zone_master_path.open("w", encoding="utf-8-sig", newline="") as f_master:
+        writer = csv.writer(f_master)
+        writer.writerow(["zone_id", "zone_name"])
+        for idx, name in zone_master:
+            writer.writerow([f"{idx:03d}", name])
 
     with od_matrix_path.open("w", encoding="utf-8-sig", newline="") as f_mat:
         writer = csv.writer(f_mat)
-        writer.writerow(["zone_o/zone_d", *zones])
+        header = ["zone_o_id:zone_o_name \\ zone_d_id:zone_d_name"]
+        header.extend(f"{zone_to_id[z]:03d}:{z}" for z in zones)
+        writer.writerow(header)
         for zo in zones:
             row_counts = [matrix.get(zo, {}).get(zd, 0) for zd in zones]
-            writer.writerow([zo, *row_counts])
+            writer.writerow([f"{zone_to_id[zo]:03d}:{zo}", *row_counts])
 
     with prod_attr_path.open("w", encoding="utf-8-sig", newline="") as f_pa:
         writer = csv.writer(f_pa)
@@ -323,11 +449,11 @@ def build_od_outputs(
 
     log(f"Unique (opid, trip_no): {unique_total}")
     log(f"STYLE1-3 found: {found_keys} / missing: {missing_keys}")
-    log(f"OUT count (origin): {out_origin}, (dest): {out_dest}")
     log("Outputs written:")
     log(f"  - {od_long_path}")
     log(f"  - {od_matrix_path}")
     log(f"  - {prod_attr_path}")
+    log(f"  - {zone_master_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -336,10 +462,29 @@ def build_od_outputs(
 
 
 def main() -> None:
+    split_files = {ds["name"]: list_csv_files(ds["split_dir"]) for ds in DATASETS}
+    style_files = {ds["name"]: list_csv_files(ds["style13_dir"]) for ds in DATASETS}
+
+    total_split_files = sum(len(v) for v in split_files.values())
+    total_style_files = sum(len(v) for v in style_files.values())
+    total_files = total_split_files + total_style_files + 1  # +1 for output phase
+
+    log(f"Datasets: {len(DATASETS)}")
+    log(f"Split CSV files: {total_split_files}")
+    log(f"STYLE1-3 CSV files: {total_style_files}")
+
+    progress = ProgressTracker(total_files)
     polygons = load_polygons(POLYGON_CSV)
-    trip_counts = collect_trip_counts(SPLIT_DIR)
-    od_lookup = load_od_lookup(STYLE13_DIR)
-    build_od_outputs(trip_counts, od_lookup, polygons, OUTPUT_DIR)
+
+    trip_counts, invalid_date_count = collect_trip_counts(DATASETS, split_files, progress)
+    if invalid_date_count:
+        log(f"[WARN] Invalid or unparsable dates in split files: {invalid_date_count} rows")
+
+    od_lookup = load_od_lookup(DATASETS, style_files, progress)
+    progress.update(phase="出力", increment_done=1, force=True)
+
+    build_od_outputs(trip_counts, od_lookup, polygons, OUTPUT_DIR, progress)
+    progress.finalize()
 
 
 if __name__ == "__main__":
