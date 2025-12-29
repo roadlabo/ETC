@@ -1,14 +1,14 @@
 """HOW TO USE
 ---------------
 このスクリプトは以下を自動生成します（すべて ``OUTPUT_DIR`` 配下）：
-- ``od_long.csv``: (opid, trip_no) ごとのOD座標とゾーン
+- ``od_long.csv``: (operation_date, opid, trip_no) ごとのOD座標とゾーン
 - ``od_matrix.csv``: ゾーン間マトリクス（行列ラベルは ``id:name`` 形式）
 - ``zone_master.csv``: ゾーン名に連番IDを振ったマスタ（MISSING は最後尾）
 - ``zone_production_attraction.csv``: ゾーン別の発着集計
 
 必要な入力は次の3つです：
 - ``split_dir``: 「運行IDごとのCSVが直下に大量に並ぶ」階層（例: ``split_1st/000000000001.csv`` ...）
-- ``style13_dir``: 「様式1-3のCSVが直下に複数並ぶ」階層（例: ``format1-3/20250201_1-3.csv`` ...）
+- ``style13_dir``: 「様式1-3 ZIP（data.csv を内包）が直下に並ぶ」階層（例: ``OUT1-3_20250201.zip`` ...）※CSV 展開済みでも可
 - ``zones_csv``: ``12_polygon_builder.html`` から出力したゾーンポリゴンCSV
 
 実行手順（設定 → 実行 → 出力確認）
@@ -18,15 +18,18 @@
 
 よくある間違いと対処
 - split_dir を1つ上の階層にしてしまい ``*.csv`` が0件 → 正しく「CSVが直下に並ぶ階層」を指定する
-- style13_dir が空 or 別階層 → 「様式1-3 CSVが直下にある階層」を指定する
+- style13_dir が空 or 別階層 → 「様式1-3 ZIP/CSV が直下にある階層」を指定する
 - CSVの列ズレや日付欠損 → エラーメッセージを確認し、列インデックス設定を見直す
-- 入力CSVが0件 → 実行前チェックが停止するのでパスを修正する
+- 入力CSV/ZIPが0件 → 実行前チェックが停止するのでパスを修正する
 """
 
 from __future__ import annotations
 
 import csv
+import io
+import re
 import sys
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -46,9 +49,10 @@ ZONES_CSV_PATH = Path(r"D:\path\to\zones.csv")
 # データセットの指定（split_dir と style13_dir をペアで設定）
 # split_dir は「運行IDごとのCSVが直接並ぶフォルダ」を指す
 # 例: split_1st\000000000001.csv, 000000000002.csv, ...
-# style13_dir は「様式1-3のCSVが直接並ぶフォルダ」を指す
-# 例: format1-3\20250201_1-3.csv, 20250202_1-3.csv, ...
-# ※1つ上の階層を指定しないこと（*.csv が0件になる）
+# style13_dir は「様式1-3 ZIP が直下に並ぶフォルダ」を指す（ZIP 内に data.csv がある想定）
+# 例: OUT1-3_20250201.zip, OUT1-3_20250202.zip, ...
+# ※CSV 展開済みで data.csv が直下にある場合も対応（CSV があれば CSV、なければ ZIP を自動判定）
+# ※1つ上の階層を指定しないこと（*.csv/zip が0件になる）
 DATASETS = [
     {
         "name": "R7_02",
@@ -74,6 +78,7 @@ SPLIT_COL_TRIP_NO = 8
 
 STYLE13_COL_OPID = 1
 STYLE13_COL_TRIP_NO = 7
+STYLE13_COL_OPERATION_DATE = 0
 STYLE13_COL_O_LON = 11
 STYLE13_COL_O_LAT = 12
 STYLE13_COL_D_LON = 13
@@ -82,6 +87,9 @@ STYLE13_COL_D_LAT = 14
 # (opid, trip_no) を一意にカウントする場合は True
 COUNT_UNIQUE_TRIP = True
 
+ZIP_ENCODINGS = ("cp932", "utf-8-sig", "utf-8")
+ZIP_DATE_PATTERN = re.compile(r"(\d{8})")
+
 
 # ---------------------------------------------------------------------------
 # Utility helpers
@@ -89,7 +97,7 @@ COUNT_UNIQUE_TRIP = True
 
 
 def validate_config() -> tuple[dict[str, list[Path]], dict[str, list[Path]]]:
-    """設定ファイルを実行前に検証し、ディレクトリ内CSV一覧を返す。"""
+    """設定ファイルを実行前に検証し、ディレクトリ内CSV/ZIP一覧を返す。"""
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -122,14 +130,17 @@ def validate_config() -> tuple[dict[str, list[Path]], dict[str, list[Path]]]:
             errors.append(f"{name}: style13_dir が存在しません。パスを確認してください: {style_dir}")
 
         split_list = list_csv_files(split_dir)
-        style_list = list_csv_files(style_dir)
+        style_list = list_style13_sources(style_dir)
         split_files[name] = split_list
         style_files[name] = style_list
 
         if len(split_list) == 0:
             errors.append(f"{name}: split_dirにCSVが見つかりません。1つ上の階層を指定していませんか？")
         if len(style_list) == 0:
-            errors.append(f"{name}: style13_dirにCSVが見つかりません。様式1-3のCSVが直接入っている階層を指定してください。")
+            errors.append(
+                f"{name}: style13_dirにZIP/CSVが見つかりません。"
+                "ZIP（OUT1-3_YYYYMMDD.zip）が直接入っている階層を指定してください。"
+            )
 
     if not ZONES_CSV_PATH.exists():
         warnings.append(f"ゾーンポリゴンCSVが見つかりません: {ZONES_CSV_PATH}")
@@ -241,6 +252,33 @@ def iter_csv_rows(path: Path, encodings: Sequence[str]) -> Iterator[list[str]]:
             return
         except UnicodeDecodeError:
             continue
+
+
+def read_csv_rows_from_zip_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> list[list[str]]:
+    """ZIP メンバーから CSV を読み込み、エンコーディングを順に試す。"""
+    for encoding in ZIP_ENCODINGS:
+        try:
+            with zf.open(info) as fp:
+                text = io.TextIOWrapper(fp, encoding=encoding, errors="replace", newline="")
+                return list(csv.reader(text))
+        except UnicodeDecodeError:
+            continue
+    log(f"[WARN] ZIPメンバーのデコードに失敗しました: {info.filename}")
+    return []
+
+
+def choose_zip_csv_member(zf: zipfile.ZipFile) -> zipfile.ZipInfo | None:
+    """ZIP 内の data.csv を優先し、無ければ最初の CSV を返す。"""
+    fallback: zipfile.ZipInfo | None = None
+    for info in zf.infolist():
+        if info.is_dir() or not info.filename.lower().endswith(".csv"):
+            continue
+        filename = Path(info.filename).name.lower()
+        if filename == "data.csv":
+            return info
+        if fallback is None:
+            fallback = info
+    return fallback
 
 
 def normalize_trip_no(value: str) -> int | None:
@@ -368,14 +406,33 @@ def list_csv_files(directory: Path) -> list[Path]:
     return sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() == ".csv")
 
 
+def list_style13_sources(directory: Path) -> list[Path]:
+    """様式1-3 の ZIP/CSV を列挙する。ZIP を優先し、無ければ CSV。"""
+    if not directory.exists():
+        log(f"[WARN] Directory not found: {directory}")
+        return []
+    zips = sorted(p for p in directory.glob("*.zip") if p.is_file())
+    csvs = sorted(p for p in directory.glob("*.csv") if p.is_file())
+    return zips + csvs
+
+
+def extract_zip_date(path: Path) -> str | None:
+    """ZIP 名から YYYYMMDD を抽出する。"""
+    m = ZIP_DATE_PATTERN.search(path.name)
+    if not m:
+        return None
+    return m.group(1)
+
+
 def collect_trip_counts(
     datasets: Sequence[Mapping[str, Path]],
     split_files: Mapping[str, list[Path]],
     progress: ProgressPrinter,
     total_units: int,
-) -> tuple[dict[tuple[str, int], int], int, int]:
-    """分割CSVを走査し (opid, trip_no) の頻度を集計する。"""
-    counts: dict[tuple[str, int], int] = {}
+) -> tuple[dict[tuple[str, str, int], int], set[str], int, int]:
+    """分割CSVを走査し (op_date, opid, trip_no) の頻度を集計する。"""
+    counts: dict[tuple[str, str, int], int] = {}
+    needed_dates: set[str] = set()
     invalid_date_count = 0
     processed = 0
     for ds in datasets:
@@ -393,11 +450,12 @@ def collect_trip_counts(
                 if weekday not in TARGET_WEEKDAYS:
                     continue
 
+                needed_dates.add(op_date)
                 opid = (row[SPLIT_COL_OPID] or "").strip()
                 trip_no = normalize_trip_no(row[SPLIT_COL_TRIP_NO])
                 if not opid or trip_no is None:
                     continue
-                key = (opid, trip_no)
+                key = (op_date, opid, trip_no)
                 counts[key] = counts.get(key, 0) + 1
             processed += 1
             progress.update(
@@ -415,8 +473,8 @@ def collect_trip_counts(
             hit=len(counts),
             missing=invalid_date_count,
         )
-    log(f"Collected trip keys: {len(counts)} unique pairs")
-    return counts, invalid_date_count, processed
+    log(f"Collected trip keys: {len(counts)} unique trip rows")
+    return counts, needed_dates, invalid_date_count, processed
 
 
 def load_od_lookup(
@@ -425,39 +483,99 @@ def load_od_lookup(
     progress: ProgressPrinter,
     total_units: int,
     base_progress: int,
-) -> tuple[dict[tuple[str, int], tuple[float, float, float, float]], int]:
-    """様式1-3 を走査し (opid, trip_no) → OD座標 を辞書化する。"""
-    lookup: dict[tuple[str, int], tuple[float, float, float, float]] = {}
+    needed_dates: set[str],
+    wanted_keys: set[tuple[str, str, int]],
+) -> tuple[dict[tuple[str, str, int], tuple[float, float, float, float]], int]:
+    """様式1-3 を ZIP 優先で走査し (op_date, opid, trip_no) → OD座標 を辞書化する。"""
+    lookup: dict[tuple[str, str, int], tuple[float, float, float, float]] = {}
     processed = 0
     for ds in datasets:
         name = ds["name"]
         files = style_files.get(name, [])
-        for csv_path in files:
-            for row in iter_csv_rows(csv_path, ENCODINGS):
-                if len(row) <= STYLE13_COL_D_LAT:
-                    continue
-                opid = (row[STYLE13_COL_OPID] or "").strip()
-                trip_no = normalize_trip_no(row[STYLE13_COL_TRIP_NO])
-                if not opid or trip_no is None:
-                    continue
-                o_lon = parse_float(row[STYLE13_COL_O_LON])
-                o_lat = parse_float(row[STYLE13_COL_O_LAT])
-                d_lon = parse_float(row[STYLE13_COL_D_LON])
-                d_lat = parse_float(row[STYLE13_COL_D_LAT])
-                if None in (o_lon, o_lat, d_lon, d_lat):
-                    continue
-                lookup[(opid, trip_no)] = (o_lon, o_lat, d_lon, d_lat)
+        zip_files = [p for p in files if p.suffix.lower() == ".zip"]
+        csv_files = [p for p in files if p.suffix.lower() == ".csv"]
+
+        selected_zips: list[Path] = []
+        fallback_zips: list[Path] = []
+        for zp in zip_files:
+            date_token = extract_zip_date(zp)
+            if date_token and needed_dates and date_token not in needed_dates:
+                processed += 1
+                progress.update(
+                    phase="Phase2 様式1-3(ZIP/CSV)",
+                    done=base_progress + processed,
+                    total=total_units,
+                    hit=len(lookup),
+                    missing=0,
+                )
+                continue
+            if date_token is None:
+                fallback_zips.append(zp)
+            else:
+                selected_zips.append(zp)
+
+        def _register_row(row: list[str]) -> None:
+            if len(row) <= STYLE13_COL_D_LAT:
+                return
+            op_date = (row[STYLE13_COL_OPERATION_DATE] or "").strip()
+            opid = (row[STYLE13_COL_OPID] or "").strip()
+            trip_no = normalize_trip_no(row[STYLE13_COL_TRIP_NO])
+            if not op_date or not opid or trip_no is None:
+                return
+            key = (op_date, opid, trip_no)
+            if key not in wanted_keys:
+                return
+            o_lon = parse_float(row[STYLE13_COL_O_LON])
+            o_lat = parse_float(row[STYLE13_COL_O_LAT])
+            d_lon = parse_float(row[STYLE13_COL_D_LON])
+            d_lat = parse_float(row[STYLE13_COL_D_LAT])
+            if None in (o_lon, o_lat, d_lon, d_lat):
+                return
+            lookup[key] = (o_lon, o_lat, d_lon, d_lat)
+
+        for zip_path in selected_zips + fallback_zips:
+            if not zip_path.exists():
+                log(f"[WARN] ZIP not found, skipping: {zip_path}")
+                processed += 1
+                continue
+            zip_date = extract_zip_date(zip_path)
+            if zip_date is None:
+                log(f"[WARN] ZIP名から日付を抽出できません: {zip_path.name} (needed_dates 優先でないため後順位で処理)")
+            with zipfile.ZipFile(zip_path) as zf:
+                member = choose_zip_csv_member(zf)
+                if member is None:
+                    log(f"[WARN] ZIP内にCSVが見つかりません: {zip_path}")
+                else:
+                    rows = read_csv_rows_from_zip_member(zf, member)
+                    for row in rows:
+                        _register_row(row)
             processed += 1
             progress.update(
-                phase="Phase2 様式1-3走査",
+                phase="Phase2 様式1-3(ZIP/CSV)",
                 done=base_progress + processed,
                 total=total_units,
                 hit=len(lookup),
                 missing=0,
             )
+
+        for csv_path in csv_files:
+            for row in iter_csv_rows(csv_path, ENCODINGS):
+                _register_row(row)
+            processed += 1
+            progress.update(
+                phase="Phase2 様式1-3(ZIP/CSV)",
+                done=base_progress + processed,
+                total=total_units,
+                hit=len(lookup),
+                missing=0,
+            )
+
+        if not selected_zips and not fallback_zips and not csv_files:
+            log(f"[WARN] {name}: style13_dir に処理対象のZIP/CSVがありません。")
+
     if processed == 0:
         progress.update(
-            phase="Phase2 様式1-3走査",
+            phase="Phase2 様式1-3(ZIP/CSV)",
             done=base_progress,
             total=total_units,
             hit=len(lookup),
@@ -478,8 +596,8 @@ def ensure_output_dir(path: Path) -> None:
 
 
 def build_od_outputs(
-    trip_counts: Mapping[tuple[str, int], int],
-    od_lookup: Mapping[tuple[str, int], tuple[float, float, float, float]],
+    trip_counts: Mapping[tuple[str, str, int], int],
+    od_lookup: Mapping[tuple[str, str, int], tuple[float, float, float, float]],
     polygons: Sequence[PolygonZone],
     output_dir: Path,
     progress: ProgressPrinter,
@@ -504,13 +622,24 @@ def build_od_outputs(
 
     with od_long_path.open("w", encoding="utf-8-sig", newline="") as f_long:
         writer = csv.writer(f_long)
-        writer.writerow(["opid", "trip_no", "zone_o", "zone_d", "o_lon", "o_lat", "d_lon", "d_lat", "weight"])
+        writer.writerow([
+            "operation_date",
+            "opid",
+            "trip_no",
+            "zone_o",
+            "zone_d",
+            "o_lon",
+            "o_lat",
+            "d_lon",
+            "d_lat",
+            "weight",
+        ])
 
-        for opid, trip_no in sorted(trip_counts.keys()):
-            occurrences = trip_counts[(opid, trip_no)]
+        for op_date, opid, trip_no in sorted(trip_counts.keys()):
+            occurrences = trip_counts[(op_date, opid, trip_no)]
             weight = 1 if COUNT_UNIQUE_TRIP else occurrences
 
-            coords = od_lookup.get((opid, trip_no))
+            coords = od_lookup.get((op_date, opid, trip_no))
             if coords is None:
                 missing_keys += 1
                 zone_o = zone_d = "MISSING"
@@ -534,6 +663,7 @@ def build_od_outputs(
             )
 
             writer.writerow([
+                op_date,
                 opid,
                 trip_no,
                 zone_o,
@@ -585,7 +715,7 @@ def build_od_outputs(
             attraction = col_sums.get(z, 0)
             writer.writerow([z, production, attraction])
 
-    log(f"Unique (opid, trip_no): {unique_total}")
+    log(f"Unique (op_date, opid, trip_no): {unique_total}")
     log(f"STYLE1-3 found: {found_keys} / missing: {missing_keys}")
     log("Outputs written:")
     log(f"  - {od_long_path}")
@@ -605,18 +735,21 @@ def main() -> None:
 
     total_split_files = sum(len(v) for v in split_files.values())
     total_style_files = sum(len(v) for v in style_files.values())
+    style_zip_total = sum(1 for v in style_files.values() for p in v if p.suffix.lower() == ".zip")
+    style_csv_total = sum(1 for v in style_files.values() for p in v if p.suffix.lower() == ".csv")
     total_units = total_split_files + total_style_files  # Phase1 + Phase2 分
 
     log(f"Datasets: {len(DATASETS)}")
     log(f"Split CSV files: {total_split_files}")
-    log(f"STYLE1-3 CSV files: {total_style_files}")
+    log(f"STYLE1-3 ZIP/CSV files: {total_style_files}")
+    log(f"  └ ZIP: {style_zip_total} / CSV: {style_csv_total}")
     log("=== Phase1: split 走査 → (opid, trip_no) 収集（曜日フィルタ） ===")
     log(f"対象 split CSV: {total_split_files} ファイル")
 
     progress = ProgressPrinter()
     polygons = load_polygons(ZONES_CSV_PATH)
 
-    trip_counts, invalid_date_count, processed_split = collect_trip_counts(
+    trip_counts, needed_dates, invalid_date_count, processed_split = collect_trip_counts(
         DATASETS,
         split_files,
         progress,
@@ -634,13 +767,16 @@ def main() -> None:
         log(f"[WARN] Invalid or unparsable dates in split files: {invalid_date_count} rows")
 
     log("=== Phase2: 様式1-3 走査 → OD座標ヒット ===")
-    log(f"対象 style1-3 CSV: {total_style_files} ファイル")
+    log(f"対象 style1-3 ZIP/CSV: {total_style_files} ファイル")
+    wanted_keys = set(trip_counts.keys())
     od_lookup, processed_style = load_od_lookup(
         DATASETS,
         style_files,
         progress,
         total_units=total_units,
         base_progress=processed_split,
+        needed_dates=needed_dates,
+        wanted_keys=wanted_keys,
     )
 
     log("=== Phase3: ゾーン割当 → 集計 → 出力 ===")
