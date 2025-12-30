@@ -24,12 +24,12 @@ DATASETS = [
         "name": "dataset01",
         "input_dir": Path(r"C:\\path\\to\\inputs"),      # 第1/第2混在でもOK
         "style13_dir": Path(r"C:\\path\\to\\style13"),   # 様式1-3 ZIP 群
-        "output_od_list_csv": Path("od_list_style1-3.csv"),
+        "output_od_list_name": "od_list_style1-3_dataset01.csv",
     },
 ]
 ```
 - `DATASETS` を増やせば複数フォルダを一括処理できます。
-- 出力先は `OUTPUT_DIR / output_od_list_csv` です。
+- 出力先は `OUTPUT_DIR` 配下のみ。`output_od_list_name` は **ファイル名だけ** を書きます（省略時は `od_list_style1-3_<name>.csv` を自動付与）。
 
 ## フロー概要
 1. **Phase1: 入力CSV走査（key収集）**
@@ -37,9 +37,9 @@ DATASETS = [
    - 曜日判定は `運行日` を `YYYYMMDD` として算出し、出力メタとして保持（通常はスキップしない）。`TARGET_WEEKDAYS` を指定した場合のみ除外する。
    - 集めた運行日を `needed_dates` に保持（ZIP絞り込み用）。キーごとに `src_files_count` で何個の入力CSVから現れたかを記録。
 2. **Phase2: 様式1-3 ZIP 走査**
-   - `style13_dir` 直下の `*.zip` を列挙。ファイル名から8桁の日付を抜き、`needed_dates` に無いZIPは開かない。
-   - 日付が読めないZIPは `unknown_date_zip` として最後にまわす（残件がある場合のみ読む）。
-   - ZIP内 `data.csv` をストリーミングで読み、キーが一致したらODを記録。全キーが揃えば即終了。
+   - `style13_dir` 直下の `*.zip` を列挙。ファイル名から8桁の日付を抜き、`needed_dates` に無いZIPは開かない（表示の分母も「対象ZIP数」でカウント）。
+   - 日付が読めないZIPは `unknown_date_zip` として件数をログし、残件がある場合のみ最後にまわす。
+   - ZIP内 `data.csv` をストリーミングで読み、キーが一致したらODを記録。全キーが揃えば即終了。ヒットが無くても行数とスキャン速度の心拍表示が動き続ける。
 3. **出力: 様式1-3参照ODリスト**
    - 1行=1トリップ。ODが無くても `MISSING_OD` 行として出力（後追い調査用）。
 

@@ -24,6 +24,8 @@ from typing import Iterator, Mapping, Sequence
 # CONFIG — ここだけ触ればOK
 # ============================================================================
 # 出力基準フォルダ（各データセットの od_list_* をここに作成）
+# - 出力先は必ず OUTPUT_DIR 配下
+# - dataset側では output_od_list_name（ファイル名のみ）。省略すると自動命名
 OUTPUT_DIR = Path(r"C:\path\to\od_output")
 
 # 曜日フィルタ（通常は使わない：OD_extractor側で絞る）
@@ -33,13 +35,13 @@ TARGET_WEEKDAYS: set[str] | None = None
 # データセット定義
 # - input_dir: 第1/第2どちらでもOK（ファイル名にも依存しない）
 # - style13_dir: 様式1-3 ZIP が並ぶフォルダ（ZIP 内に data.csv 想定）
-# - output_od_list_csv: 出力する「様式1-3参照ODリスト」のファイル名
-DATASETS: list[dict[str, Path]] = [
+# - output_od_list_name: 出力する「様式1-3参照ODリスト」のファイル名（省略可）
+DATASETS: list[dict[str, str | Path]] = [
     {
         "name": "dataset01",
         "input_dir": Path(r"C:\path\to\inputs"),
         "style13_dir": Path(r"C:\path\to\style13"),
-        "output_od_list_csv": Path("od_list_style1-3.csv"),
+        "output_od_list_name": "od_list_style1-3_dataset01.csv",
     },
 ]
 
@@ -258,7 +260,6 @@ def build_youshiki_lookup(
         return lookup
 
     zip_files = sorted(p for p in zip_dir.glob("*.zip") if p.is_file())
-    total = len(zip_files)
 
     dated_zips: list[tuple[Path, str]] = []
     unknown_date_zips: list[Path] = []
@@ -269,12 +270,22 @@ def build_youshiki_lookup(
         else:
             unknown_date_zips.append(zp)
 
-    def process_zip(zip_path: Path, *, done_count: int) -> None:
+    target_zips: list[tuple[Path, str]] = []
+    skipped_zips: list[tuple[Path, str]] = []
+    for zip_path, zip_date in dated_zips:
+        if needed_dates and zip_date not in needed_dates:
+            skipped_zips.append((zip_path, zip_date))
+        else:
+            target_zips.append((zip_path, zip_date))
+
+    target_total = len(target_zips)
+
+    def process_zip(zip_path: Path, *, label: str) -> None:
         nonlocal remaining
         if not zip_path.exists():
             log(f"[WARN] ZIP not found: {zip_path}")
             return
-        zip_label = f"[Phase2 ZIP] {done_count}/{total} zip={zip_path.name}"
+        zip_label = f"[Phase2 ZIP] {label} zip={zip_path.name}"
         print("\r" + f"{zip_label} ...".ljust(120), end="", flush=True)
         zip_t0 = time.perf_counter()
         last_beat = zip_t0
@@ -291,25 +302,21 @@ def build_youshiki_lookup(
             header_skipped = False
             for row in rows_iter:
                 rows_read += 1
-                if not header_skipped and row and "運行日" in row[0]:
+                cell0 = (row[0] or "").strip() if row else ""
+                if not header_skipped and cell0.startswith("運行日"):
                     header_skipped = True
-                    continue
-                header_skipped = True
-                if len(row) < 15:
-                    continue
-                op_date = (row[0] or "").strip()
-                opid = (row[1] or "").strip()
-                trip_token = (row[7] or "").strip()
-                if not (op_date and opid and trip_token.isdigit()):
-                    continue
-                key = (op_date, opid, int(trip_token))
-                if key not in remaining:
-                    continue
-                o_lon, o_lat, d_lon, d_lat = row[11], row[12], row[13], row[14]
-                lookup[key] = (o_lon, o_lat, d_lon, d_lat)
-                remaining.discard(key)
-                if not remaining:
-                    break
+                else:
+                    header_skipped = True
+                    if len(row) >= 15:
+                        op_date = (row[0] or "").strip()
+                        opid = (row[1] or "").strip()
+                        trip_token = (row[7] or "").strip()
+                        if op_date and opid and trip_token.isdigit():
+                            key = (op_date, opid, int(trip_token))
+                            if key in remaining:
+                                o_lon, o_lat, d_lon, d_lat = row[11], row[12], row[13], row[14]
+                                lookup[key] = (o_lon, o_lat, d_lon, d_lat)
+                                remaining.discard(key)
                 now = time.perf_counter()
                 if now - last_beat >= ZIP_HEARTBEAT_SEC:
                     elapsed = now - zip_t0
@@ -320,6 +327,8 @@ def build_youshiki_lookup(
                     )
                     print("\r" + msg.ljust(120), end="", flush=True)
                     last_beat = now
+                if not remaining:
+                    break
         elapsed = time.perf_counter() - zip_t0
         rate = rows_read / elapsed if elapsed > 0 else 0.0
         final_msg = (
@@ -335,20 +344,19 @@ def build_youshiki_lookup(
         print("\r" + final_msg.ljust(120), end="", flush=True)
         print()
 
-    done = 0
-    for zip_path, zip_date in dated_zips:
-        done += 1
-        if needed_dates and zip_date not in needed_dates:
-            log(f"[Phase2 ZIP] skip {done}/{total} zip={zip_path.name} (date {zip_date} not needed)")
-            continue
-        process_zip(zip_path, done_count=done)
+    for idx, (zip_path, zip_date) in enumerate(target_zips, start=1):
+        label = f"{idx}/{target_total}"
+        process_zip(zip_path, label=label)
         if not remaining:
             break
 
+    if skipped_zips:
+        log(f"[Phase2 ZIP] skipped by date: {len(skipped_zips)}")
+
     if remaining and unknown_date_zips:
+        log(f"[Phase2 ZIP] unknown date zips: {len(unknown_date_zips)}")
         for zip_path in unknown_date_zips:
-            done += 1
-            process_zip(zip_path, done_count=done)
+            process_zip(zip_path, label="unknown")
             if not remaining:
                 break
 
@@ -401,12 +409,24 @@ def build_output_rows(
 # メインフロー
 # ============================================================================
 
+_DEPRECATED_OUTPUT_LOGGED = False
 
-def process_dataset(dataset: Mapping[str, Path]) -> None:
+
+def process_dataset(dataset: Mapping[str, str | Path]) -> None:
     name = str(dataset.get("name", "(no-name)"))
     input_dir = Path(dataset["input_dir"])
     style13_dir = Path(dataset["style13_dir"])
-    output_csv = dataset.get("output_od_list_csv", Path(f"od_list_{name}.csv"))
+    output_name = dataset.get("output_od_list_name")
+    if "output_od_list_csv" in dataset:
+        global _DEPRECATED_OUTPUT_LOGGED
+        if not _DEPRECATED_OUTPUT_LOGGED:
+            log("NOTE: output_od_list_csv は廃止。OUTPUT_DIR と output_od_list_name を使用します")
+            _DEPRECATED_OUTPUT_LOGGED = True
+    output_name = output_name or f"od_list_style1-3_{name}.csv"
+    output_name = str(output_name)
+    output_name_path = Path(output_name)
+    if output_name_path.name != output_name:
+        log(f"[INFO] output_od_list_name はファイル名のみを使用します: {output_name_path.name}")
 
     log(f"=== Dataset: {name} ===")
     if not input_dir.exists():
@@ -444,7 +464,7 @@ def process_dataset(dataset: Mapping[str, Path]) -> None:
         od_lookup=od_lookup,
     )
 
-    output_path = (OUTPUT_DIR / output_csv).resolve()
+    output_path = (OUTPUT_DIR / output_name_path.name).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
