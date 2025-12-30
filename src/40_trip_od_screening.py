@@ -65,6 +65,8 @@ OUTPUT_HEADER = [
     "src_files_count",
 ]
 
+ZIP_HEARTBEAT_SEC = 0.7
+
 
 # ============================================================================
 # ログ・進捗表示
@@ -84,9 +86,9 @@ class ProgressPrinter:
         self.start_time = datetime.now()
         self.last_print = datetime.now()
 
-    def update(self, *, done: int, total: int, hit: int, missing: int) -> None:
+    def update(self, *, done: int, total: int, hit: int, missing: int, note: str = "") -> None:
         now = datetime.now()
-        if (now - self.last_print).total_seconds() < 0.5 and done != total:
+        if (now - self.last_print).total_seconds() < 0.5 and done != total and not note:
             return
         self.last_print = now
         elapsed = now - self.start_time
@@ -98,6 +100,8 @@ class ProgressPrinter:
             f"\r[{self.label}] {done}/{total} ({percent:5.1f}%) "
             f"HIT:{hit} MISSING:{missing} ETA:{eta_str}"
         )
+        if note:
+            line += f" | {note}"
         print(line, end="", flush=True)
 
     def finalize(self) -> None:
@@ -272,6 +276,13 @@ def build_youshiki_lookup(
             progress.update(done=done_count, total=total, hit=len(lookup), missing=len(remaining))
             return
         with zipfile.ZipFile(zip_path) as zf:
+            progress.update(
+                done=done_count,
+                total=total,
+                hit=len(lookup),
+                missing=len(remaining),
+                note=f"open zip={zip_path.name}",
+            )
             member = choose_zip_member(zf)
             if member is None:
                 log(f"[WARN] ZIP内にCSVがありません: {zip_path.name}")
@@ -279,7 +290,10 @@ def build_youshiki_lookup(
                 return
             rows_iter = iter_csv_rows_from_zip_member(zf, member)
             header_skipped = False
+            row_count = 0
+            last_beat = datetime.now()
             for row in rows_iter:
+                row_count += 1
                 if not header_skipped and row and "運行日" in row[0]:
                     header_skipped = True
                     continue
@@ -299,6 +313,15 @@ def build_youshiki_lookup(
                 remaining.discard(key)
                 if not remaining:
                     break
+                if (datetime.now() - last_beat).total_seconds() >= ZIP_HEARTBEAT_SEC:
+                    progress.update(
+                        done=done_count,
+                        total=total,
+                        hit=len(lookup),
+                        missing=len(remaining),
+                        note=f"zip={zip_path.name} rows={row_count:,}",
+                    )
+                    last_beat = datetime.now()
         progress.update(done=done_count, total=total, hit=len(lookup), missing=len(remaining))
 
     done = 0
