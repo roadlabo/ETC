@@ -177,10 +177,8 @@ def collect_wanted_keys(
 
     for csv_idx, csv_path in enumerate(files, start=1):
         percent = csv_idx * 100.0 / stats.csv_total if stats.csv_total else 0.0
-        print(
-            f"[Phase1 CSV] {csv_idx}/{stats.csv_total} ({percent:6.2f}%) file={csv_path.name}",
-            flush=True,
-        )
+        msg = f"[Phase1 CSV] {csv_idx}/{stats.csv_total} ({percent:6.2f}%) file={csv_path.name}"
+        print("\r" + msg.ljust(120), end="", flush=True)
         stats.csv_done += 1
         seen_in_file: set[tuple[str, str, int]] = set()
         rows_read = 0
@@ -230,6 +228,8 @@ def collect_wanted_keys(
                 elif key not in seen_in_file:
                     seen_in_file.add(key)
                     stats.meta_map[key].src_files_count += 1
+
+    print()
 
     return wanted_keys, needed_dates, stats
 
