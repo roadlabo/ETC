@@ -25,8 +25,9 @@ from typing import Iterator, Mapping, Sequence
 # 出力基準フォルダ（各データセットの od_list_* をここに作成）
 OUTPUT_DIR = Path(r"C:\path\to\od_output")
 
-# 曜日フィルタ（デフォルト: 火・水・木）
-TARGET_WEEKDAYS = {"火", "水", "木"}
+# 曜日フィルタ（通常は使わない：OD_extractor側で絞る）
+# None の場合は全曜日を出力する
+TARGET_WEEKDAYS: set[str] | None = None
 
 # データセット定義
 # - input_dir: 第1/第2どちらでもOK（ファイル名にも依存しない）
@@ -150,7 +151,7 @@ def weekday_from_date(date_text: str) -> str:
 def collect_wanted_keys(
     *,
     input_dir: Path,
-    target_weekdays: set[str],
+    target_weekdays: set[str] | None,
 ) -> tuple[set[tuple[str, str, int]], set[str], CollectStats]:
     """入力CSV群から (運行日, 運行ID, トリップ番号) のキー集合を収集する。"""
 
