@@ -68,6 +68,7 @@ OUTPUT_HEADER = [
     "src_files_count",
 ]
 
+PHASE0_HEARTBEAT_SEC = 0.5
 CSV_HEARTBEAT_SEC = 0.7
 ZIP_HEARTBEAT_SEC = 0.7
 
@@ -168,8 +169,32 @@ def collect_wanted_keys(
     stats = CollectStats()
 
     log("[Phase0] scanning CSV file list...")
-    files = sorted(p for p in input_dir.glob("*.csv") if p.is_file())
-    log(f"[Phase0] found {len(files):,} CSV files")
+    files = []
+    scanned = 0
+    csv_count = 0
+    t0 = time.perf_counter()
+    last_beat = t0
+
+    for p in input_dir.iterdir():
+        scanned += 1
+        if p.suffix.lower() == ".csv":
+            files.append(p)
+            csv_count += 1
+
+        now = time.perf_counter()
+        if now - last_beat >= PHASE0_HEARTBEAT_SEC:
+            elapsed = now - t0
+            rate = scanned / elapsed if elapsed > 0 else 0
+            msg = (
+                f"[Phase0] scanned={scanned:,} "
+                f"csv={csv_count:,} "
+                f"rate={rate:,.0f}/s"
+            )
+            print("\r" + msg.ljust(100), end="", flush=True)
+            last_beat = now
+
+    print()
+    log(f"[Phase0] found {csv_count:,} CSV files")
     stats.csv_total = len(files)
 
     for csv_idx, csv_path in enumerate(files, start=1):
