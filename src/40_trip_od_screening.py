@@ -13,6 +13,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import time
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -258,7 +259,6 @@ def build_youshiki_lookup(
 
     zip_files = sorted(p for p in zip_dir.glob("*.zip") if p.is_file())
     total = len(zip_files)
-    progress = ProgressPrinter(label="Phase2 ZIP")
 
     dated_zips: list[tuple[Path, str]] = []
     unknown_date_zips: list[Path] = []
@@ -273,27 +273,24 @@ def build_youshiki_lookup(
         nonlocal remaining
         if not zip_path.exists():
             log(f"[WARN] ZIP not found: {zip_path}")
-            progress.update(done=done_count, total=total, hit=len(lookup), missing=len(remaining))
             return
+        zip_label = f"[Phase2 ZIP] {done_count}/{total} zip={zip_path.name}"
+        print("\r" + f"{zip_label} ...".ljust(120), end="", flush=True)
+        zip_t0 = time.perf_counter()
+        last_beat = zip_t0
+        rows_read = 0
+        hit_before = len(lookup)
         with zipfile.ZipFile(zip_path) as zf:
-            progress.update(
-                done=done_count,
-                total=total,
-                hit=len(lookup),
-                missing=len(remaining),
-                note=f"open zip={zip_path.name}",
-            )
             member = choose_zip_member(zf)
             if member is None:
                 log(f"[WARN] ZIP内にCSVがありません: {zip_path.name}")
-                progress.update(done=done_count, total=total, hit=len(lookup), missing=len(remaining))
+                print("\r" + f"{zip_label} [WARN] no CSV".ljust(120), end="", flush=True)
+                print()
                 return
             rows_iter = iter_csv_rows_from_zip_member(zf, member)
             header_skipped = False
-            row_count = 0
-            last_beat = datetime.now()
             for row in rows_iter:
-                row_count += 1
+                rows_read += 1
                 if not header_skipped and row and "運行日" in row[0]:
                     header_skipped = True
                     continue
@@ -313,22 +310,36 @@ def build_youshiki_lookup(
                 remaining.discard(key)
                 if not remaining:
                     break
-                if (datetime.now() - last_beat).total_seconds() >= ZIP_HEARTBEAT_SEC:
-                    progress.update(
-                        done=done_count,
-                        total=total,
-                        hit=len(lookup),
-                        missing=len(remaining),
-                        note=f"zip={zip_path.name} rows={row_count:,}",
+                now = time.perf_counter()
+                if now - last_beat >= ZIP_HEARTBEAT_SEC:
+                    elapsed = now - zip_t0
+                    rate = rows_read / elapsed if elapsed > 0 else 0.0
+                    msg = (
+                        f"{zip_label} rows={rows_read:,} "
+                        f"rate={rate:,.0f}/s hit={len(lookup)} missing={len(remaining)}"
                     )
-                    last_beat = datetime.now()
-        progress.update(done=done_count, total=total, hit=len(lookup), missing=len(remaining))
+                    print("\r" + msg.ljust(120), end="", flush=True)
+                    last_beat = now
+        elapsed = time.perf_counter() - zip_t0
+        rate = rows_read / elapsed if elapsed > 0 else 0.0
+        final_msg = (
+            f"{zip_label} rows={rows_read:,} "
+            f"rate={rate:,.0f}/s hit={len(lookup)} missing={len(remaining)}"
+        )
+        if rows_read and elapsed >= 0:
+            elapsed_td = timedelta(seconds=int(elapsed))
+            final_msg += f" elapsed={elapsed_td}"
+        hit_added = len(lookup) - hit_before
+        if hit_added:
+            final_msg += f" hit+= {hit_added}"
+        print("\r" + final_msg.ljust(120), end="", flush=True)
+        print()
 
     done = 0
     for zip_path, zip_date in dated_zips:
         done += 1
         if needed_dates and zip_date not in needed_dates:
-            progress.update(done=done, total=total, hit=len(lookup), missing=len(remaining))
+            log(f"[Phase2 ZIP] skip {done}/{total} zip={zip_path.name} (date {zip_date} not needed)")
             continue
         process_zip(zip_path, done_count=done)
         if not remaining:
@@ -341,10 +352,6 @@ def build_youshiki_lookup(
             if not remaining:
                 break
 
-    # 未処理ZIPがあっても進捗を締める
-    if done < total:
-        progress.update(done=total, total=total, hit=len(lookup), missing=len(remaining))
-    progress.finalize()
     return lookup
 
 
