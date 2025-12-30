@@ -193,6 +193,7 @@ def collect_wanted_keys(
             print("\r" + msg.ljust(100), end="", flush=True)
             last_beat = now
 
+    print("\r" + " " * 120, end="")  # 上書き行をクリア
     print()
     log(f"[Phase0] found {csv_count:,} CSV files")
     stats.csv_total = len(files)
