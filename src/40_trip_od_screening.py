@@ -204,6 +204,7 @@ def collect_wanted_keys(
         rows_read = 0
         csv_t0 = time.perf_counter()
         last_beat = csv_t0
+        printed = False
         for row in iter_csv_rows(csv_path, FILE_ENCODINGS):
             rows_read += 1
             stats.rows_total += 1
@@ -263,7 +264,9 @@ def collect_wanted_keys(
                 )
                 print("\r" + msg.ljust(120), end="", flush=True)
                 last_beat = now
-        print()
+                printed = True
+        if printed:
+            print()
 
     return wanted_keys, needed_dates, stats
 
