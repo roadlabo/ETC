@@ -68,8 +68,6 @@ OUTPUT_HEADER = [
     "src_files_count",
 ]
 
-PHASE0_HEARTBEAT_SEC = 0.5
-CSV_HEARTBEAT_SEC = 0.7
 ZIP_HEARTBEAT_SEC = 0.7
 
 
@@ -170,41 +168,22 @@ def collect_wanted_keys(
 
     log("[Phase0] scanning CSV file list...")
     files = []
-    scanned = 0
-    csv_count = 0
-    t0 = time.perf_counter()
-    last_beat = t0
-
     for p in input_dir.iterdir():
-        scanned += 1
         if p.suffix.lower() == ".csv":
             files.append(p)
-            csv_count += 1
-
-        now = time.perf_counter()
-        if now - last_beat >= PHASE0_HEARTBEAT_SEC:
-            elapsed = now - t0
-            rate = scanned / elapsed if elapsed > 0 else 0
-            msg = (
-                f"[Phase0] scanned={scanned:,} "
-                f"csv={csv_count:,} "
-                f"rate={rate:,.0f}/s"
-            )
-            print("\r" + msg.ljust(100), end="", flush=True)
-            last_beat = now
-
-    print("\r" + " " * 120, end="")  # 上書き行をクリア
-    print()
-    log(f"[Phase0] found {csv_count:,} CSV files")
-    stats.csv_total = len(files)
+    csv_total = len(files)
+    log(f"[Phase0] found {csv_total:,} CSV files")
+    stats.csv_total = csv_total
 
     for csv_idx, csv_path in enumerate(files, start=1):
+        percent = csv_idx * 100.0 / stats.csv_total if stats.csv_total else 0.0
+        print(
+            f"[Phase1 CSV] {csv_idx}/{stats.csv_total} ({percent:6.2f}%) file={csv_path.name}",
+            flush=True,
+        )
         stats.csv_done += 1
         seen_in_file: set[tuple[str, str, int]] = set()
         rows_read = 0
-        csv_t0 = time.perf_counter()
-        last_beat = csv_t0
-        printed = False
         for row in iter_csv_rows(csv_path, FILE_ENCODINGS):
             rows_read += 1
             stats.rows_total += 1
@@ -251,22 +230,6 @@ def collect_wanted_keys(
                 elif key not in seen_in_file:
                     seen_in_file.add(key)
                     stats.meta_map[key].src_files_count += 1
-            now = time.perf_counter()
-            if now - last_beat >= CSV_HEARTBEAT_SEC:
-                elapsed = now - csv_t0
-                rate = rows_read / elapsed if elapsed > 0 else 0
-                msg = (
-                    f"[Phase1 CSV] {csv_idx}/{stats.csv_total} "
-                    f"file={csv_path.name} "
-                    f"rows={rows_read:,} "
-                    f"rate={rate:,.0f}/s "
-                    f"keys={len(wanted_keys):,}"
-                )
-                print("\r" + msg.ljust(120), end="", flush=True)
-                last_beat = now
-                printed = True
-        if printed:
-            print()
 
     return wanted_keys, needed_dates, stats
 
