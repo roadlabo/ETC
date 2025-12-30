@@ -169,7 +169,6 @@ def collect_wanted_keys(
 
     files = sorted(p for p in input_dir.glob("*.csv") if p.is_file())
     stats.csv_total = len(files)
-    progress = ProgressPrinter(label="Phase1 CSV")
 
     for csv_idx, csv_path in enumerate(files, start=1):
         stats.csv_done += 1
@@ -237,9 +236,7 @@ def collect_wanted_keys(
                 print("\r" + msg.ljust(120), end="", flush=True)
                 last_beat = now
         print()
-        progress.update(done=stats.csv_done, total=stats.csv_total, hit=len(wanted_keys), missing=0)
 
-    progress.finalize()
     return wanted_keys, needed_dates, stats
 
 
