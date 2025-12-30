@@ -1,25 +1,23 @@
 """様式1-3参照ODリスト生成スクリプト。
 
-本スクリプトは、入力フォルダに格納された「第1（運行IDごと）」または
-「第2（トリップごと）」のCSVファイルを自動判定し、(運行日, 運行ID,
-トリップ番号) のキー集合を作成します。さらに、様式1-3 ZIP をストリーミング
-参照して OD 座標を取得し、1行=1トリップの「様式1-3参照ODリスト」を出力します。
+入力フォルダにある「第1/第2 どちらのCSVでも良い」トリップデータから
+(運行日, 運行ID, トリップ番号) のキーをストリーミング抽出し、様式1-3 ZIP
+(ZIP 内 `data.csv` 想定) を運行日で絞り込んで OD 座標を引き当てます。
 
-出力した OD リストは、後段の ``OD_extractor.py`` でゾーン集計を行う前段として
-利用します。
+1行=1トリップの **「様式1-3参照ODリスト」** を出力し、後段の
+``OD_extractor.py`` でゾーン集計するための下処理を行います。
 """
 
 from __future__ import annotations
 
 import csv
 import io
-import itertools
 import re
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterable, Iterator, Mapping, Sequence
+from typing import Iterator, Mapping, Sequence
 
 # ============================================================================
 # CONFIG — ここだけ触ればOK
@@ -31,7 +29,7 @@ OUTPUT_DIR = Path(r"C:\path\to\od_output")
 TARGET_WEEKDAYS = {"火", "水", "木"}
 
 # データセット定義
-# - input_dir: 第1/第2 どちらでもOK。中身を自動判定。
+# - input_dir: 第1/第2どちらでもOK（ファイル名にも依存しない）
 # - style13_dir: 様式1-3 ZIP が並ぶフォルダ（ZIP 内に data.csv 想定）
 # - output_od_list_csv: 出力する「様式1-3参照ODリスト」のファイル名
 DATASETS: list[dict[str, Path]] = [
@@ -43,47 +41,27 @@ DATASETS: list[dict[str, Path]] = [
     },
 ]
 
-# 入力ファイルの先頭数行だけ覗いて判定する際の行数
-SNIFF_ROWS = 20
-
 # ============================================================================
 # 正規表現とヘルパ
 # ============================================================================
 
-SPLIT1_PATTERN = re.compile(r"^R\d+_\d{2}_(\d{12})\.csv$")
-TRIP2_PATTERN = re.compile(
-    r"^2nd_(?P<route>.+?)_(?P<wd>[A-Z]{3})_ID(?P<opid>\d{12})_"
-    r"(?P<date>\d{8})_t(?P<trip>\d{3})_E\d+_F\d+\.csv$"
-)
-ZIP_DATE_PATTERN = re.compile(r"OUT1-3_(\d{8})\.zip$", re.IGNORECASE)
-
-WEEKDAY_MAP = {
-    "MON": "月",
-    "TUE": "火",
-    "WED": "水",
-    "THU": "木",
-    "FRI": "金",
-    "SAT": "土",
-    "SUN": "日",
-}
+ZIP_DATE_PATTERN = re.compile(r"(\d{8})")
 
 FILE_ENCODINGS = ("utf-8-sig", "utf-8", "cp932")
 ZIP_ENCODINGS = ("cp932", "utf-8-sig", "utf-8")
 
 OUTPUT_HEADER = [
     "dataset",
-    "source_kind",
     "operation_date",
     "weekday",
     "opid",
     "trip_no",
-    "route_name",
     "o_lon",
     "o_lat",
     "d_lon",
     "d_lat",
     "status",
-    "src_file",
+    "src_files_count",
 ]
 
 
@@ -126,45 +104,27 @@ class ProgressPrinter:
 
 
 # ============================================================================
-# 入力判定とキー収集
+# 入力走査（キー収集）
 # ============================================================================
 
 
-def detect_input_kind(filename: str) -> str:
-    """ファイル名から入力種別を判定する。"""
-
-    if TRIP2_PATTERN.match(filename):
-        return "trip2"
-    if SPLIT1_PATTERN.match(filename):
-        return "split1"
-    return "unknown"
-
-
 @dataclass
-class TripMeta:
-    dataset: str
-    source_kind: str
+class KeyMeta:
     operation_date: str
     weekday: str
     opid: str
-    trip_no: str
-    route_name: str
-    src_file: str
-    status: str = field(default="PENDING")
-    o_lon: str = field(default="")
-    o_lat: str = field(default="")
-    d_lon: str = field(default="")
-    d_lat: str = field(default="")
+    trip_no: int
+    src_files_count: int = 0
 
 
 @dataclass
-class WantedResult:
-    wanted_keys: set[tuple[str, str, int]]
-    meta_map: dict[tuple[str, str, int], TripMeta]
-    skipped_meta: list[TripMeta]
-
-
-# ------------- CSV 読み込みヘルパ -------------
+class CollectStats:
+    csv_total: int = 0
+    csv_done: int = 0
+    rows_total: int = 0
+    skipped_weekday: int = 0
+    invalid_rows: int = 0
+    meta_map: dict[tuple[str, str, int], KeyMeta] = field(default_factory=dict)
 
 
 def iter_csv_rows(path: Path, encodings: Sequence[str]) -> Iterator[list[str]]:
@@ -179,44 +139,6 @@ def iter_csv_rows(path: Path, encodings: Sequence[str]) -> Iterator[list[str]]:
             continue
 
 
-def sniff_input_kind(path: Path) -> str:
-    """ファイル内容を先頭数行だけ読んで種別を推定する。"""
-
-    rows: list[list[str]] = []
-    for i, row in enumerate(iter_csv_rows(path, FILE_ENCODINGS), start=1):
-        rows.append(row)
-        if i >= SNIFF_ROWS:
-            break
-
-    if not rows:
-        return "unknown"
-
-    # 第1: 運行日=C列(2), 運行ID=D列(3), トリップ番号=I列(8) がありそうか
-    for row in rows:
-        if len(row) >= 9:
-            date_token = (row[2] or "").strip()
-            opid_token = (row[3] or "").strip()
-            trip_token = (row[8] or "").strip()
-            if (
-                len(date_token) == 8
-                and date_token.isdigit()
-                and opid_token.isdigit()
-                and trip_token
-            ):
-                return "split1"
-
-    # 第2: 1行=1トリップで列数が小さい（6〜8列程度）
-    for row in rows:
-        if 5 <= len(row) <= 10:
-            if any("ID" in cell for cell in row):
-                return "trip2"
-
-    return "unknown"
-
-
-# ------------- 曜日変換 -------------
-
-
 def weekday_from_date(date_text: str) -> str:
     try:
         dt = datetime.strptime(date_text.strip(), "%Y%m%d")
@@ -225,145 +147,66 @@ def weekday_from_date(date_text: str) -> str:
     return "月火水木金土日"[dt.weekday()]
 
 
-# ------------- wanted_keys 収集 -------------
-
-
-def collect_wanted_keys_from_input_dir(
+def collect_wanted_keys(
     *,
-    dataset_name: str,
     input_dir: Path,
     target_weekdays: set[str],
-) -> WantedResult:
+) -> tuple[set[tuple[str, str, int]], set[str], CollectStats]:
+    """入力CSV群から (運行日, 運行ID, トリップ番号) のキー集合を収集する。"""
+
     wanted_keys: set[tuple[str, str, int]] = set()
-    meta_map: dict[tuple[str, str, int], TripMeta] = {}
-    skipped_meta: list[TripMeta] = []
+    needed_dates: set[str] = set()
+    stats = CollectStats()
 
     files = sorted(p for p in input_dir.glob("*.csv") if p.is_file())
-    progress = ProgressPrinter(label=f"Phase1 {dataset_name}")
-    total = len(files)
-    done = 0
+    stats.csv_total = len(files)
+    progress = ProgressPrinter(label="Phase1 CSV")
 
     for csv_path in files:
-        done += 1
-        filename = csv_path.name
-        kind = detect_input_kind(filename)
-        if kind == "unknown":
-            kind = sniff_input_kind(csv_path)
-        if kind == "unknown":
-            log(f"[WARN] unknown file pattern, skipping: {filename}")
-            skipped_meta.append(
-                TripMeta(
-                    dataset=dataset_name,
-                    source_kind="unknown",
-                    operation_date="",
-                    weekday="",
-                    opid="",
-                    trip_no="",
-                    route_name="",
-                    src_file=filename,
-                    status="UNKNOWN_INPUT",
-                )
-            )
-            progress.update(done=done, total=total, hit=len(wanted_keys), missing=len(skipped_meta))
-            continue
-
-        if kind == "trip2":
-            m = TRIP2_PATTERN.match(filename)
-            if not m:
-                log(f"[WARN] trip2 file did not match pattern after detect: {filename}")
-                progress.update(done=done, total=total, hit=len(wanted_keys), missing=len(skipped_meta))
-                continue
-            op_date = m.group("date")
-            opid = m.group("opid")
-            trip_no = m.group("trip")
-            weekday_en = m.group("wd")
-            weekday_jp = WEEKDAY_MAP.get(weekday_en.upper(), "")
-            route_name = m.group("route")
-
-            if weekday_jp and weekday_jp not in target_weekdays:
-                skipped_meta.append(
-                    TripMeta(
-                        dataset=dataset_name,
-                        source_kind="trip2",
-                        operation_date=op_date,
-                        weekday=weekday_jp,
-                        opid=opid,
-                        trip_no=str(int(trip_no)),
-                        route_name=route_name,
-                        src_file=filename,
-                        status="SKIP_WEEKDAY",
-                    )
-                )
-                progress.update(done=done, total=total, hit=len(wanted_keys), missing=len(skipped_meta))
-                continue
-
-            key = (op_date, opid, int(trip_no))
-            if key not in wanted_keys:
-                wanted_keys.add(key)
-                meta_map[key] = TripMeta(
-                    dataset=dataset_name,
-                    source_kind="trip2",
-                    operation_date=op_date,
-                    weekday=weekday_jp or weekday_from_date(op_date),
-                    opid=opid,
-                    trip_no=str(int(trip_no)),
-                    route_name=route_name,
-                    src_file=filename,
-                )
-            progress.update(done=done, total=total, hit=len(wanted_keys), missing=len(skipped_meta))
-            continue
-
-        # split1
+        stats.csv_done += 1
         seen_in_file: set[tuple[str, str, int]] = set()
         for row in iter_csv_rows(csv_path, FILE_ENCODINGS):
+            stats.rows_total += 1
             if len(row) < 9:
+                stats.invalid_rows += 1
                 continue
             op_date = (row[2] or "").strip()
             opid = (row[3] or "").strip()
             trip_token = (row[8] or "").strip()
-            if not (op_date and opid and trip_token.isdigit() and len(opid) == 12):
+            if not (op_date and opid and trip_token):
+                stats.invalid_rows += 1
                 continue
-            weekday_jp = weekday_from_date(op_date)
-            if weekday_jp and weekday_jp not in target_weekdays:
-                key = (op_date, opid, int(trip_token))
-                if key not in seen_in_file:
-                    seen_in_file.add(key)
-                    skipped_meta.append(
-                        TripMeta(
-                            dataset=dataset_name,
-                            source_kind="split1",
-                            operation_date=op_date,
-                            weekday=weekday_jp,
-                            opid=opid,
-                            trip_no=str(int(trip_token)),
-                            route_name="",
-                            src_file=filename,
-                            status="SKIP_WEEKDAY",
-                        )
-                    )
+            weekday = weekday_from_date(op_date)
+            if not weekday:
+                stats.invalid_rows += 1
+                continue
+            if target_weekdays and weekday not in target_weekdays:
+                stats.skipped_weekday += 1
+                continue
+            if not trip_token.isdigit():
+                stats.invalid_rows += 1
                 continue
 
             trip_no = int(trip_token)
             key = (op_date, opid, trip_no)
-            if key in seen_in_file:
-                continue
-            seen_in_file.add(key)
+            needed_dates.add(op_date)
             if key not in wanted_keys:
                 wanted_keys.add(key)
-                meta_map[key] = TripMeta(
-                    dataset=dataset_name,
-                    source_kind="split1",
+                stats.meta_map[key] = KeyMeta(
                     operation_date=op_date,
-                    weekday=weekday_jp,
+                    weekday=weekday,
                     opid=opid,
-                    trip_no=str(trip_no),
-                    route_name="",
-                    src_file=filename,
+                    trip_no=trip_no,
+                    src_files_count=1,
                 )
-        progress.update(done=done, total=total, hit=len(wanted_keys), missing=len(skipped_meta))
+                seen_in_file.add(key)
+            elif key not in seen_in_file:
+                seen_in_file.add(key)
+                stats.meta_map[key].src_files_count += 1
+        progress.update(done=stats.csv_done, total=stats.csv_total, hit=len(wanted_keys), missing=0)
 
     progress.finalize()
-    return WantedResult(wanted_keys=wanted_keys, meta_map=meta_map, skipped_meta=skipped_meta)
+    return wanted_keys, needed_dates, stats
 
 
 # ============================================================================
@@ -401,56 +244,45 @@ def build_youshiki_lookup(
     *,
     zip_dir: Path,
     wanted_keys: set[tuple[str, str, int]],
+    needed_dates: set[str],
 ) -> dict[tuple[str, str, int], tuple[str, str, str, str]]:
     lookup: dict[tuple[str, str, int], tuple[str, str, str, str]] = {}
     remaining = set(wanted_keys)
-    needed_dates = {key[0] for key in wanted_keys}
+    if not remaining:
+        return lookup
 
     zip_files = sorted(p for p in zip_dir.glob("*.zip") if p.is_file())
     total = len(zip_files)
     progress = ProgressPrinter(label="Phase2 ZIP")
 
-    if not remaining:
-        progress.finalize()
-        return lookup
+    dated_zips: list[tuple[Path, str]] = []
+    unknown_date_zips: list[Path] = []
+    for zp in zip_files:
+        m = ZIP_DATE_PATTERN.search(zp.name)
+        if m:
+            dated_zips.append((zp, m.group(1)))
+        else:
+            unknown_date_zips.append(zp)
 
-    for idx, zip_path in enumerate(zip_files, start=1):
-        if not remaining:
-            break
-        date_match = ZIP_DATE_PATTERN.search(zip_path.name)
-        if date_match:
-            zip_date = date_match.group(1)
-            needed_dates = {k[0] for k in remaining}
-            if zip_date not in needed_dates:
-                progress.update(done=idx, total=total, hit=len(lookup), missing=len(remaining))
-                continue
-
+    def process_zip(zip_path: Path, *, done_count: int) -> None:
+        nonlocal remaining
         if not zip_path.exists():
             log(f"[WARN] ZIP not found: {zip_path}")
-            progress.update(done=idx, total=total, hit=len(lookup), missing=len(remaining))
-            continue
-
+            progress.update(done=done_count, total=total, hit=len(lookup), missing=len(remaining))
+            return
         with zipfile.ZipFile(zip_path) as zf:
             member = choose_zip_member(zf)
             if member is None:
                 log(f"[WARN] ZIP内にCSVがありません: {zip_path.name}")
-                progress.update(done=idx, total=total, hit=len(lookup), missing=len(remaining))
-                continue
-
+                progress.update(done=done_count, total=total, hit=len(lookup), missing=len(remaining))
+                return
             rows_iter = iter_csv_rows_from_zip_member(zf, member)
-            try:
-                first_row = next(rows_iter)
-            except StopIteration:
-                progress.update(done=idx, total=total, hit=len(lookup), missing=len(remaining))
-                continue
-
-            header = first_row if len(first_row) >= 18 and ("運行日" in first_row[0]) else None
-            if header is None:
-                data_iter: Iterable[list[str]] = itertools.chain((first_row,), rows_iter)
-            else:
-                data_iter = rows_iter
-
-            for row in data_iter:
+            header_skipped = False
+            for row in rows_iter:
+                if not header_skipped and row and "運行日" in row[0]:
+                    header_skipped = True
+                    continue
+                header_skipped = True
                 if len(row) < 15:
                     continue
                 op_date = (row[0] or "").strip()
@@ -458,8 +290,7 @@ def build_youshiki_lookup(
                 trip_token = (row[7] or "").strip()
                 if not (op_date and opid and trip_token.isdigit()):
                     continue
-                trip_no = int(trip_token)
-                key = (op_date, opid, trip_no)
+                key = (op_date, opid, int(trip_token))
                 if key not in remaining:
                     continue
                 o_lon, o_lat, d_lon, d_lat = row[11], row[12], row[13], row[14]
@@ -467,8 +298,28 @@ def build_youshiki_lookup(
                 remaining.discard(key)
                 if not remaining:
                     break
-        progress.update(done=idx, total=total, hit=len(lookup), missing=len(remaining))
+        progress.update(done=done_count, total=total, hit=len(lookup), missing=len(remaining))
 
+    done = 0
+    for zip_path, zip_date in dated_zips:
+        done += 1
+        if needed_dates and zip_date not in needed_dates:
+            progress.update(done=done, total=total, hit=len(lookup), missing=len(remaining))
+            continue
+        process_zip(zip_path, done_count=done)
+        if not remaining:
+            break
+
+    if remaining and unknown_date_zips:
+        for zip_path in unknown_date_zips:
+            done += 1
+            process_zip(zip_path, done_count=done)
+            if not remaining:
+                break
+
+    # 未処理ZIPがあっても進捗を締める
+    if done < total:
+        progress.update(done=total, total=total, hit=len(lookup), missing=len(remaining))
     progress.finalize()
     return lookup
 
@@ -482,67 +333,34 @@ def build_output_rows(
     *,
     dataset_name: str,
     wanted_keys: set[tuple[str, str, int]],
-    meta_map: Mapping[tuple[str, str, int], TripMeta],
-    skipped_meta: Sequence[TripMeta],
+    meta_map: Mapping[tuple[str, str, int], KeyMeta],
     od_lookup: Mapping[tuple[str, str, int], tuple[str, str, str, str]],
 ) -> list[list[str]]:
     rows: list[list[str]] = []
-    # Wanted keys: OK / MISSING_OD
-    for key in sorted(wanted_keys):
-        meta = meta_map.get(key)
-        if meta is None:
-            op_date, opid, trip_no = key
-            meta = TripMeta(
-                dataset=dataset_name,
-                source_kind="unknown",
-                operation_date=op_date,
-                weekday=weekday_from_date(op_date),
-                opid=opid,
-                trip_no=str(trip_no),
-                route_name="",
-                src_file="",
-            )
-        od = od_lookup.get(key)
-        if od:
-            meta.status = "OK"
-            meta.o_lon, meta.o_lat, meta.d_lon, meta.d_lat = od
-        else:
-            meta.status = "MISSING_OD"
-        rows.append(
-            [
-                meta.dataset,
-                meta.source_kind,
-                meta.operation_date,
-                meta.weekday,
-                meta.opid,
-                meta.trip_no,
-                meta.route_name,
-                meta.o_lon,
-                meta.o_lat,
-                meta.d_lon,
-                meta.d_lat,
-                meta.status,
-                meta.src_file,
-            ]
+    for op_date, opid, trip_no in sorted(wanted_keys):
+        meta = meta_map.get((op_date, opid, trip_no)) or KeyMeta(
+            operation_date=op_date,
+            weekday=weekday_from_date(op_date),
+            opid=opid,
+            trip_no=trip_no,
+            src_files_count=0,
         )
-
-    # skipped/unknown entriesも追加
-    for meta in skipped_meta:
+        od = od_lookup.get((op_date, opid, trip_no))
+        status = "OK" if od else "MISSING_OD"
+        o_lon, o_lat, d_lon, d_lat = od if od else ("", "", "", "")
         rows.append(
             [
-                meta.dataset,
-                meta.source_kind,
+                dataset_name,
                 meta.operation_date,
                 meta.weekday,
                 meta.opid,
                 meta.trip_no,
-                meta.route_name,
-                meta.o_lon,
-                meta.o_lat,
-                meta.d_lon,
-                meta.d_lat,
-                meta.status,
-                meta.src_file,
+                o_lon,
+                o_lat,
+                d_lon,
+                d_lat,
+                status,
+                meta.src_files_count,
             ]
         )
     return rows
@@ -570,28 +388,28 @@ def process_dataset(dataset: Mapping[str, Path]) -> None:
     log(f"入力フォルダ: {input_dir}")
     log(f"様式1-3フォルダ: {style13_dir}")
 
-    result = collect_wanted_keys_from_input_dir(
-        dataset_name=name,
+    wanted_keys, needed_dates, stats = collect_wanted_keys(
         input_dir=input_dir,
         target_weekdays=TARGET_WEEKDAYS,
     )
     log(
-        f"wanted_keys: {len(result.wanted_keys)} 件 (skip: {len(result.skipped_meta)} 件)"
+        f"wanted_keys: {len(wanted_keys)} 件 "
+        f"(rows={stats.rows_total}, skip_weekday={stats.skipped_weekday}, invalid={stats.invalid_rows})"
     )
 
-    if not result.wanted_keys:
+    if not wanted_keys:
         log("[WARN] 対象トリップがありません。出力のみ実行します。")
 
     od_lookup = build_youshiki_lookup(
         zip_dir=style13_dir,
-        wanted_keys=result.wanted_keys,
+        wanted_keys=wanted_keys,
+        needed_dates=needed_dates,
     )
 
     output_rows = build_output_rows(
         dataset_name=name,
-        wanted_keys=result.wanted_keys,
-        meta_map=result.meta_map,
-        skipped_meta=result.skipped_meta,
+        wanted_keys=wanted_keys,
+        meta_map=stats.meta_map,
         od_lookup=od_lookup,
     )
 
@@ -602,7 +420,6 @@ def process_dataset(dataset: Mapping[str, Path]) -> None:
         writer.writerow(OUTPUT_HEADER)
         writer.writerows(output_rows)
     log(f"出力: {output_path} ({len(output_rows)} 行)")
-
 
 
 def main() -> None:

@@ -1,9 +1,8 @@
-"""ODリスト入力専用のゾーン集計スクリプト。
+"""様式1-3参照ODリスト専用の高速ゾーン集計スクリプト。
 
-本スクリプトは 40_trip_od_screening.py が出力した「様式1-3参照ODリスト」を
-入力とし、ゾーン判定→ODマトリクス出力を行います。従来の「様式1-3 ZIP 直接参照」
-機能は ``OD_extractor_legacy.py`` に移設し、このファイルは OD リスト専用に
-シンプル化しています。
+40_trip_od_screening.py が出力する「様式1-3参照ODリスト」を入力に、
+ゾーン割当（ポリゴン or 東西南北）、OD マトリクス、発生集中量を一気に生成する。
+様式1-3 ZIP を直接読む機能は持たない（必要なら OD_extractor_legacy.py を使用）。
 """
 
 from __future__ import annotations
