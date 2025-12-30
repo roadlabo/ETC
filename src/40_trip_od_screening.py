@@ -167,7 +167,9 @@ def collect_wanted_keys(
     needed_dates: set[str] = set()
     stats = CollectStats()
 
+    log("[Phase0] scanning CSV file list...")
     files = sorted(p for p in input_dir.glob("*.csv") if p.is_file())
+    log(f"[Phase0] found {len(files):,} CSV files")
     stats.csv_total = len(files)
 
     for csv_idx, csv_path in enumerate(files, start=1):
