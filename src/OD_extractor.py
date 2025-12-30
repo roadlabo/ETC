@@ -12,7 +12,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterator, Mapping, Sequence
+from typing import Iterator, Sequence
 
 # ============================================================================
 # CONFIG — ここだけ触ればOK
@@ -39,6 +39,9 @@ TSUYAMA_CENTER_LAT = 35.07
 # 入力エンコーディング候補
 ENCODINGS = ("utf-8-sig", "utf-8", "cp932")
 
+# 進捗用の事前行数カウント（OFF 推奨）
+ENABLE_PRECOUNT = False
+
 # ============================================================================
 # ログと進捗
 # ============================================================================
@@ -57,16 +60,18 @@ class ProgressPrinter:
 
     def update(self, *, done: int, total: int, ok: int) -> None:
         now = datetime.now()
-        if (now - self.last_print).total_seconds() < 0.5 and done != total:
+        if (now - self.last_print).total_seconds() < 0.5 and (total == 0 or done != total):
             return
         self.last_print = now
         elapsed = now - self.start
         percent = (done / total * 100) if total else 0
-        eta_seconds = (elapsed.total_seconds() / done * (total - done)) if done else float("nan")
+        eta_seconds = (elapsed.total_seconds() / done * (total - done)) if done and total else float("nan")
         eta = timedelta(seconds=eta_seconds)
         eta_str = str(eta).split(".")[0] if eta == eta else "--:--:--"
+        total_str = f"{total}" if total else "?"
+        percent_str = f" ({percent:5.1f}%)" if total else ""
         line = (
-            f"\r[{self.label}] {done}/{total} ({percent:5.1f}%) "
+            f"\r[{self.label}] {done}/{total_str}{percent_str} "
             f"OK:{ok} ETA:{eta_str}"
         )
         print(line, end="", flush=True)
@@ -220,12 +225,12 @@ def build_outputs(
     missing_status: dict[str, int] = defaultdict(int)
     filtered_weekday = 0
 
-    # まず総行数を概算
-    for path in od_list_files:
-        if not path.exists():
-            continue
-        with path.open("r", encoding="utf-8-sig", errors="ignore") as f:
-            total_rows += max(sum(1 for _ in f) - 1, 0)  # header 分控除
+    if ENABLE_PRECOUNT:
+        for path in od_list_files:
+            if not path.exists():
+                continue
+            with path.open("r", encoding="utf-8-sig", errors="ignore") as f:
+                total_rows += max(sum(1 for _ in f) - 1, 0)  # header 分控除
 
     progress = ProgressPrinter(label="zone-assign")
     processed = 0
@@ -262,6 +267,8 @@ def build_outputs(
         progress.update(done=processed, total=total_rows, ok=ok_rows)
 
     progress.finalize()
+    if not ENABLE_PRECOUNT:
+        total_rows = processed
 
     zones = sorted(zones_set)
     if "MISSING" in zones:
