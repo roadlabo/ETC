@@ -254,17 +254,19 @@ def iter_csv_rows(path: Path, encodings: Sequence[str]) -> Iterator[list[str]]:
             continue
 
 
-def read_csv_rows_from_zip_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> list[list[str]]:
-    """ZIP メンバーから CSV を読み込み、エンコーディングを順に試す。"""
+def iter_csv_rows_from_zip_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> Iterator[list[str]]:
+    """ZIP メンバーから CSV をストリーミングで読み込み、エンコーディングを順に試す。"""
     for encoding in ZIP_ENCODINGS:
         try:
             with zf.open(info) as fp:
                 text = io.TextIOWrapper(fp, encoding=encoding, errors="replace", newline="")
-                return list(csv.reader(text))
+                reader = csv.reader(text)
+                for row in reader:
+                    yield row
+            return
         except UnicodeDecodeError:
             continue
     log(f"[WARN] ZIPメンバーのデコードに失敗しました: {info.filename}")
-    return []
 
 
 def choose_zip_csv_member(zf: zipfile.ZipFile) -> zipfile.ZipInfo | None:
@@ -488,8 +490,11 @@ def load_od_lookup(
 ) -> tuple[dict[tuple[str, str, int], tuple[float, float, float, float]], int]:
     """様式1-3 を ZIP 優先で走査し (op_date, opid, trip_no) → OD座標 を辞書化する。"""
     lookup: dict[tuple[str, str, int], tuple[float, float, float, float]] = {}
+    remaining: set[tuple[str, str, int]] = set(wanted_keys)
     processed = 0
     for ds in datasets:
+        if not remaining:
+            break
         name = ds["name"]
         files = style_files.get(name, [])
         zip_files = [p for p in files if p.suffix.lower() == ".zip"]
@@ -506,13 +511,15 @@ def load_od_lookup(
                     done=base_progress + processed,
                     total=total_units,
                     hit=len(lookup),
-                    missing=0,
+                    missing=len(remaining),
                 )
                 continue
             if date_token is None:
                 fallback_zips.append(zp)
             else:
                 selected_zips.append(zp)
+
+        zip_log_printed = False
 
         def _register_row(row: list[str]) -> None:
             if len(row) <= STYLE13_COL_D_LAT:
@@ -523,7 +530,7 @@ def load_od_lookup(
             if not op_date or not opid or trip_no is None:
                 return
             key = (op_date, opid, trip_no)
-            if key not in wanted_keys:
+            if key not in remaining:
                 return
             o_lon = parse_float(row[STYLE13_COL_O_LON])
             o_lat = parse_float(row[STYLE13_COL_O_LAT])
@@ -532,46 +539,84 @@ def load_od_lookup(
             if None in (o_lon, o_lat, d_lon, d_lat):
                 return
             lookup[key] = (o_lon, o_lat, d_lon, d_lat)
+            remaining.discard(key)
 
-        for zip_path in selected_zips + fallback_zips:
+        all_zip_paths = selected_zips + fallback_zips
+        total_zips = len(all_zip_paths)
+        for zip_idx, zip_path in enumerate(all_zip_paths, start=1):
+            if not remaining:
+                break
             if not zip_path.exists():
                 log(f"[WARN] ZIP not found, skipping: {zip_path}")
                 processed += 1
                 continue
+            if not zip_log_printed:
+                log(f"Reading ZIP: {zip_path.name}")
+                zip_log_printed = True
             zip_date = extract_zip_date(zip_path)
             if zip_date is None:
                 log(f"[WARN] ZIP名から日付を抽出できません: {zip_path.name} (needed_dates 優先でないため後順位で処理)")
+            progress.update(
+                phase=f"Phase2 様式1-3 読込中 (zip {zip_idx}/{total_zips})",
+                done=base_progress + processed,
+                total=total_units,
+                hit=len(lookup),
+                missing=len(remaining),
+            )
             with zipfile.ZipFile(zip_path) as zf:
                 member = choose_zip_csv_member(zf)
                 if member is None:
                     log(f"[WARN] ZIP内にCSVが見つかりません: {zip_path}")
                 else:
-                    rows = read_csv_rows_from_zip_member(zf, member)
-                    for row in rows:
+                    last_update = datetime.now()
+                    rows_processed = 0
+                    for row in iter_csv_rows_from_zip_member(zf, member):
+                        rows_processed += 1
                         _register_row(row)
+                        now = datetime.now()
+                        if (
+                            rows_processed % 50000 == 0
+                            or (now - last_update).total_seconds() >= 0.5
+                        ):
+                            progress.update(
+                                phase=f"Phase2 様式1-3 読込中 (zip {zip_idx}/{total_zips})",
+                                done=base_progress + processed,
+                                total=total_units,
+                                hit=len(lookup),
+                                missing=len(remaining),
+                            )
+                            last_update = now
+                        if not remaining:
+                            break
             processed += 1
             progress.update(
                 phase="Phase2 様式1-3(ZIP/CSV)",
                 done=base_progress + processed,
                 total=total_units,
                 hit=len(lookup),
-                missing=0,
+                missing=len(remaining),
             )
 
         for csv_path in csv_files:
+            if not remaining:
+                break
             for row in iter_csv_rows(csv_path, ENCODINGS):
                 _register_row(row)
+                if not remaining:
+                    break
             processed += 1
             progress.update(
                 phase="Phase2 様式1-3(ZIP/CSV)",
                 done=base_progress + processed,
                 total=total_units,
                 hit=len(lookup),
-                missing=0,
+                missing=len(remaining),
             )
 
         if not selected_zips and not fallback_zips and not csv_files:
             log(f"[WARN] {name}: style13_dir に処理対象のZIP/CSVがありません。")
+        if not remaining:
+            break
 
     if processed == 0:
         progress.update(
@@ -579,7 +624,7 @@ def load_od_lookup(
             done=base_progress,
             total=total_units,
             hit=len(lookup),
-            missing=0,
+            missing=len(remaining),
         )
     log(f"Loaded STYLE1-3 records: {len(lookup)} keys")
     return lookup, processed
