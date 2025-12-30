@@ -68,6 +68,7 @@ OUTPUT_HEADER = [
     "src_files_count",
 ]
 
+CSV_HEARTBEAT_SEC = 0.7
 ZIP_HEARTBEAT_SEC = 0.7
 
 
@@ -170,47 +171,72 @@ def collect_wanted_keys(
     stats.csv_total = len(files)
     progress = ProgressPrinter(label="Phase1 CSV")
 
-    for csv_path in files:
+    for csv_idx, csv_path in enumerate(files, start=1):
         stats.csv_done += 1
         seen_in_file: set[tuple[str, str, int]] = set()
+        rows_read = 0
+        csv_t0 = time.perf_counter()
+        last_beat = csv_t0
         for row in iter_csv_rows(csv_path, FILE_ENCODINGS):
+            rows_read += 1
             stats.rows_total += 1
+            op_date = ""
+            opid = ""
+            trip_token = ""
+            weekday = ""
+            valid = True
             if len(row) < 9:
                 stats.invalid_rows += 1
-                continue
-            op_date = (row[2] or "").strip()
-            opid = (row[3] or "").strip()
-            trip_token = (row[8] or "").strip()
-            if not (op_date and opid and trip_token):
-                stats.invalid_rows += 1
-                continue
-            weekday = weekday_from_date(op_date)
-            if not weekday:
-                stats.invalid_rows += 1
-                continue
-            if target_weekdays and weekday not in target_weekdays:
-                stats.skipped_weekday += 1
-                continue
-            if not trip_token.isdigit():
-                stats.invalid_rows += 1
-                continue
-
-            trip_no = int(trip_token)
-            key = (op_date, opid, trip_no)
-            needed_dates.add(op_date)
-            if key not in wanted_keys:
-                wanted_keys.add(key)
-                stats.meta_map[key] = KeyMeta(
-                    operation_date=op_date,
-                    weekday=weekday,
-                    opid=opid,
-                    trip_no=trip_no,
-                    src_files_count=1,
+                valid = False
+            else:
+                op_date = (row[2] or "").strip()
+                opid = (row[3] or "").strip()
+                trip_token = (row[8] or "").strip()
+                if not (op_date and opid and trip_token):
+                    stats.invalid_rows += 1
+                    valid = False
+                else:
+                    weekday = weekday_from_date(op_date)
+                    if not weekday:
+                        stats.invalid_rows += 1
+                        valid = False
+                    elif target_weekdays and weekday not in target_weekdays:
+                        stats.skipped_weekday += 1
+                        valid = False
+                    elif not trip_token.isdigit():
+                        stats.invalid_rows += 1
+                        valid = False
+            if valid:
+                trip_no = int(trip_token)
+                key = (op_date, opid, trip_no)
+                needed_dates.add(op_date)
+                if key not in wanted_keys:
+                    wanted_keys.add(key)
+                    stats.meta_map[key] = KeyMeta(
+                        operation_date=op_date,
+                        weekday=weekday,
+                        opid=opid,
+                        trip_no=trip_no,
+                        src_files_count=1,
+                    )
+                    seen_in_file.add(key)
+                elif key not in seen_in_file:
+                    seen_in_file.add(key)
+                    stats.meta_map[key].src_files_count += 1
+            now = time.perf_counter()
+            if now - last_beat >= CSV_HEARTBEAT_SEC:
+                elapsed = now - csv_t0
+                rate = rows_read / elapsed if elapsed > 0 else 0
+                msg = (
+                    f"[Phase1 CSV] {csv_idx}/{stats.csv_total} "
+                    f"file={csv_path.name} "
+                    f"rows={rows_read:,} "
+                    f"rate={rate:,.0f}/s "
+                    f"keys={len(wanted_keys):,}"
                 )
-                seen_in_file.add(key)
-            elif key not in seen_in_file:
-                seen_in_file.add(key)
-                stats.meta_map[key].src_files_count += 1
+                print("\r" + msg.ljust(120), end="", flush=True)
+                last_beat = now
+        print()
         progress.update(done=stats.csv_done, total=stats.csv_total, hit=len(wanted_keys), missing=0)
 
     progress.finalize()
