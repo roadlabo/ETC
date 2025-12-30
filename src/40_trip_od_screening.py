@@ -13,6 +13,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import sys
 import time
 import zipfile
 from dataclasses import dataclass, field
@@ -176,9 +177,10 @@ def collect_wanted_keys(
     stats.csv_total = csv_total
 
     for csv_idx, csv_path in enumerate(files, start=1):
-        percent = csv_idx * 100.0 / stats.csv_total if stats.csv_total else 0.0
-        msg = f"[Phase1 CSV] {csv_idx}/{stats.csv_total} ({percent:6.2f}%) file={csv_path.name}"
-        print("\r" + msg.ljust(120), end="", flush=True)
+        percent = csv_idx * 100.0 / csv_total
+        msg = f"[Phase1 CSV] {csv_idx:6d}/{csv_total}  ({percent:6.2f}%)"
+        sys.stdout.write("\r" + msg)
+        sys.stdout.flush()
         stats.csv_done += 1
         seen_in_file: set[tuple[str, str, int]] = set()
         rows_read = 0
