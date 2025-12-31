@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import csv
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -40,7 +41,7 @@ TSUYAMA_CENTER_LAT = 35.07
 ENCODINGS = ("utf-8-sig", "utf-8", "cp932")
 
 # 進捗用の事前行数カウント（OFF 推奨）
-ENABLE_PRECOUNT = False
+ENABLE_PRECOUNT = True
 
 # ============================================================================
 # ログと進捗
@@ -65,9 +66,12 @@ class ProgressPrinter:
         self.last_print = now
         elapsed = now - self.start
         percent = (done / total * 100) if total else 0
-        eta_seconds = (elapsed.total_seconds() / done * (total - done)) if done and total else float("nan")
-        eta = timedelta(seconds=eta_seconds)
-        eta_str = str(eta).split(".")[0] if eta == eta else "--:--:--"
+        eta_seconds = (elapsed.total_seconds() / done * (total - done)) if (done and total) else float("nan")
+        if math.isfinite(eta_seconds) and eta_seconds >= 0:
+            eta = timedelta(seconds=int(eta_seconds))
+            eta_str = str(eta).split(".")[0]
+        else:
+            eta_str = "--:--:--"
         total_str = f"{total}" if total else "?"
         percent_str = f" ({percent:5.1f}%)" if total else ""
         line = (
