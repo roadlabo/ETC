@@ -14,7 +14,6 @@ import csv
 import io
 import re
 import sys
-import time
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -68,9 +67,6 @@ OUTPUT_HEADER = [
     "status",
     "src_files_count",
 ]
-
-ZIP_HEARTBEAT_SEC = 0.7
-
 
 # ============================================================================
 # ログ・進捗表示
@@ -304,18 +300,15 @@ def build_youshiki_lookup(
         if not zip_path.exists():
             log(f"[WARN] ZIP not found: {zip_path}")
             return
-        zip_label = f"[Phase2 ZIP] {label} zip={zip_path.name}"
-        print("\r" + f"{zip_label} ...".ljust(120), end="", flush=True)
-        zip_t0 = time.perf_counter()
-        last_beat = zip_t0
+        zip_label = f"[Phase2 ZIP] {label} {zip_path.name}"
+        sys.stdout.write("\r" + f"{zip_label} ...")
+        sys.stdout.flush()
         rows_read = 0
-        hit_before = len(lookup)
         with zipfile.ZipFile(zip_path) as zf:
             member = choose_zip_member(zf)
             if member is None:
                 log(f"[WARN] ZIP内にCSVがありません: {zip_path.name}")
-                print("\r" + f"{zip_label} [WARN] no CSV".ljust(120), end="", flush=True)
-                print()
+                print("\r" + f"{zip_label} [WARN] no CSV")
                 return
             rows_iter = iter_csv_rows_from_zip_member(zf, member)
             header_skipped = False
@@ -336,32 +329,15 @@ def build_youshiki_lookup(
                                 o_lon, o_lat, d_lon, d_lat = row[11], row[12], row[13], row[14]
                                 lookup[key] = (o_lon, o_lat, d_lon, d_lat)
                                 remaining.discard(key)
-                now = time.perf_counter()
-                if now - last_beat >= ZIP_HEARTBEAT_SEC:
-                    elapsed = now - zip_t0
-                    rate = rows_read / elapsed if elapsed > 0 else 0.0
-                    msg = (
-                        f"{zip_label} rows={rows_read:,} "
-                        f"rate={rate:,.0f}/s hit={len(lookup)} missing={len(remaining)}"
-                    )
-                    print("\r" + msg.ljust(120), end="", flush=True)
-                    last_beat = now
                 if not remaining:
                     break
-        elapsed = time.perf_counter() - zip_t0
-        rate = rows_read / elapsed if elapsed > 0 else 0.0
         final_msg = (
-            f"{zip_label} rows={rows_read:,} "
-            f"rate={rate:,.0f}/s hit={len(lookup)} missing={len(remaining)}"
+            f"{zip_label} done "
+            f"rows={rows_read:,} "
+            f"hit={len(lookup)} "
+            f"remaining={len(remaining)}"
         )
-        if rows_read and elapsed >= 0:
-            elapsed_td = timedelta(seconds=int(elapsed))
-            final_msg += f" elapsed={elapsed_td}"
-        hit_added = len(lookup) - hit_before
-        if hit_added:
-            final_msg += f" hit+= {hit_added}"
-        print("\r" + final_msg.ljust(120), end="", flush=True)
-        print()
+        print("\r" + final_msg)
 
     for idx, (zip_path, zip_date) in enumerate(target_zips, start=1):
         label = f"{idx}/{target_total}"
