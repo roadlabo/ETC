@@ -1,3 +1,5 @@
+※この文書は旧版です。最新の手順は docs 配下の同名スクリプトMDを参照してください。
+
 # docs/30_crossroad.md — 交差点解析（31_crossroad_trip_performance.py）
 
 本章は 31_crossroad_trip_performance.py の設計思想を示す。
