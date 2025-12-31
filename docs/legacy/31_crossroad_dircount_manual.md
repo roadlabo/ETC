@@ -1,3 +1,5 @@
+※この文書は旧版です。最新の手順は docs 配下の同名スクリプトMDを参照してください。
+
 # 31_crossroad_extractor.py 説明書（Markdown版）
 
 最終更新：2025-02-17

@@ -1,3 +1,5 @@
+※この文書は旧版です。最新の手順は docs 配下の同名スクリプトMDを参照してください。
+
 # docs/40_od_analysis.md — OD分析（42_OD_extractor.py）の考え方と限界
 
 ---
