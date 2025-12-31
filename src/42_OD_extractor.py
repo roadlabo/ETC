@@ -15,6 +15,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterator, Sequence
 
+LOG_LINES: list[str] = []
+
 # ============================================================================
 # CONFIG — ここだけ触ればOK
 # ============================================================================
@@ -50,7 +52,9 @@ ENABLE_PRECOUNT = True
 
 def log(message: str) -> None:
     now = datetime.now().strftime("%H:%M:%S")
-    print(f"[{now}] {message}")
+    line = f"[{now}] {message}"
+    print(line)
+    LOG_LINES.append(line)
 
 
 class ProgressPrinter:
@@ -58,6 +62,7 @@ class ProgressPrinter:
         self.label = label
         self.start = datetime.now()
         self.last_print = self.start
+        self.last_line: str | None = None
 
     def update(self, *, done: int, total: int, ok: int) -> None:
         now = datetime.now()
@@ -79,9 +84,13 @@ class ProgressPrinter:
             f"OK:{ok} ETA:{eta_str}"
         )
         print(line, end="", flush=True)
+        # TXTログ用（\r を除いた同等内容）
+        self.last_line = line.replace("\r", "")
 
     def finalize(self) -> None:
         print()
+        if self.last_line:
+            LOG_LINES.append(self.last_line)
 
 
 # ============================================================================
@@ -228,6 +237,7 @@ def build_outputs(
     ok_rows = 0
     missing_status: dict[str, int] = defaultdict(int)
     filtered_weekday = 0
+    op_dates_set: set[str] = set()
 
     if ENABLE_PRECOUNT:
         for path in od_list_files:
@@ -267,6 +277,8 @@ def build_outputs(
 
         matrix[zone_o][zone_d] += 1
         col_sums[zone_d] += 1
+        if op_date:
+            op_dates_set.add(op_date)
         ok_rows += 1
         progress.update(done=processed, total=total_rows, ok=ok_rows)
 
@@ -282,6 +294,8 @@ def build_outputs(
     output_dir.mkdir(parents=True, exist_ok=True)
     zone_master_path = output_dir / "zone_master.csv"
     od_matrix_path = output_dir / "od_matrix.csv"
+    od_matrix_all_path = output_dir / "od_matrix(ETC_all).csv"
+    od_matrix_perday_path = output_dir / "od_matrix(ETC_perday).csv"
     prod_attr_path = output_dir / "zone_production_attraction.csv"
 
     zone_master: list[tuple[int, str]] = [(idx, name) for idx, name in enumerate(zones, start=1)]
@@ -295,11 +309,31 @@ def build_outputs(
 
     with od_matrix_path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
-        header = ["O\\D", *[f"{zone_to_id[z]:03d}:{z}" for z in zones]]
+        header = ["O\\D", *zones]
         writer.writerow(header)
         for zo in zones:
             row_counts = [matrix.get(zo, {}).get(zd, 0) for zd in zones]
-            writer.writerow([f"{zone_to_id[zo]:03d}:{zo}", *row_counts])
+            writer.writerow([zo, *row_counts])
+
+    # od_matrix(ETC_all).csv（od_matrix.csv と同一内容）
+    with od_matrix_all_path.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        header = ["O\\D", *zones]
+        writer.writerow(header)
+        for zo in zones:
+            row_counts = [matrix.get(zo, {}).get(zd, 0) for zd in zones]
+            writer.writerow([zo, *row_counts])
+
+    # od_matrix(ETC_perday).csv（総日数で割る）
+    days = len(op_dates_set)
+    denom = days if days > 0 else 1
+    with od_matrix_perday_path.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        header = ["O\\D", *zones]
+        writer.writerow(header)
+        for zo in zones:
+            row_counts = [matrix.get(zo, {}).get(zd, 0) / denom for zd in zones]
+            writer.writerow([zo, *row_counts])
 
     with prod_attr_path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
@@ -318,8 +352,23 @@ def build_outputs(
             log(f"status={status}: {count} rows")
     log("Outputs written:")
     log(f"  - {od_matrix_path}")
+    log(f"  - {od_matrix_all_path}")
+    log(f"  - {od_matrix_perday_path}")
     log(f"  - {prod_attr_path}")
     log(f"  - {zone_master_path}")
+
+    # ===== LOG TXT 出力 =====
+    log_txt_path = output_dir / "42_OD_extractor_LOG.txt"
+    op_dates = sorted(op_dates_set)
+    with log_txt_path.open("w", encoding="utf-8") as f:
+        f.write("－－－対象トリップ日－－－\n")
+        for d in op_dates:
+            f.write(f"{d}\n")
+        f.write(f"総日数: {len(op_dates)}\n")
+        f.write("－－－LOG－－－\n")
+        for line in LOG_LINES:
+            f.write(line + "\n")
+    log(f"  - {log_txt_path}")
 
 
 # ============================================================================
