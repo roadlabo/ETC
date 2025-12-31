@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import math
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -202,6 +203,10 @@ def assign_zone(lon: float | None, lat: float | None, polygons: Sequence[Polygon
     return directional_zone(lon, lat)
 
 
+def zone_label(name: str) -> str:
+    return re.sub(r"^\s*\d+\s*:\s*", "", name)
+
+
 # ============================================================================
 # ODリスト読込 & 集計
 # ============================================================================
@@ -294,12 +299,12 @@ def build_outputs(
     output_dir.mkdir(parents=True, exist_ok=True)
     zone_master_path = output_dir / "zone_master.csv"
     od_matrix_path = output_dir / "od_matrix.csv"
-    od_matrix_all_path = output_dir / "od_matrix(ETC_all).csv"
-    od_matrix_perday_path = output_dir / "od_matrix(ETC_perday).csv"
+    od_matrix_all_path = output_dir / "od_matrix(all).csv"
+    od_matrix_perday_path = output_dir / "od_matrix(perday).csv"
     prod_attr_path = output_dir / "zone_production_attraction.csv"
 
     zone_master: list[tuple[int, str]] = [(idx, name) for idx, name in enumerate(zones, start=1)]
-    zone_to_id = {name: idx for idx, name in zone_master}
+    zone_labels = [zone_label(name) for name in zones]
 
     with zone_master_path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
@@ -309,31 +314,31 @@ def build_outputs(
 
     with od_matrix_path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
-        header = ["O\\D", *zones]
+        header = ["O\\D", *zone_labels]
         writer.writerow(header)
-        for zo in zones:
+        for zo, zo_label in zip(zones, zone_labels):
             row_counts = [matrix.get(zo, {}).get(zd, 0) for zd in zones]
-            writer.writerow([zo, *row_counts])
+            writer.writerow([zo_label, *row_counts])
 
-    # od_matrix(ETC_all).csv（od_matrix.csv と同一内容）
+    # od_matrix(all).csv（od_matrix.csv と同一内容）
     with od_matrix_all_path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
-        header = ["O\\D", *zones]
+        header = ["O\\D", *zone_labels]
         writer.writerow(header)
-        for zo in zones:
+        for zo, zo_label in zip(zones, zone_labels):
             row_counts = [matrix.get(zo, {}).get(zd, 0) for zd in zones]
-            writer.writerow([zo, *row_counts])
+            writer.writerow([zo_label, *row_counts])
 
-    # od_matrix(ETC_perday).csv（総日数で割る）
+    # od_matrix(perday).csv（総日数で割る）
     days = len(op_dates_set)
     denom = days if days > 0 else 1
     with od_matrix_perday_path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
-        header = ["O\\D", *zones]
+        header = ["O\\D", *zone_labels]
         writer.writerow(header)
-        for zo in zones:
+        for zo, zo_label in zip(zones, zone_labels):
             row_counts = [matrix.get(zo, {}).get(zd, 0) / denom for zd in zones]
-            writer.writerow([zo, *row_counts])
+            writer.writerow([zo_label, *row_counts])
 
     with prod_attr_path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
@@ -350,15 +355,17 @@ def build_outputs(
     if missing_status:
         for status, count in sorted(missing_status.items()):
             log(f"status={status}: {count} rows")
+
+    log_txt_path = output_dir / "42_OD_extractor_LOG.txt"
     log("Outputs written:")
+    log(f"  - {zone_master_path}")
     log(f"  - {od_matrix_path}")
     log(f"  - {od_matrix_all_path}")
     log(f"  - {od_matrix_perday_path}")
     log(f"  - {prod_attr_path}")
-    log(f"  - {zone_master_path}")
+    log(f"  - {log_txt_path}")
 
     # ===== LOG TXT 出力 =====
-    log_txt_path = output_dir / "42_OD_extractor_LOG.txt"
     op_dates = sorted(op_dates_set)
     with log_txt_path.open("w", encoding="utf-8") as f:
         f.write("－－－対象トリップ日－－－\n")
@@ -368,7 +375,6 @@ def build_outputs(
         f.write("－－－LOG－－－\n")
         for line in LOG_LINES:
             f.write(line + "\n")
-    log(f"  - {log_txt_path}")
 
 
 # ============================================================================
