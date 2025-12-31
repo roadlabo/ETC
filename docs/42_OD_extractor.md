@@ -10,19 +10,23 @@
 - `TARGET_WEEKDAYS`: 追加の曜日フィルタ（二重チェック用）。
 - 津山市中心点 (`TSUYAMA_CENTER_LON/LAT`) は東西南北ゾーン判定で使用。
 ## 出力
-- `OUTPUT_DIR` に 3 ファイルを生成（UTF-8/BOM）。
+- `OUTPUT_DIR` に以下を生成（CSVは UTF-8/BOM）。
   - `zone_master.csv`: `zone_id,zone_name` の対応表。
-  - `od_matrix.csv`: 行=O ゾーン, 列=D ゾーンのマトリクス。
+  - `od_matrix.csv`: 行=O ゾーン, 列=D ゾーンのODマトリクス（カウント）。
+  - `od_matrix(all).csv`: `od_matrix.csv` と同内容（全期間合計）。
+  - `od_matrix(perday).csv`: `od_matrix(all).csv` を「対象トリップ日の総日数」で割った日平均。
   - `zone_production_attraction.csv`: ゾーン別発生量・集中量。
-- ログとして総行数、フィルタ件数、status 別件数を出力。
+  - `42_OD_extractor_LOG.txt`: 対象トリップ日一覧・総日数・標準出力ログ全文。
+- 重要: `od_matrix*.csv` の行/列ラベルは「ゾーン名のみ」を使用（`002:` 等の付番は出力しない）。
 ## 実行方法
 - スクリプト冒頭で `OUTPUT_DIR`, `OD_LIST_FILES`, `ZONES_CSV_PATH`, `TARGET_WEEKDAYS` を設定。
 - コマンド例: `python 42_OD_extractor.py`
-- 標準出力に進捗と生成ファイルパスを表示。
+- 標準出力に進捗と生成ファイルパスを表示し、同内容を `42_OD_extractor_LOG.txt` に保存する。
 ## 判定ロジック（重要なものだけ）
 - OD リストを走査し、`status` が欠損/未マッチでない行のみをカウント（曜日フィルタも適用）。
 - `assign_zone` でポリゴン判定し、該当なしは `MISSING` として計上。東西南北判定も実装済み。
 - ゾーン集合から ID を付与し、辞書型マトリクスを構築して CSV へ展開。
+- `od_matrix(perday).csv` は、上記のマトリクス値を「対象トリップ日の総日数」で割って算出する（総日数は LOG txt に記録）。
 ## できること / できないこと（行政向けの注意）
 - できること: 複数 OD リストの統合、ゾーン別発生/集中量算出、ゾーン定義に基づく OD マトリクスの自動生成。
 - できないこと: OD リストに無いトリップの推定、ゾーン定義の妥当性チェック、時間帯別集計。`status` が `missing_*` の行は除外されるため、欠測を「0」と見なすのは誤り。
