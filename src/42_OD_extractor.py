@@ -82,7 +82,7 @@ class ProgressPrinter:
         percent_str = f" ({percent:5.1f}%)" if total else ""
         line = (
             f"\r[{self.label}] {done}/{total_str}{percent_str} "
-            f"OK:{ok} ETA:{eta_str}"
+            f"集計対象OK:{ok} ETA:{eta_str}"
         )
         print(line, end="", flush=True)
         # TXTログ用（\r を除いた同等内容）
@@ -238,9 +238,15 @@ def build_outputs(
     col_sums: dict[str, float] = defaultdict(float)
     zones_set: set[str] = set()
 
-    total_rows = 0
-    ok_rows = 0
-    missing_status: dict[str, int] = defaultdict(int)
+    total_rows = 0  # 事前カウント結果（ENABLE_PRECOUNT 時）
+    rows_total_seen = 0
+    rows_ok_all = 0
+    rows_weekday_pass = 0
+    rows_ok_used = 0
+    rows_zone_assigned = 0
+    rows_added_to_matrix = 0
+
+    status_counts_after_weekday: dict[str, int] = defaultdict(int)
     filtered_weekday = 0
     op_dates_set: set[str] = set()
 
@@ -251,25 +257,33 @@ def build_outputs(
             with path.open("r", encoding="utf-8-sig", errors="ignore") as f:
                 total_rows += max(sum(1 for _ in f) - 1, 0)  # header 分控除
 
-    progress = ProgressPrinter(label="zone-assign")
+    progress = ProgressPrinter(label="ゾーン割当")
     processed = 0
 
     for row in iter_od_records(od_list_files):
         processed += 1
+        rows_total_seen += 1
         status = (row.get("status") or "").strip()
         weekday = (row.get("weekday") or "").strip()
         op_date = (row.get("operation_date") or "").strip()
         weekday = weekday or weekday_from_date(op_date)
 
+        if status == "OK":
+            rows_ok_all += 1
+
         if weekday and TARGET_WEEKDAYS and weekday not in TARGET_WEEKDAYS:
             filtered_weekday += 1
-            progress.update(done=processed, total=total_rows, ok=ok_rows)
+            progress.update(done=processed, total=total_rows, ok=rows_ok_used)
             continue
 
+        rows_weekday_pass += 1
+
         if status != "OK":
-            missing_status[status or "(empty)"] += 1
-            progress.update(done=processed, total=total_rows, ok=ok_rows)
+            status_counts_after_weekday[status or "(empty)"] += 1
+            progress.update(done=processed, total=total_rows, ok=rows_ok_used)
             continue
+
+        rows_ok_used += 1
 
         o_lon = parse_float(row.get("o_lon", ""))
         o_lat = parse_float(row.get("o_lat", ""))
@@ -278,14 +292,15 @@ def build_outputs(
 
         zone_o = assign_zone(o_lon, o_lat, polygons)
         zone_d = assign_zone(d_lon, d_lat, polygons)
+        rows_zone_assigned += 1
         zones_set.update([zone_o, zone_d])
 
         matrix[zone_o][zone_d] += 1
+        rows_added_to_matrix += 1
         col_sums[zone_d] += 1
         if op_date:
             op_dates_set.add(op_date)
-        ok_rows += 1
-        progress.update(done=processed, total=total_rows, ok=ok_rows)
+        progress.update(done=processed, total=total_rows, ok=rows_ok_used)
 
     progress.finalize()
     if not ENABLE_PRECOUNT:
@@ -348,13 +363,20 @@ def build_outputs(
             attraction = col_sums.get(z, 0)
             writer.writerow([z, production, attraction])
 
-    log(f"OD list rows (total): {total_rows}")
-    log(f"OD list rows (OK): {ok_rows}")
-    if filtered_weekday:
-        log(f"Weekday filtered rows: {filtered_weekday}")
-    if missing_status:
-        for status, count in sorted(missing_status.items()):
-            log(f"status={status}: {count} rows")
+    # ===== 集計サマリ（誤解防止の日本語ログ）=====
+    log("----- 集計サマリ（件数の定義を明確化）-----")
+    log(f"入力ODリスト：読み込んだ総行数（ヘッダー除く）= {rows_total_seen}")
+    log(f"status=\"OK\" の行数（曜日フィルタ前）= {rows_ok_all}  ※ExcelのCOUNTIF等と比較する場合はこの数")
+    log(f"曜日フィルタで除外された行数（TARGET_WEEKDAYS対象外）= {filtered_weekday}")
+    log(f"曜日フィルタ通過行数（statusは不問）= {rows_weekday_pass}")
+    log(f"曜日フィルタ通過後の status=\"OK\" 行数（この後の集計に使用）= {rows_ok_used}")
+    log(f"ゾーン割当を実施した行数（曜日フィルタ通過かつ status=\"OK\"）= {rows_zone_assigned}")
+    log(f"ODマトリクスに加算した行数（最終反映）= {rows_added_to_matrix}")
+    log(f"対象トリップ日数（perdayの割り算に使用）= {len(op_dates_set)} 日")
+    if status_counts_after_weekday:
+        log("【除外（曜日通過後）】status別の件数：")
+        for s, c in sorted(status_counts_after_weekday.items()):
+            log(f"  - {s}: {c} 行")
 
     log_txt_path = output_dir / "42_OD_extractor_LOG.txt"
     log("Outputs written:")
@@ -368,11 +390,16 @@ def build_outputs(
     # ===== LOG TXT 出力 =====
     op_dates = sorted(op_dates_set)
     with log_txt_path.open("w", encoding="utf-8") as f:
-        f.write("－－－対象トリップ日－－－\n")
+        f.write("－－－このログについて－－－\n")
+        f.write("・本スクリプトは、入力ODリストを読み込み、曜日フィルタ後に status=\"OK\" の行だけをOD集計に使用します。\n")
+        f.write("・Excelの COUNTIF で status=\"OK\" を数える場合は「曜日フィルタ前」のOK件数と比較してください。\n")
+        f.write("\n")
+        f.write("－－－対象トリップ日（perdayの割り算に使用）－－－\n")
         for d in op_dates:
             f.write(f"{d}\n")
-        f.write(f"総日数: {len(op_dates)}\n")
-        f.write("－－－LOG－－－\n")
+        f.write(f"総日数: {len(op_dates)} 日\n")
+        f.write("\n")
+        f.write("－－－LOG（実行ログ）－－－\n")
         for line in LOG_LINES:
             f.write(line + "\n")
 
