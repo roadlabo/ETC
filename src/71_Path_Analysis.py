@@ -1,11 +1,13 @@
 """Path analysis script for inflow-side (A/B) mesh counting and in/out heatmaps toward a center point."""
 from __future__ import annotations
 
-from datetime import datetime
 import math
 from math import cos, hypot, radians, sin
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Set, Tuple
+
+from datetime import datetime
+import time
 
 import csv
 import numpy as np
@@ -21,11 +23,18 @@ POINT_FILE = Path(r"X:\path\to\11_crossroad_sampler_output.csv")  # 単路ポイ
 # Output
 OUTPUT_DIR = Path(r"X:\path\to\output_folder")
 
+# 解析範囲（中心からの距離）
+# 2km四方 = 半径1km
+HALF_SIDE_M = 1000.0
+
 # メッシュ・距離などのパラメータ
-MESH_HALF_SIZE_M = 250.0   # ±250m → 500m四方
 CELL_SIZE_M = 10.0         # 10m メッシュ
 SAMPLE_STEP_M = 10.0       # 線分サンプリング間隔（10m）
 CROSS_THRESHOLD_M = 50.0   # 単路ポイント通過判定の距離閾値
+
+# A/B方向判定の最小一致度（cos類似度しきい値）
+# 0.70～0.90で調整。厳しくするとU（除外）が増える。
+DIR_MATCH_MIN_COS = 0.80
 
 # =========================
 # Heatmap display settings (見やすさ調整)
@@ -50,24 +59,34 @@ HEATMAP_COLOR_STOPS = [
 ]
 
 # =========================
-# Arrow / label settings (A/B矢印を潰れさせない)
+# Arrow UI
 # =========================
-# 矢じり（三角）の回転補正（環境によって90度ズレる場合の調整用）
-ARROW_HEAD_ROTATE_OFFSET_DEG = 0
-ARROW_LINE_LENGTH_M = 60.0
-ARROW_LINE_WEIGHT = 5
-# ラベルは outside 側に置き、中心からの距離と左右オフセットを指定する
-ARROW_LABEL_DISTANCE_M = 60.0
-ARROW_LABEL_SIDE_OFFSET_M = 0.0
-ARROW_LABEL_SIZE_PX = 40
-ARROW_LABEL_BORDER_PX = 3
-ARROW_LABEL_FONT_REM = 2.5
+ARROW_HEAD_ROTATE_OFFSET_DEG = -90  # まずは -90 をデフォルト。合わなければ 0/90 を調整。
+ARROW_LINE_LENGTH_M = 90.0
+ARROW_LINE_WEIGHT = 6
 ARROW_HEAD_RADIUS_PX = 18
 
+# ラベルは矢印の中央
+ARROW_LABEL_ALONG_RATIO = 0.50
+ARROW_LABEL_SIZE_PX = 44
+ARROW_LABEL_BORDER_PX = 3
+ARROW_LABEL_FONT_REM = 2.6
+
+# 中心点の強調
+CENTER_MARKER_RADIUS = 8
+CENTER_MARKER_COLOR = "black"
+CENTER_MARKER_BORDER_COLOR = "white"
+CENTER_MARKER_BORDER_WEIGHT = 3
+
 # グリッドサイズ（セル数）
-GRID_SIZE = int((2 * MESH_HALF_SIZE_M) / CELL_SIZE_M)  # 50
+GRID_SIZE = int((2 * HALF_SIDE_M) / CELL_SIZE_M)
 
 # =========================
+
+
+def write_log(log_path: Path, lines: list[str]) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 # Column indices for Youshiki1-2
@@ -149,31 +168,24 @@ def add_direction_arrow(
     azimuth_deg_to_center: float,
     color: str,
     label: str,
-    length_m: float = ARROW_LINE_LENGTH_M,
 ) -> None:
-    """
-    「外側 → 中心」へ向かう矢印を描く。
-    azimuth_deg_to_center は outside→center の方位角。
-    """
     rad = math.radians(azimuth_deg_to_center)
-
-    # outside→center 方向ベクトル（単位ベクトル）
     ux = math.sin(rad)
     uy = math.cos(rad)
 
-    # 線の始点（外側側）＝中心から逆向きに length_m
-    dx0 = -length_m * ux
-    dy0 = -length_m * uy
-    lon_start, lat_start = xy_to_lonlat(dx0, dy0, lon0, lat0)
+    # 外側点（始点）
+    sx = -ARROW_LINE_LENGTH_M * ux
+    sy = -ARROW_LINE_LENGTH_M * uy
+    lon_start, lat_start = xy_to_lonlat(sx, sy, lon0, lat0)
 
-    # 線：外側→中心
+    # 線（外側→中心）
     folium.PolyLine(
         locations=[[lat_start, lon_start], [lat0, lon0]],
         color=color,
         weight=ARROW_LINE_WEIGHT,
     ).add_to(m)
 
-    # 矢じり（三角）を中心に置く（先端＝中心）
+    # 矢じり（三角）＝中心
     folium.RegularPolygonMarker(
         location=[lat0, lon0],
         number_of_sides=3,
@@ -186,10 +198,10 @@ def add_direction_arrow(
         weight=1,
     ).add_to(m)
 
-    # ラベルは outside 側へ寄せ、必要に応じて左右オフセットする
-    label_dx = -ARROW_LABEL_DISTANCE_M * ux + (-uy) * ARROW_LABEL_SIDE_OFFSET_M
-    label_dy = -ARROW_LABEL_DISTANCE_M * uy + (ux) * ARROW_LABEL_SIDE_OFFSET_M
-    label_lon, label_lat = xy_to_lonlat(label_dx, label_dy, lon0, lat0)
+    # ラベル＝矢印の中央
+    mx = -ARROW_LINE_LENGTH_M * ARROW_LABEL_ALONG_RATIO * ux
+    my = -ARROW_LINE_LENGTH_M * ARROW_LABEL_ALONG_RATIO * uy
+    lon_mid, lat_mid = xy_to_lonlat(mx, my, lon0, lat0)
 
     label_html = (
         "<div style='"
@@ -206,7 +218,7 @@ def add_direction_arrow(
         f"{label}</div>"
     )
     folium.Marker(
-        location=[label_lat, label_lon],
+        location=[lat_mid, lon_mid],
         icon=folium.DivIcon(html=label_html),
     ).add_to(m)
 
@@ -229,10 +241,10 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
             if val <= 0:
                 continue
 
-            x_min = ix * CELL_SIZE_M - MESH_HALF_SIZE_M
-            x_max = (ix + 1) * CELL_SIZE_M - MESH_HALF_SIZE_M
-            y_min = iy * CELL_SIZE_M - MESH_HALF_SIZE_M
-            y_max = (iy + 1) * CELL_SIZE_M - MESH_HALF_SIZE_M
+            x_min = ix * CELL_SIZE_M - HALF_SIDE_M
+            x_max = (ix + 1) * CELL_SIZE_M - HALF_SIDE_M
+            y_min = iy * CELL_SIZE_M - HALF_SIDE_M
+            y_max = (iy + 1) * CELL_SIZE_M - HALF_SIDE_M
 
             lon_min, lat_min = xy_to_lonlat(x_min, y_min, lon0, lat0)
             lon_max, lat_max = xy_to_lonlat(x_max, y_max, lon0, lat0)
@@ -250,21 +262,22 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
                 weight=0,
             ).add_to(m)
 
-    # 中心点の黒丸
-    folium.CircleMarker(
-        location=[lat0, lon0],
-        radius=6,
-        color="black",
-        fill=True,
-        fill_color="black",
-        fill_opacity=1.0,
-    ).add_to(m)
-
     # A/B 方向矢印（必要なものだけ表示）
     if show_A:
         add_direction_arrow(m, lon0, lat0, dirA_deg, "red", "A")
     if show_B:
         add_direction_arrow(m, lon0, lat0, dirB_deg, "blue", "B")
+
+    # 中心点の強調（矢印の最後に重ねる）
+    folium.CircleMarker(
+        location=[lat0, lon0],
+        radius=CENTER_MARKER_RADIUS,
+        color=CENTER_MARKER_BORDER_COLOR,
+        weight=CENTER_MARKER_BORDER_WEIGHT,
+        fill=True,
+        fill_color=CENTER_MARKER_COLOR,
+        fill_opacity=1.0,
+    ).add_to(m)
 
     folium.map.LayerControl().add_to(m)
     m.get_root().html.add_child(folium.Element(f"<h3>{title}</h3>"))
@@ -335,10 +348,10 @@ def _record_samples(points: np.ndarray, visited: Set[Tuple[int, int]]):
         p2 = points[i + 1]
         for sample in _sample_segment(p1, p2, SAMPLE_STEP_M):
             x, y = float(sample[0]), float(sample[1])
-            if not (-MESH_HALF_SIZE_M <= x <= MESH_HALF_SIZE_M and -MESH_HALF_SIZE_M <= y <= MESH_HALF_SIZE_M):
+            if not (-HALF_SIDE_M <= x <= HALF_SIDE_M and -HALF_SIDE_M <= y <= HALF_SIDE_M):
                 continue
-            ix = int((x + MESH_HALF_SIZE_M) // CELL_SIZE_M)
-            iy = int((y + MESH_HALF_SIZE_M) // CELL_SIZE_M)
+            ix = int((x + HALF_SIDE_M) // CELL_SIZE_M)
+            iy = int((y + HALF_SIDE_M) // CELL_SIZE_M)
             if 0 <= ix < GRID_SIZE and 0 <= iy < GRID_SIZE:
                 visited.add((ix, iy))
 
@@ -444,7 +457,7 @@ def classify_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
 
     n = len(points_xy)
     if n < 2:
-        return "A"
+        return "U"
 
     # 交差点直前点（基本は idx）
     i0 = max(0, min(idx, n - 1))
@@ -460,13 +473,15 @@ def classify_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
         norm = float(np.hypot(v[0], v[1]))
 
     if norm == 0.0:
-        return "A"
+        return "U"
 
     v_in = v / norm  # outside→center
 
     cosA = float(np.dot(v_in, v_dir_A))
     cosB = float(np.dot(v_in, v_dir_B))
 
+    if max(cosA, cosB) < DIR_MATCH_MIN_COS:
+        return "U"
     return "A" if cosA >= cosB else "B"
 
 
@@ -503,6 +518,9 @@ def classify_out_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
 
 
 def main():
+    started_dt = datetime.now()
+    t0 = time.time()
+
     lon0, lat0, dirA_deg, dirB_deg = _read_point_file(POINT_FILE)
     stem = POINT_FILE.stem
 
@@ -516,8 +534,8 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # 解析対象ファイルを列挙
-    files = sorted(INPUT_DIR.rglob("*.csv"))
-    total = len(files)
+    target_files = sorted(INPUT_DIR.glob("*.csv"))
+    total_files = len(target_files)
 
     count_arrays = {
         "A_in": np.zeros((GRID_SIZE, GRID_SIZE), dtype=np.int64),
@@ -531,6 +549,13 @@ def main():
     total_B_in_hits = 0
     total_A_out_hits = 0
     total_B_out_hits = 0
+    total_A_hits = 0
+    total_B_hits = 0
+    total_unknown = 0
+
+    total_trips_checked = 0
+    total_trips_crossed = 0
+    total_trips_excluded = 0
 
     # in/out の遷移チェック用
     inA_to_outA = 0
@@ -539,16 +564,17 @@ def main():
     inB_to_outB = 0
 
     empty_files = 0
-    start_time = datetime.now()
 
-    for idx, csv_path in enumerate(files, start=1):
+    for idx, csv_path in enumerate(target_files, start=1):
+        total_trips_checked += 1
         points_xy = load_single_trip(csv_path, lon0, lat0)
         if len(points_xy) < 2:
             empty_files += 1
-            progress = idx / total * 100 if total else 100.0
+            total_trips_excluded += 1
+            progress = idx / total_files * 100 if total_files else 100.0
             msg = (
-                f"[71_PathAnalysis] {progress:5.1f}% ({idx}/{total}) "
-                f"empty={empty_files} started={start_time.strftime('%H:%M:%S')}"
+                f"[71_PathAnalysis] {progress:5.1f}% ({idx}/{total_files}) "
+                f"empty={empty_files} started={started_dt.strftime('%H:%M:%S')}"
             )
             print("\r" + msg, end="", flush=True)
             continue
@@ -556,22 +582,37 @@ def main():
         found, cross_info = find_crossing_point(points_xy)
         if not found or cross_info is None:
             empty_files += 1
-            progress = idx / total * 100 if total else 100.0
+            total_trips_excluded += 1
+            progress = idx / total_files * 100 if total_files else 100.0
             msg = (
-                f"[71_PathAnalysis] {progress:5.1f}% ({idx}/{total}) "
-                f"empty={empty_files} started={start_time.strftime('%H:%M:%S')}"
+                f"[71_PathAnalysis] {progress:5.1f}% ({idx}/{total_files}) "
+                f"empty={empty_files} started={started_dt.strftime('%H:%M:%S')}"
             )
             print("\r" + msg, end="", flush=True)
             continue
 
+        total_trips_crossed += 1
         in_direction = classify_direction(points_xy, cross_info, v_dir_A, v_dir_B)
+        if in_direction == "U":
+            total_unknown += 1
+            total_trips_excluded += 1
+            progress = idx / total_files * 100 if total_files else 100.0
+            msg = (
+                f"[71_PathAnalysis] {progress:5.1f}% ({idx}/{total_files}) "
+                f"empty={empty_files} started={started_dt.strftime('%H:%M:%S')}"
+            )
+            print("\r" + msg, end="", flush=True)
+            continue
+
         out_direction = classify_out_direction(points_xy, cross_info, v_dir_A, v_dir_B)
 
         # 方向別 HIT トリップ数カウンタ
         if in_direction == "A":
             total_A_in_hits += 1
+            total_A_hits += 1
         else:
             total_B_in_hits += 1
+            total_B_hits += 1
 
         if out_direction == "A":
             total_A_out_hits += 1
@@ -589,18 +630,19 @@ def main():
 
         accumulate_mesh(points_xy, cross_info, in_direction, out_direction, count_arrays)
 
-        progress = idx / total * 100 if total else 100.0
+        progress = idx / total_files * 100 if total_files else 100.0
         msg = (
-            f"[71_PathAnalysis] {progress:5.1f}% ({idx}/{total}) "
-            f"empty={empty_files} started={start_time.strftime('%H:%M:%S')}"
+            f"[71_PathAnalysis] {progress:5.1f}% ({idx}/{total_files}) "
+            f"empty={empty_files} started={started_dt.strftime('%H:%M:%S')}"
         )
         print("\r" + msg, end="", flush=True)
 
-    end_time = datetime.now()
-    elapsed = end_time - start_time
+    ended_dt = datetime.now()
+    elapsed_sec = time.time() - t0
+    elapsed = ended_dt - started_dt
     print()
-    print(f"Finished at {end_time.strftime('%H:%M:%S')} (elapsed {elapsed})")
-    print(f"Total files={total}  Valid={total - empty_files}  Empty={empty_files}")
+    print(f"Finished at {ended_dt.strftime('%H:%M:%S')} (elapsed {elapsed})")
+    print(f"Total files={total_files}  Valid={total_files - empty_files}  Empty={empty_files}")
 
     matrices = {
         "A_in": _compute_matrix(count_arrays["A_in"], total_A_in_hits),
@@ -677,6 +719,33 @@ def main():
     print("[71_PathAnalysis] 判定定義: A/B=中心へどちら側から来たか（流入側）, dir_deg=outside→center")
     print("[71_PathAnalysis] 表記: in=流入経路, out=流出経路")
     print(f"[71_PathAnalysis] 出力: {stem}_heatmap_A方向交通.html / {stem}_heatmap_B方向交通.html")
+
+    log_lines: list[str] = []
+    log_lines.append("－－－解析LOG－－－")
+    log_lines.append(f"開始時刻: {started_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+    log_lines.append(f"終了時刻: {ended_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+    log_lines.append(f"所要時間: {elapsed_sec:.1f} 秒")
+    log_lines.append("")
+    log_lines.append("－－－入力概要－－－")
+    log_lines.append(f"入力フォルダ: {INPUT_DIR}")
+    log_lines.append(f"対象CSV数: {total_files}")
+    log_lines.append(f"交差点ファイル: {POINT_FILE}")
+    log_lines.append(f"解析範囲: 2km四方（±{HALF_SIDE_M:.0f}m）")
+    log_lines.append("")
+    log_lines.append("－－－トリップ集計－－－")
+    log_lines.append(f"チェックしたトリップ数: {total_trips_checked}")
+    log_lines.append(f"交差点通過トリップ数: {total_trips_crossed}")
+    log_lines.append(f"A方向交通（流入側A）: {total_A_hits}")
+    log_lines.append(f"B方向交通（流入側B）: {total_B_hits}")
+    log_lines.append(f"方向不明で除外（U）: {total_unknown}")
+    log_lines.append(f"総除外数: {total_trips_excluded}")
+    log_lines.append("")
+    log_lines.append("－－－備考（定義）－－－")
+    log_lines.append("A/B判定は『中心にどちら側から到達したか（流入側）』で行う。")
+    log_lines.append("矢印は外側→中心の向きで描画する。in=流入経路、out=流出経路。")
+
+    write_log(OUTPUT_DIR / "LOG.txt", log_lines)
+    print("\n".join(log_lines[-12:]))  # 末尾の要約だけ標準出力に出す（冗長防止）
 
 
 if __name__ == "__main__":
