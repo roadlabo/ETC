@@ -1,5 +1,4 @@
-"""Path analysis script for direction-based mesh counting.
-"""
+"""Path analysis script for inflow-side (A/B) mesh counting and in/out heatmaps toward a center point."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -23,7 +22,7 @@ POINT_FILE = Path(r"X:\path\to\11_crossroad_sampler_output.csv")  # 単路ポイ
 OUTPUT_DIR = Path(r"X:\path\to\output_folder")
 
 # メッシュ・距離などのパラメータ
-MESH_HALF_SIZE_M = 1000.0  # ±1000m → 2km四方
+MESH_HALF_SIZE_M = 250.0   # ±250m → 500m四方
 CELL_SIZE_M = 10.0         # 10m メッシュ
 SAMPLE_STEP_M = 10.0       # 線分サンプリング間隔（10m）
 CROSS_THRESHOLD_M = 50.0   # 単路ポイント通過判定の距離閾値
@@ -55,9 +54,18 @@ HEATMAP_COLOR_STOPS = [
 # =========================
 # 矢じり（三角）の回転補正（環境によって90度ズレる場合の調整用）
 ARROW_HEAD_ROTATE_OFFSET_DEG = 0
+ARROW_LINE_LENGTH_M = 60.0
+ARROW_LINE_WEIGHT = 5
+# ラベルは outside 側に置き、中心からの距離と左右オフセットを指定する
+ARROW_LABEL_DISTANCE_M = 60.0
+ARROW_LABEL_SIDE_OFFSET_M = 0.0
+ARROW_LABEL_SIZE_PX = 40
+ARROW_LABEL_BORDER_PX = 3
+ARROW_LABEL_FONT_REM = 2.5
+ARROW_HEAD_RADIUS_PX = 18
 
 # グリッドサイズ（セル数）
-GRID_SIZE = int((2 * MESH_HALF_SIZE_M) / CELL_SIZE_M)  # 200
+GRID_SIZE = int((2 * MESH_HALF_SIZE_M) / CELL_SIZE_M)  # 50
 
 # =========================
 
@@ -141,7 +149,7 @@ def add_direction_arrow(
     azimuth_deg_to_center: float,
     color: str,
     label: str,
-    length_m: float = 60.0,
+    length_m: float = ARROW_LINE_LENGTH_M,
 ) -> None:
     """
     「外側 → 中心」へ向かう矢印を描く。
@@ -162,14 +170,14 @@ def add_direction_arrow(
     folium.PolyLine(
         locations=[[lat_start, lon_start], [lat0, lon0]],
         color=color,
-        weight=5,
+        weight=ARROW_LINE_WEIGHT,
     ).add_to(m)
 
     # 矢じり（三角）を中心に置く（先端＝中心）
     folium.RegularPolygonMarker(
         location=[lat0, lon0],
         number_of_sides=3,
-        radius=18,
+        radius=ARROW_HEAD_RADIUS_PX,
         rotation=azimuth_deg_to_center + ARROW_HEAD_ROTATE_OFFSET_DEG,
         color=color,
         fill=True,
@@ -178,23 +186,27 @@ def add_direction_arrow(
         weight=1,
     ).add_to(m)
 
-    # ラベルは外側寄り（始点付近）に置く
+    # ラベルは outside 側へ寄せ、必要に応じて左右オフセットする
+    label_dx = -ARROW_LABEL_DISTANCE_M * ux + (-uy) * ARROW_LABEL_SIDE_OFFSET_M
+    label_dy = -ARROW_LABEL_DISTANCE_M * uy + (ux) * ARROW_LABEL_SIDE_OFFSET_M
+    label_lon, label_lat = xy_to_lonlat(label_dx, label_dy, lon0, lat0)
+
     label_html = (
         "<div style='"
         "display:flex;align-items:center;justify-content:center;"
-        "width:40px;height:40px;"
+        f"width:{ARROW_LABEL_SIZE_PX}px;height:{ARROW_LABEL_SIZE_PX}px;"
         "border-radius:50%;"
-        f"border:3px solid {color};"
+        f"border:{ARROW_LABEL_BORDER_PX}px solid {color};"
         "background-color:white;"
         "font-weight:bold;"
         f"color:{color};"
-        "font-size:2.5rem;"
+        f"font-size:{ARROW_LABEL_FONT_REM}rem;"
         "text-shadow:0 0 4px white;"
         "'>"
         f"{label}</div>"
     )
     folium.Marker(
-        location=[lat_start, lon_start],
+        location=[label_lat, label_lon],
         icon=folium.DivIcon(html=label_html),
     ).add_to(m)
 
