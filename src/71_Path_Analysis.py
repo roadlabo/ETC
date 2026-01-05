@@ -11,7 +11,6 @@ from typing import Dict, Iterable, Optional, Set, Tuple
 import csv
 import numpy as np
 import folium
-from folium.plugins import PolyLineTextPath
 
 # =========================
 # User-editable constants
@@ -54,13 +53,8 @@ HEATMAP_COLOR_STOPS = [
 # =========================
 # Arrow / label settings (A/B矢印を潰れさせない)
 # =========================
-ARROW_LINE_LENGTH_M = 70.0       # 矢印の線の長さ
-ARROW_LABEL_DISTANCE_M = 95.0    # ラベルを置く距離（線より少し先に置くと潰れにくい）
-ARROW_LINE_WEIGHT = 7            # 太さ
-ARROW_HEAD_FONT_PX = 22          # 矢じり(▶)の大きさ
-ARROW_LABEL_SIZE_PX = 42         # A/B白丸のサイズ
-ARROW_LABEL_FONT_REM = 2.6       # A/B文字サイズ
-ARROW_LABEL_SIDE_OFFSET_M = 18.0 # A/Bラベルを左右に少しずらして重なり回避
+# 矢じり（三角）の回転補正（環境によって90度ズレる場合の調整用）
+ARROW_HEAD_ROTATE_OFFSET_DEG = 0
 
 # グリッドサイズ（セル数）
 GRID_SIZE = int((2 * MESH_HALF_SIZE_M) / CELL_SIZE_M)  # 200
@@ -144,76 +138,71 @@ def add_direction_arrow(
     m: folium.Map,
     lon0: float,
     lat0: float,
-    azimuth_deg: float,
+    azimuth_deg_to_center: float,
     color: str,
     label: str,
+    length_m: float = 60.0,
 ) -> None:
     """
-    中心から azimuth_deg 方向に矢印付きの線を描き、終点付近に白丸背景付きのラベルを表示する。
+    「外側 → 中心」へ向かう矢印を描く。
+    azimuth_deg_to_center は outside→center の方位角。
     """
-    rad = math.radians(azimuth_deg)
-    dir_vec = np.array([math.sin(rad), math.cos(rad)])
-    perp = np.array([dir_vec[1], -dir_vec[0]])  # 左向きの直交ベクトル
+    rad = math.radians(azimuth_deg_to_center)
 
-    offset_sign = 1.0 if label.upper() == "A" else -1.0
-    offset_vec = perp * ARROW_LABEL_SIDE_OFFSET_M * offset_sign
+    # outside→center 方向ベクトル（単位ベクトル）
+    ux = math.sin(rad)
+    uy = math.cos(rad)
 
-    line_end = dir_vec * ARROW_LINE_LENGTH_M + offset_vec
-    label_pos = dir_vec * ARROW_LABEL_DISTANCE_M + offset_vec
+    # 線の始点（外側側）＝中心から逆向きに length_m
+    dx0 = -length_m * ux
+    dy0 = -length_m * uy
+    lon_start, lat_start = xy_to_lonlat(dx0, dy0, lon0, lat0)
 
-    lon_line_end, lat_line_end = xy_to_lonlat(line_end[0], line_end[1], lon0, lat0)
-    lon_label, lat_label = xy_to_lonlat(label_pos[0], label_pos[1], lon0, lat0)
-    lon_offset, lat_offset = xy_to_lonlat(offset_vec[0], offset_vec[1], lon0, lat0)
-
-    # 基本の線（ベクトル本体）
-    line = folium.PolyLine(
-        locations=[
-            [lat_offset, lon_offset],
-            [lat_line_end, lon_line_end],
-        ],
+    # 線：外側→中心
+    folium.PolyLine(
+        locations=[[lat_start, lon_start], [lat0, lon0]],
         color=color,
-        weight=ARROW_LINE_WEIGHT,
+        weight=5,
     ).add_to(m)
 
-    # 線上に矢じり（▶）を1つだけ描く
-    PolyLineTextPath(
-        line,
-        "▶",                 # 矢じりの文字
-        repeat=False,        # 繰り返さない
-        offset=18,           # 矢印の位置（線の終点寄りに調整）
-        attributes={
-            "fill": color,
-            "stroke": color,
-            "font-weight": "bold",
-            "font-size": f"{ARROW_HEAD_FONT_PX}px",
-        },
+    # 矢じり（三角）を中心に置く（先端＝中心）
+    folium.RegularPolygonMarker(
+        location=[lat0, lon0],
+        number_of_sides=3,
+        radius=18,
+        rotation=azimuth_deg_to_center + ARROW_HEAD_ROTATE_OFFSET_DEG,
+        color=color,
+        fill=True,
+        fill_color=color,
+        fill_opacity=1.0,
+        weight=1,
     ).add_to(m)
 
-    # ラベル（A / B）の白丸アイコン
+    # ラベルは外側寄り（始点付近）に置く
     label_html = (
         "<div style='"
         "display:flex;align-items:center;justify-content:center;"
-        f"width:{ARROW_LABEL_SIZE_PX}px;height:{ARROW_LABEL_SIZE_PX}px;"
+        "width:40px;height:40px;"
         "border-radius:50%;"
         f"border:3px solid {color};"
         "background-color:white;"
         "font-weight:bold;"
         f"color:{color};"
-        f"font-size:{ARROW_LABEL_FONT_REM}rem;"
+        "font-size:2.5rem;"
         "text-shadow:0 0 4px white;"
         "'>"
         f"{label}</div>"
     )
-
     folium.Marker(
-        location=[lat_label, lon_label],
+        location=[lat_start, lon_start],
         icon=folium.DivIcon(html=label_html),
     ).add_to(m)
 
 
 def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
                     filename: str, title: str,
-                    dirA_deg: float, dirB_deg: float) -> None:
+                    dirA_deg: float, dirB_deg: float,
+                    show_A: bool = True, show_B: bool = True) -> None:
     """
     GRID_SIZE×GRID_SIZE のマトリクスを 10m メッシュの矩形として描画し、
     中心黒丸と A/B 方向矢印を最前面に重ねる。
@@ -259,9 +248,11 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
         fill_opacity=1.0,
     ).add_to(m)
 
-    # A方向（赤矢印）、B方向（青矢印）を最前面に追加
-    add_direction_arrow(m, lon0, lat0, dirA_deg, "red", "A")
-    add_direction_arrow(m, lon0, lat0, dirB_deg, "blue", "B")
+    # A/B 方向矢印（必要なものだけ表示）
+    if show_A:
+        add_direction_arrow(m, lon0, lat0, dirA_deg, "red", "A")
+    if show_B:
+        add_direction_arrow(m, lon0, lat0, dirB_deg, "blue", "B")
 
     folium.map.LayerControl().add_to(m)
     m.get_root().html.add_child(folium.Element(f"<h3>{title}</h3>"))
@@ -428,59 +419,74 @@ def _compute_matrix(count_array: np.ndarray, denom: int) -> np.ndarray:
     return np.rint(ratio * 100.0).astype(int)
 
 
-def _compute_cross_vector(points_xy: np.ndarray, cross_info: Dict[str, float]) -> Optional[np.ndarray]:
+def classify_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
+                       v_dir_A: np.ndarray, v_dir_B: np.ndarray) -> str:
     """
-    交差位置付近の進行ベクトル（正規化）を計算する。取れない場合は None。
+    A/B は「中心ポイントにどちら側から来たか（流入側）」で判定する。
+    判定ベクトルは「交差点直前点 → 仮想通過点（cross_point）」(outside→center)。
+    v_dir_A / v_dir_B も outside→center の基準ベクトル。
     """
     idx = int(cross_info["index"])
+    cross_x, cross_y = cross_info["point"]
+    cross_point = np.array([cross_x, cross_y], dtype=float)
+
     n = len(points_xy)
-
     if n < 2:
-        return None
-
-    if 0 < idx < n - 2:
-        p_prev = points_xy[idx - 1]
-        p_next = points_xy[idx + 2]
-        v = p_next - p_prev
-    else:
-        p1 = points_xy[idx]
-        p2 = points_xy[min(idx + 1, n - 1)]
-        v = p2 - p1
-
-    norm = float(np.hypot(v[0], v[1]))
-    if norm == 0.0:
-        return None
-
-    return v / norm
-
-
-def classify_in_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
-                          v_dir_A: np.ndarray, v_dir_B: np.ndarray) -> str:
-    """
-    流入方向（外側→中心）を判定する。比較用ベクトルは反転して使用。
-    """
-    v_norm = _compute_cross_vector(points_xy, cross_info)
-    if v_norm is None:
         return "A"
 
-    v_trip = -v_norm  # 流入なので反転
-    cosA = float(np.dot(v_trip, v_dir_A))
-    cosB = float(np.dot(v_trip, v_dir_B))
+    # 交差点直前点（基本は idx）
+    i0 = max(0, min(idx, n - 1))
+    p0 = points_xy[i0]
+
+    v = cross_point - p0
+    norm = float(np.hypot(v[0], v[1]))
+
+    # もし直前点がほぼ通過点と同じなら、さらに一つ前へ
+    if norm == 0.0 and i0 - 1 >= 0:
+        p0 = points_xy[i0 - 1]
+        v = cross_point - p0
+        norm = float(np.hypot(v[0], v[1]))
+
+    if norm == 0.0:
+        return "A"
+
+    v_in = v / norm  # outside→center
+
+    cosA = float(np.dot(v_in, v_dir_A))
+    cosB = float(np.dot(v_in, v_dir_B))
+
     return "A" if cosA >= cosB else "B"
 
 
 def classify_out_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
                            v_dir_A: np.ndarray, v_dir_B: np.ndarray) -> str:
     """
-    流出方向（中心→外側）を判定する。ベクトルはそのまま比較する。
+    流出方向は「交差点直後点 → 仮想通過点（outside→center に反転）」で判定する。
     """
-    v_norm = _compute_cross_vector(points_xy, cross_info)
-    if v_norm is None:
+    idx = int(cross_info["index"])
+    cross_x, cross_y = cross_info["point"]
+    cross_point = np.array([cross_x, cross_y], dtype=float)
+
+    n = len(points_xy)
+    if n < 2:
         return "A"
 
-    v_trip = v_norm  # 流出なのでそのまま
-    cosA = float(np.dot(v_trip, v_dir_A))
-    cosB = float(np.dot(v_trip, v_dir_B))
+    i1 = min(idx + 1, n - 1)
+    p1 = points_xy[i1]
+    v = cross_point - p1  # outside→center（直後点から見たベクトル）
+    norm = float(np.hypot(v[0], v[1]))
+
+    if norm == 0.0 and i1 + 1 < n:
+        p1 = points_xy[i1 + 1]
+        v = cross_point - p1
+        norm = float(np.hypot(v[0], v[1]))
+
+    if norm == 0.0:
+        return "A"
+
+    v_out = v / norm  # outside→center に揃える
+    cosA = float(np.dot(v_out, v_dir_A))
+    cosB = float(np.dot(v_out, v_dir_B))
     return "A" if cosA >= cosB else "B"
 
 
@@ -488,7 +494,8 @@ def main():
     lon0, lat0, dirA_deg, dirB_deg = _read_point_file(POINT_FILE)
     stem = POINT_FILE.stem
 
-    # A方向 / B方向の基準ベクトル（北=0度, 東=90度）
+    # A方向 / B方向の基準ベクトル（outside→center の方位角。北=0度, 東=90度）
+    # ※交差点ファイルの dir_deg は「中心が終点（外側→中心）」の向きとして扱う
     dirA_rad = radians(dirA_deg)
     dirB_rad = radians(dirB_deg)
     v_dir_A = np.array([sin(dirA_rad), cos(dirA_rad)])
@@ -545,7 +552,7 @@ def main():
             print("\r" + msg, end="", flush=True)
             continue
 
-        in_direction = classify_in_direction(points_xy, cross_info, v_dir_A, v_dir_B)
+        in_direction = classify_direction(points_xy, cross_info, v_dir_A, v_dir_B)
         out_direction = classify_out_direction(points_xy, cross_info, v_dir_A, v_dir_B)
 
         # 方向別 HIT トリップ数カウンタ
@@ -614,46 +621,50 @@ def main():
     _save_matrix_csv("71_path_matrix_B_out.csv", matrices["B_out"])
 
     # ---- 10mメッシュ塗りのマップを出力（A/B × in/out） ----
-    heatmap_A_in = f"{stem}_heatmap_A_in.html"
-    heatmap_A_out = f"{stem}_heatmap_A_out.html"
-    heatmap_B_in = f"{stem}_heatmap_B_in.html"
-    heatmap_B_out = f"{stem}_heatmap_B_out.html"
+    a_in_html = f"{stem}_heatmap_A（流入）.html"
+    a_out_html = f"{stem}_heatmap_A（流出）.html"
+    b_in_html = f"{stem}_heatmap_B（流入）.html"
+    b_out_html = f"{stem}_heatmap_B（流出）.html"
 
-    create_mesh_map(matrices["A_in"],  lon0, lat0, heatmap_A_in,  f"{stem} / Direction A - In",  dirA_deg, dirB_deg)
-    create_mesh_map(matrices["A_out"], lon0, lat0, heatmap_A_out, f"{stem} / Direction A - Out", dirA_deg, dirB_deg)
-    create_mesh_map(matrices["B_in"],  lon0, lat0, heatmap_B_in,  f"{stem} / Direction B - In",  dirA_deg, dirB_deg)
-    create_mesh_map(matrices["B_out"], lon0, lat0, heatmap_B_out, f"{stem} / Direction B - Out", dirA_deg, dirB_deg)
+    create_mesh_map(matrices["A_in"],  lon0, lat0, a_in_html,  "A方向交通（流入経路）", dirA_deg, dirB_deg, show_A=True,  show_B=False)
+    create_mesh_map(matrices["A_out"], lon0, lat0, a_out_html, "A方向交通（流出経路）", dirA_deg, dirB_deg, show_A=True,  show_B=False)
+    create_mesh_map(matrices["B_in"],  lon0, lat0, b_in_html,  "B方向交通（流入経路）", dirA_deg, dirB_deg, show_A=False, show_B=True)
+    create_mesh_map(matrices["B_out"], lon0, lat0, b_out_html, "B方向交通（流出経路）", dirA_deg, dirB_deg, show_A=False, show_B=True)
 
     # ---- A/B の in/out を左右に並べた HTML（方向別） ----
-    a_in_out_html = f"""
+    a_pair = f"""
 <!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>{stem} / Direction A - In & Out</title></head>
+<head><meta charset="utf-8"><title>{stem} / A方向交通</title></head>
 <body>
-<h3>{stem} / Direction A - In &amp; Out</h3>
+<h3>{stem} / A方向交通（流入経路・流出経路）</h3>
 <div style="display:flex; flex-direction:row; width:100%; height:600px;">
-  <iframe src="{heatmap_A_in}" style="flex:1; border:none;"></iframe>
-  <iframe src="{heatmap_A_out}" style="flex:1; border:none;"></iframe>
+  <iframe src="{a_in_html}" style="flex:1; border:none;"></iframe>
+  <iframe src="{a_out_html}" style="flex:1; border:none;"></iframe>
 </div>
 </body>
 </html>
 """
-    (OUTPUT_DIR / f"{stem}_heatmap_A_in_out.html").write_text(a_in_out_html, encoding="utf-8")
+    (OUTPUT_DIR / f"{stem}_heatmap_A方向交通.html").write_text(a_pair, encoding="utf-8")
 
-    b_in_out_html = f"""
+    b_pair = f"""
 <!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>{stem} / Direction B - In & Out</title></head>
+<head><meta charset="utf-8"><title>{stem} / B方向交通</title></head>
 <body>
-<h3>{stem} / Direction B - In &amp; Out</h3>
+<h3>{stem} / B方向交通（流入経路・流出経路）</h3>
 <div style="display:flex; flex-direction:row; width:100%; height:600px;">
-  <iframe src="{heatmap_B_in}" style="flex:1; border:none;"></iframe>
-  <iframe src="{heatmap_B_out}" style="flex:1; border:none;"></iframe>
+  <iframe src="{b_in_html}" style="flex:1; border:none;"></iframe>
+  <iframe src="{b_out_html}" style="flex:1; border:none;"></iframe>
 </div>
 </body>
 </html>
 """
-    (OUTPUT_DIR / f"{stem}_heatmap_B_in_out.html").write_text(b_in_out_html, encoding="utf-8")
+    (OUTPUT_DIR / f"{stem}_heatmap_B方向交通.html").write_text(b_pair, encoding="utf-8")
+
+    print("[71_PathAnalysis] 判定定義: A/B=中心へどちら側から来たか（流入側）, dir_deg=outside→center")
+    print("[71_PathAnalysis] 表記: in=流入経路, out=流出経路")
+    print(f"[71_PathAnalysis] 出力: {stem}_heatmap_A方向交通.html / {stem}_heatmap_B方向交通.html")
 
 
 if __name__ == "__main__":
