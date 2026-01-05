@@ -29,6 +29,39 @@ CELL_SIZE_M = 10.0         # 10m メッシュ
 SAMPLE_STEP_M = 10.0       # 線分サンプリング間隔（10m）
 CROSS_THRESHOLD_M = 50.0   # 単路ポイント通過判定の距離閾値
 
+# =========================
+# Heatmap display settings (見やすさ調整)
+# =========================
+# ヒートマップは「値→色」「値→透明度」を別々に制御して、少ない所を薄く・多い所を赤く強調する。
+
+# vmax を「最大値」ではなく「上位パーセンタイル」で決める（外れ値があるときの白飛び防止）
+HEATMAP_VMAX_PERCENTILE = 99.0   # 例: 99 → 上位1%を飽和として扱う（強調が出やすい）
+
+# 濃淡の強調（小さい値をより薄く、大きい値をより目立たせる）
+HEATMAP_GAMMA = 0.55             # 小さめ(0.4～0.8)にすると“赤いところ”が強調されやすい
+
+# 透明度（薄い所をより薄くする）
+HEATMAP_MIN_OPACITY = 0.03       # 0に近いほど薄く（0.02～0.08推奨）
+HEATMAP_MAX_OPACITY = 0.85       # 最大の濃さ（0.7～0.95推奨）
+
+# 色（低→中→高）※青系はやめて「薄黄→オレンジ→赤」の王道ヒートマップにする
+HEATMAP_COLOR_STOPS = [
+    (0.00, (255, 255, 204)),  # very low: light yellow
+    (0.50, (253, 141,  60)),  # mid: orange
+    (1.00, (189,   0,  38)),  # high: red
+]
+
+# =========================
+# Arrow / label settings (A/B矢印を潰れさせない)
+# =========================
+ARROW_LINE_LENGTH_M = 70.0       # 矢印の線の長さ
+ARROW_LABEL_DISTANCE_M = 95.0    # ラベルを置く距離（線より少し先に置くと潰れにくい）
+ARROW_LINE_WEIGHT = 7            # 太さ
+ARROW_HEAD_FONT_PX = 22          # 矢じり(▶)の大きさ
+ARROW_LABEL_SIZE_PX = 42         # A/B白丸のサイズ
+ARROW_LABEL_FONT_REM = 2.6       # A/B文字サイズ
+ARROW_LABEL_SIDE_OFFSET_M = 18.0 # A/Bラベルを左右に少しずらして重なり回避
+
 # グリッドサイズ（セル数）
 GRID_SIZE = int((2 * MESH_HALF_SIZE_M) / CELL_SIZE_M)  # 200
 
@@ -60,18 +93,51 @@ def xy_to_lonlat(x: float | np.ndarray, y: float | np.ndarray, lon0: float, lat0
     return lon, lat
 
 
-def value_to_color(value: int, vmax: int) -> str:
+def _interp_color_stops(t: float) -> tuple[int, int, int]:
+    """0..1 を HEATMAP_COLOR_STOPS で RGB 補間して返す。"""
+    t = max(0.0, min(1.0, t))
+    stops = HEATMAP_COLOR_STOPS
+    for i in range(len(stops) - 1):
+        t0, c0 = stops[i]
+        t1, c1 = stops[i + 1]
+        if t0 <= t <= t1:
+            if t1 == t0:
+                return c1
+            u = (t - t0) / (t1 - t0)
+            r = int(c0[0] + (c1[0] - c0[0]) * u)
+            g = int(c0[1] + (c1[1] - c0[1]) * u)
+            b = int(c0[2] + (c1[2] - c0[2]) * u)
+            return r, g, b
+    return stops[-1][1]
+
+
+def _compute_vmax(matrix: np.ndarray) -> int:
+    """上位パーセンタイルで vmax を決める（外れ値対策）。"""
+    vals = matrix[matrix > 0]
+    if vals.size == 0:
+        return 0
+    vmax = int(np.percentile(vals, HEATMAP_VMAX_PERCENTILE))
+    return max(1, vmax)
+
+
+def value_to_style(value: int, vmax: int) -> tuple[str, float] | None:
     """
-    0〜vmax の値を青→赤のグラデーション色に変換する。
-    0は完全透明にする。
+    value(>0) を (fill_color, fill_opacity) に変換。
+    - 少ない所は薄く（低opacity）
+    - 多い所は赤く（色もopacityも増える）
     """
     if vmax <= 0 or value <= 0:
-        return "#00000000"  # alpha 0
-    ratio = min(1.0, float(value) / float(vmax))
-    r = int(255 * ratio)
-    g = 0
-    b = int(255 * (1.0 - ratio))
-    return f"#{r:02x}{g:02x}{b:02x}"
+        return None
+
+    x = min(1.0, float(value) / float(vmax))
+    # gammaで強調（小さい値はより薄く、上位はより目立つ）
+    t = x ** HEATMAP_GAMMA
+
+    r, g, b = _interp_color_stops(t)
+    color = f"#{r:02x}{g:02x}{b:02x}"
+
+    opacity = HEATMAP_MIN_OPACITY + t * (HEATMAP_MAX_OPACITY - HEATMAP_MIN_OPACITY)
+    return color, float(opacity)
 
 
 def add_direction_arrow(
@@ -81,24 +147,32 @@ def add_direction_arrow(
     azimuth_deg: float,
     color: str,
     label: str,
-    length_m: float = 40.0,  # ★ 矢印は短め（約40m）
 ) -> None:
     """
-    中心から azimuth_deg 方向に length_m 伸ばした矢印付きの線を描き、
-    終点付近に白丸背景付きのラベルを表示する。
+    中心から azimuth_deg 方向に矢印付きの線を描き、終点付近に白丸背景付きのラベルを表示する。
     """
-
-    # 終点座標を計算
     rad = math.radians(azimuth_deg)
-    dx = length_m * math.sin(rad)
-    dy = length_m * math.cos(rad)
-    lon1, lat1 = xy_to_lonlat(dx, dy, lon0, lat0)
+    dir_vec = np.array([math.sin(rad), math.cos(rad)])
+    perp = np.array([dir_vec[1], -dir_vec[0]])  # 左向きの直交ベクトル
+
+    offset_sign = 1.0 if label.upper() == "A" else -1.0
+    offset_vec = perp * ARROW_LABEL_SIDE_OFFSET_M * offset_sign
+
+    line_end = dir_vec * ARROW_LINE_LENGTH_M + offset_vec
+    label_pos = dir_vec * ARROW_LABEL_DISTANCE_M + offset_vec
+
+    lon_line_end, lat_line_end = xy_to_lonlat(line_end[0], line_end[1], lon0, lat0)
+    lon_label, lat_label = xy_to_lonlat(label_pos[0], label_pos[1], lon0, lat0)
+    lon_offset, lat_offset = xy_to_lonlat(offset_vec[0], offset_vec[1], lon0, lat0)
 
     # 基本の線（ベクトル本体）
     line = folium.PolyLine(
-        locations=[[lat0, lon0], [lat1, lon1]],
+        locations=[
+            [lat_offset, lon_offset],
+            [lat_line_end, lon_line_end],
+        ],
         color=color,
-        weight=5,
+        weight=ARROW_LINE_WEIGHT,
     ).add_to(m)
 
     # 線上に矢じり（▶）を1つだけ描く
@@ -106,12 +180,12 @@ def add_direction_arrow(
         line,
         "▶",                 # 矢じりの文字
         repeat=False,        # 繰り返さない
-        offset=12,           # 矢印の位置（線の終点寄りに調整）
+        offset=18,           # 矢印の位置（線の終点寄りに調整）
         attributes={
             "fill": color,
             "stroke": color,
             "font-weight": "bold",
-            "font-size": "18px",
+            "font-size": f"{ARROW_HEAD_FONT_PX}px",
         },
     ).add_to(m)
 
@@ -119,20 +193,20 @@ def add_direction_arrow(
     label_html = (
         "<div style='"
         "display:flex;align-items:center;justify-content:center;"
-        "width:40px;height:40px;"          # ★ 白丸のサイズ
+        f"width:{ARROW_LABEL_SIZE_PX}px;height:{ARROW_LABEL_SIZE_PX}px;"
         "border-radius:50%;"
         f"border:3px solid {color};"
         "background-color:white;"
         "font-weight:bold;"
         f"color:{color};"
-        "font-size:2.5rem;"                # ★ 文字を大きく
+        f"font-size:{ARROW_LABEL_FONT_REM}rem;"
         "text-shadow:0 0 4px white;"
         "'>"
         f"{label}</div>"
     )
 
     folium.Marker(
-        location=[lat1, lon1],
+        location=[lat_label, lon_label],
         icon=folium.DivIcon(html=label_html),
     ).add_to(m)
 
@@ -145,7 +219,7 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
     中心黒丸と A/B 方向矢印を最前面に重ねる。
     """
     m = folium.Map(location=[lat0, lon0], zoom_start=16, tiles="OpenStreetMap")
-    vmax = int(matrix.max())
+    vmax = _compute_vmax(matrix)
 
     # メッシュ矩形
     for iy in range(GRID_SIZE):
@@ -162,13 +236,16 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
             lon_min, lat_min = xy_to_lonlat(x_min, y_min, lon0, lat0)
             lon_max, lat_max = xy_to_lonlat(x_max, y_max, lon0, lat0)
 
-            color = value_to_color(val, vmax)
+            style = value_to_style(val, vmax)
+            if style is None:
+                continue
+            color, opacity = style
 
             folium.Rectangle(
                 bounds=[[lat_min, lon_min], [lat_max, lon_max]],
                 fill=True,
                 fill_color=color,
-                fill_opacity=0.6,
+                fill_opacity=opacity,
                 weight=0,
             ).add_to(m)
 
@@ -263,7 +340,9 @@ def _record_samples(points: np.ndarray, visited: Set[Tuple[int, int]]):
                 visited.add((ix, iy))
 
 
-def accumulate_mesh(points_xy: np.ndarray, cross_info: Dict[str, float], direction: str, count_arrays: Dict[str, np.ndarray]):
+def accumulate_mesh(points_xy: np.ndarray, cross_info: Dict[str, float],
+                    in_direction: str, out_direction: str,
+                    count_arrays: Dict[str, np.ndarray]):
     idx = int(cross_info["index"])
     cross_x, cross_y = cross_info["point"]
     cross_point = np.array([[cross_x, cross_y]], dtype=float)
@@ -293,11 +372,14 @@ def accumulate_mesh(points_xy: np.ndarray, cross_info: Dict[str, float], directi
     if len(out_points) >= 2:
         _record_samples(out_points, visited_out)
 
-    if direction == "A":
+    if in_direction == "A":
         target_in = count_arrays["A_in"]
-        target_out = count_arrays["A_out"]
     else:
         target_in = count_arrays["B_in"]
+
+    if out_direction == "A":
+        target_out = count_arrays["A_out"]
+    else:
         target_out = count_arrays["B_out"]
 
     for ix, iy in visited_in:
@@ -346,17 +428,15 @@ def _compute_matrix(count_array: np.ndarray, denom: int) -> np.ndarray:
     return np.rint(ratio * 100.0).astype(int)
 
 
-def classify_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
-                       v_dir_A: np.ndarray, v_dir_B: np.ndarray) -> str:
+def _compute_cross_vector(points_xy: np.ndarray, cross_info: Dict[str, float]) -> Optional[np.ndarray]:
     """
-    通過線分付近の進行ベクトル v_trip と、
-    A方向 / B方向の基準ベクトルとの角度差で、A/B を判定する。
+    交差位置付近の進行ベクトル（正規化）を計算する。取れない場合は None。
     """
     idx = int(cross_info["index"])
     n = len(points_xy)
 
     if n < 2:
-        return "A"  # デフォルト
+        return None
 
     if 0 < idx < n - 2:
         p_prev = points_xy[idx - 1]
@@ -369,26 +449,44 @@ def classify_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
 
     norm = float(np.hypot(v[0], v[1]))
     if norm == 0.0:
+        return None
+
+    return v / norm
+
+
+def classify_in_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
+                          v_dir_A: np.ndarray, v_dir_B: np.ndarray) -> str:
+    """
+    流入方向（外側→中心）を判定する。比較用ベクトルは反転して使用。
+    """
+    v_norm = _compute_cross_vector(points_xy, cross_info)
+    if v_norm is None:
         return "A"
 
-    # NOTE:
-    # A/B 方向は「中心点 → 外側（center → outside）」で定義されている。
-    # 流入方向は「外側 → 中心点（outside → center）」であるため、
-    # A/B 判定に使用するトリップベクトルは反転して比較する。
-    v_trip = (-v) / norm
-
+    v_trip = -v_norm  # 流入なので反転
     cosA = float(np.dot(v_trip, v_dir_A))
     cosB = float(np.dot(v_trip, v_dir_B))
+    return "A" if cosA >= cosB else "B"
 
-    # cos値が大きい = 角度差が小さい方を採用
-    if cosA >= cosB:
+
+def classify_out_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
+                           v_dir_A: np.ndarray, v_dir_B: np.ndarray) -> str:
+    """
+    流出方向（中心→外側）を判定する。ベクトルはそのまま比較する。
+    """
+    v_norm = _compute_cross_vector(points_xy, cross_info)
+    if v_norm is None:
         return "A"
-    else:
-        return "B"
+
+    v_trip = v_norm  # 流出なのでそのまま
+    cosA = float(np.dot(v_trip, v_dir_A))
+    cosB = float(np.dot(v_trip, v_dir_B))
+    return "A" if cosA >= cosB else "B"
 
 
 def main():
     lon0, lat0, dirA_deg, dirB_deg = _read_point_file(POINT_FILE)
+    stem = POINT_FILE.stem
 
     # A方向 / B方向の基準ベクトル（北=0度, 東=90度）
     dirA_rad = radians(dirA_deg)
@@ -410,8 +508,16 @@ def main():
     }
 
     # 方向別HITトリップ数カウンタ
-    total_A_hits = 0
-    total_B_hits = 0
+    total_A_in_hits = 0
+    total_B_in_hits = 0
+    total_A_out_hits = 0
+    total_B_out_hits = 0
+
+    # in/out の遷移チェック用
+    inA_to_outA = 0
+    inA_to_outB = 0
+    inB_to_outA = 0
+    inB_to_outB = 0
 
     empty_files = 0
     start_time = datetime.now()
@@ -439,15 +545,30 @@ def main():
             print("\r" + msg, end="", flush=True)
             continue
 
-        direction = classify_direction(points_xy, cross_info, v_dir_A, v_dir_B)
+        in_direction = classify_in_direction(points_xy, cross_info, v_dir_A, v_dir_B)
+        out_direction = classify_out_direction(points_xy, cross_info, v_dir_A, v_dir_B)
 
         # 方向別 HIT トリップ数カウンタ
-        if direction == "A":
-            total_A_hits += 1
+        if in_direction == "A":
+            total_A_in_hits += 1
         else:
-            total_B_hits += 1
+            total_B_in_hits += 1
 
-        accumulate_mesh(points_xy, cross_info, direction, count_arrays)
+        if out_direction == "A":
+            total_A_out_hits += 1
+        else:
+            total_B_out_hits += 1
+
+        if in_direction == "A" and out_direction == "A":
+            inA_to_outA += 1
+        elif in_direction == "A" and out_direction == "B":
+            inA_to_outB += 1
+        elif in_direction == "B" and out_direction == "A":
+            inB_to_outA += 1
+        else:
+            inB_to_outB += 1
+
+        accumulate_mesh(points_xy, cross_info, in_direction, out_direction, count_arrays)
 
         progress = idx / total * 100 if total else 100.0
         msg = (
@@ -463,10 +584,10 @@ def main():
     print(f"Total files={total}  Valid={total - empty_files}  Empty={empty_files}")
 
     matrices = {
-        "A_in": _compute_matrix(count_arrays["A_in"], total_A_hits),
-        "A_out": _compute_matrix(count_arrays["A_out"], total_A_hits),
-        "B_in": _compute_matrix(count_arrays["B_in"], total_B_hits),
-        "B_out": _compute_matrix(count_arrays["B_out"], total_B_hits),
+        "A_in": _compute_matrix(count_arrays["A_in"], total_A_in_hits),
+        "A_out": _compute_matrix(count_arrays["A_out"], total_A_out_hits),
+        "B_in": _compute_matrix(count_arrays["B_in"], total_B_in_hits),
+        "B_out": _compute_matrix(count_arrays["B_out"], total_B_out_hits),
     }
 
     for key, arr in matrices.items():
@@ -474,7 +595,13 @@ def main():
         vmax = int(arr.max())
         print(f"[71_PathAnalysis] {key}: nonzero_cells={nz}, max={vmax}%")
 
-    print(f"[71_PathAnalysis] total_A_hits={total_A_hits} total_B_hits={total_B_hits}")
+    print(f"[71_PathAnalysis] total_A_in_hits={total_A_in_hits} total_B_in_hits={total_B_in_hits}")
+    print(f"[71_PathAnalysis] total_A_out_hits={total_A_out_hits} total_B_out_hits={total_B_out_hits}")
+    print(
+        "[71_PathAnalysis] transitions: "
+        f"inA->outA={inA_to_outA}, inA->outB={inA_to_outB}, "
+        f"inB->outA={inB_to_outA}, inB->outB={inB_to_outB}"
+    )
 
     def _save_matrix_csv(name: str, matrix: np.ndarray):
         # 北が上になるように上下反転（iy大きい=北 → 1行目）
@@ -487,41 +614,46 @@ def main():
     _save_matrix_csv("71_path_matrix_B_out.csv", matrices["B_out"])
 
     # ---- 10mメッシュ塗りのマップを出力（A/B × in/out） ----
-    create_mesh_map(matrices["A_in"],  lon0, lat0, "71_heatmap_A_in.html",  "Direction A - In",  dirA_deg, dirB_deg)
-    create_mesh_map(matrices["A_out"], lon0, lat0, "71_heatmap_A_out.html", "Direction A - Out", dirA_deg, dirB_deg)
-    create_mesh_map(matrices["B_in"],  lon0, lat0, "71_heatmap_B_in.html",  "Direction B - In",  dirA_deg, dirB_deg)
-    create_mesh_map(matrices["B_out"], lon0, lat0, "71_heatmap_B_out.html", "Direction B - Out", dirA_deg, dirB_deg)
+    heatmap_A_in = f"{stem}_heatmap_A_in.html"
+    heatmap_A_out = f"{stem}_heatmap_A_out.html"
+    heatmap_B_in = f"{stem}_heatmap_B_in.html"
+    heatmap_B_out = f"{stem}_heatmap_B_out.html"
 
-    # ---- A/B を左右に並べた HTML（in / out それぞれ） ----
-    in_html = f"""
+    create_mesh_map(matrices["A_in"],  lon0, lat0, heatmap_A_in,  f"{stem} / Direction A - In",  dirA_deg, dirB_deg)
+    create_mesh_map(matrices["A_out"], lon0, lat0, heatmap_A_out, f"{stem} / Direction A - Out", dirA_deg, dirB_deg)
+    create_mesh_map(matrices["B_in"],  lon0, lat0, heatmap_B_in,  f"{stem} / Direction B - In",  dirA_deg, dirB_deg)
+    create_mesh_map(matrices["B_out"], lon0, lat0, heatmap_B_out, f"{stem} / Direction B - Out", dirA_deg, dirB_deg)
+
+    # ---- A/B の in/out を左右に並べた HTML（方向別） ----
+    a_in_out_html = f"""
 <!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>Direction A & B - In</title></head>
+<head><meta charset="utf-8"><title>{stem} / Direction A - In & Out</title></head>
 <body>
-<h3>Direction A &amp; B - In</h3>
+<h3>{stem} / Direction A - In &amp; Out</h3>
 <div style="display:flex; flex-direction:row; width:100%; height:600px;">
-  <iframe src="71_heatmap_A_in.html" style="flex:1; border:none;"></iframe>
-  <iframe src="71_heatmap_B_in.html" style="flex:1; border:none;"></iframe>
+  <iframe src="{heatmap_A_in}" style="flex:1; border:none;"></iframe>
+  <iframe src="{heatmap_A_out}" style="flex:1; border:none;"></iframe>
 </div>
 </body>
 </html>
 """
-    (OUTPUT_DIR / "71_heatmap_in_AB.html").write_text(in_html, encoding="utf-8")
+    (OUTPUT_DIR / f"{stem}_heatmap_A_in_out.html").write_text(a_in_out_html, encoding="utf-8")
 
-    out_html = f"""
+    b_in_out_html = f"""
 <!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>Direction A & B - Out</title></head>
+<head><meta charset="utf-8"><title>{stem} / Direction B - In & Out</title></head>
 <body>
-<h3>Direction A &amp; B - Out</h3>
+<h3>{stem} / Direction B - In &amp; Out</h3>
 <div style="display:flex; flex-direction:row; width:100%; height:600px;">
-  <iframe src="71_heatmap_A_out.html" style="flex:1; border:none;"></iframe>
-  <iframe src="71_heatmap_B_out.html" style="flex:1; border:none;"></iframe>
+  <iframe src="{heatmap_B_in}" style="flex:1; border:none;"></iframe>
+  <iframe src="{heatmap_B_out}" style="flex:1; border:none;"></iframe>
 </div>
 </body>
 </html>
 """
-    (OUTPUT_DIR / "71_heatmap_out_AB.html").write_text(out_html, encoding="utf-8")
+    (OUTPUT_DIR / f"{stem}_heatmap_B_in_out.html").write_text(b_in_out_html, encoding="utf-8")
 
 
 if __name__ == "__main__":
