@@ -48,14 +48,14 @@ HEATMAP_VMAX_PERCENTILE = 99.0   # 例: 99 → 上位1%を飽和として扱う�
 HEATMAP_GAMMA = 0.55             # 小さめ(0.4～0.8)にすると“赤いところ”が強調されやすい
 
 # 透明度（薄い所をより薄くする）
-HEATMAP_MIN_OPACITY = 0.03       # 0に近いほど薄く（0.02～0.08推奨）
-HEATMAP_MAX_OPACITY = 0.85       # 最大の濃さ（0.7～0.95推奨）
+HEATMAP_MIN_OPACITY = 0.06       # 0に近いほど薄く（0.02～0.08推奨）
+HEATMAP_MAX_OPACITY = 0.92       # 最大の濃さ（0.7～0.95推奨）
 
-# 色（低→中→高）※青系はやめて「薄黄→オレンジ→赤」の王道ヒートマップにする
+# 色（低→高）: 薄い青 → 濃い赤（背景に埋もれにくい）
 HEATMAP_COLOR_STOPS = [
-    (0.00, (255, 255, 204)),  # very low: light yellow
-    (0.50, (253, 141,  60)),  # mid: orange
-    (1.00, (189,   0,  38)),  # high: red
+    (0.00, (170, 210, 255)),  # low: light blue
+    (0.55, (255, 255, 255)),  # mid: near white（地図との分離）
+    (1.00, (180,   0,   0)),  # high: dark red
 ]
 
 # =========================
@@ -65,6 +65,7 @@ ARROW_HEAD_ROTATE_OFFSET_DEG = -90  # まずは -90 をデフォルト。合わ�
 ARROW_LINE_LENGTH_M = 90.0
 ARROW_LINE_WEIGHT = 6
 ARROW_HEAD_RADIUS_PX = 18
+ARROW_HEAD_BACKOFF_M = 10.0
 
 # ラベルは矢印の中央
 ARROW_LABEL_ALONG_RATIO = 0.50
@@ -75,6 +76,8 @@ ARROW_LABEL_FONT_REM = 2.6
 # 中心点の強調
 CENTER_MARKER_RADIUS = 8
 CENTER_MARKER_COLOR = "black"
+CENTER_MARKER_COLOR_A = "red"
+CENTER_MARKER_COLOR_B = "blue"
 CENTER_MARKER_BORDER_COLOR = "white"
 CENTER_MARKER_BORDER_WEIGHT = 3
 
@@ -169,25 +172,31 @@ def add_direction_arrow(
     color: str,
     label: str,
 ) -> None:
+    # 外側→中心 の単位ベクトル
     rad = math.radians(azimuth_deg_to_center)
     ux = math.sin(rad)
     uy = math.cos(rad)
 
-    # 外側点（始点）
+    # 線の始点（外側）
     sx = -ARROW_LINE_LENGTH_M * ux
     sy = -ARROW_LINE_LENGTH_M * uy
     lon_start, lat_start = xy_to_lonlat(sx, sy, lon0, lat0)
 
-    # 線（外側→中心）
+    # 線の終点（矢じりの位置）＝中心点から少し手前
+    ex = -ARROW_HEAD_BACKOFF_M * ux
+    ey = -ARROW_HEAD_BACKOFF_M * uy
+    lon_end, lat_end = xy_to_lonlat(ex, ey, lon0, lat0)
+
+    # 線（外側→矢じり）
     folium.PolyLine(
-        locations=[[lat_start, lon_start], [lat0, lon0]],
+        locations=[[lat_start, lon_start], [lat_end, lon_end]],
         color=color,
         weight=ARROW_LINE_WEIGHT,
     ).add_to(m)
 
-    # 矢じり（三角）＝中心
+    # 矢じり（三角）＝線終点
     folium.RegularPolygonMarker(
-        location=[lat0, lon0],
+        location=[lat_end, lon_end],
         number_of_sides=3,
         radius=ARROW_HEAD_RADIUS_PX,
         rotation=azimuth_deg_to_center + ARROW_HEAD_ROTATE_OFFSET_DEG,
@@ -198,13 +207,13 @@ def add_direction_arrow(
         weight=1,
     ).add_to(m)
 
-    # ラベル＝矢印の中央
-    mx = -ARROW_LINE_LENGTH_M * ARROW_LABEL_ALONG_RATIO * ux
-    my = -ARROW_LINE_LENGTH_M * ARROW_LABEL_ALONG_RATIO * uy
+    # ラベル＝矢印の中央（start↔end の中点）
+    mx = (sx + ex) * 0.5
+    my = (sy + ey) * 0.5
     lon_mid, lat_mid = xy_to_lonlat(mx, my, lon0, lat0)
 
     label_html = (
-        "<div style='"
+        f"<div class='dir-label dir-label-{label}' style='"
         "display:flex;align-items:center;justify-content:center;"
         f"width:{ARROW_LABEL_SIZE_PX}px;height:{ARROW_LABEL_SIZE_PX}px;"
         "border-radius:50%;"
@@ -269,18 +278,50 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
         add_direction_arrow(m, lon0, lat0, dirB_deg, "blue", "B")
 
     # 中心点の強調（矢印の最後に重ねる）
+    if show_A and not show_B:
+        center_fill = CENTER_MARKER_COLOR_A
+    elif show_B and not show_A:
+        center_fill = CENTER_MARKER_COLOR_B
+    else:
+        center_fill = CENTER_MARKER_COLOR
+
     folium.CircleMarker(
         location=[lat0, lon0],
         radius=CENTER_MARKER_RADIUS,
         color=CENTER_MARKER_BORDER_COLOR,
         weight=CENTER_MARKER_BORDER_WEIGHT,
         fill=True,
-        fill_color=CENTER_MARKER_COLOR,
+        fill_color=center_fill,
         fill_opacity=1.0,
     ).add_to(m)
 
     folium.map.LayerControl().add_to(m)
     m.get_root().html.add_child(folium.Element(f"<h3>{title}</h3>"))
+
+    map_name = m.get_name()
+    zoom_scale_js = f"""
+<style>
+  .dir-label {{
+    transform-origin: center center;
+    transform: scale(var(--dirLabelScale, 1));
+  }}
+</style>
+<script>
+(function(){{
+  var map = {map_name};
+  function setScale(){{
+    var z = map.getZoom();
+    // z=16 で 1.0、z=13 で 0.75、z=11 で 0.6 程度
+    var s = Math.max(0.55, Math.min(1.0, 0.2 * (z - 11) + 0.55));
+    document.documentElement.style.setProperty('--dirLabelScale', s);
+  }}
+  map.on('zoomend', setScale);
+  setScale();
+}})();
+</script>
+"""
+    m.get_root().html.add_child(folium.Element(zoom_scale_js))
+
     m.save(str(OUTPUT_DIR / filename))
 
 
@@ -357,7 +398,7 @@ def _record_samples(points: np.ndarray, visited: Set[Tuple[int, int]]):
 
 
 def accumulate_mesh(points_xy: np.ndarray, cross_info: Dict[str, float],
-                    in_direction: str, out_direction: str,
+                    group_direction: str,
                     count_arrays: Dict[str, np.ndarray]):
     idx = int(cross_info["index"])
     cross_x, cross_y = cross_info["point"]
@@ -388,14 +429,11 @@ def accumulate_mesh(points_xy: np.ndarray, cross_info: Dict[str, float],
     if len(out_points) >= 2:
         _record_samples(out_points, visited_out)
 
-    if in_direction == "A":
+    if group_direction == "A":
         target_in = count_arrays["A_in"]
-    else:
-        target_in = count_arrays["B_in"]
-
-    if out_direction == "A":
         target_out = count_arrays["A_out"]
     else:
+        target_in = count_arrays["B_in"]
         target_out = count_arrays["B_out"]
 
     for ix, iy in visited_in:
@@ -547,8 +585,6 @@ def main():
     # 方向別HITトリップ数カウンタ
     total_A_in_hits = 0
     total_B_in_hits = 0
-    total_A_out_hits = 0
-    total_B_out_hits = 0
     total_A_hits = 0
     total_B_hits = 0
     total_unknown = 0
@@ -614,11 +650,6 @@ def main():
             total_B_in_hits += 1
             total_B_hits += 1
 
-        if out_direction == "A":
-            total_A_out_hits += 1
-        else:
-            total_B_out_hits += 1
-
         if in_direction == "A" and out_direction == "A":
             inA_to_outA += 1
         elif in_direction == "A" and out_direction == "B":
@@ -628,7 +659,7 @@ def main():
         else:
             inB_to_outB += 1
 
-        accumulate_mesh(points_xy, cross_info, in_direction, out_direction, count_arrays)
+        accumulate_mesh(points_xy, cross_info, in_direction, count_arrays)
 
         progress = idx / total_files * 100 if total_files else 100.0
         msg = (
@@ -646,9 +677,9 @@ def main():
 
     matrices = {
         "A_in": _compute_matrix(count_arrays["A_in"], total_A_in_hits),
-        "A_out": _compute_matrix(count_arrays["A_out"], total_A_out_hits),
+        "A_out": _compute_matrix(count_arrays["A_out"], total_A_hits),
         "B_in": _compute_matrix(count_arrays["B_in"], total_B_in_hits),
-        "B_out": _compute_matrix(count_arrays["B_out"], total_B_out_hits),
+        "B_out": _compute_matrix(count_arrays["B_out"], total_B_hits),
     }
 
     for key, arr in matrices.items():
@@ -657,7 +688,6 @@ def main():
         print(f"[71_PathAnalysis] {key}: nonzero_cells={nz}, max={vmax}%")
 
     print(f"[71_PathAnalysis] total_A_in_hits={total_A_in_hits} total_B_in_hits={total_B_in_hits}")
-    print(f"[71_PathAnalysis] total_A_out_hits={total_A_out_hits} total_B_out_hits={total_B_out_hits}")
     print(
         "[71_PathAnalysis] transitions: "
         f"inA->outA={inA_to_outA}, inA->outB={inA_to_outB}, "
@@ -740,9 +770,17 @@ def main():
     log_lines.append(f"方向不明で除外（U）: {total_unknown}")
     log_lines.append(f"総除外数: {total_trips_excluded}")
     log_lines.append("")
+    log_lines.append("－－－遷移集計（参考）－－－")
+    log_lines.append(f"inA->outA={inA_to_outA}")
+    log_lines.append(f"inA->outB={inA_to_outB}")
+    log_lines.append(f"inB->outA={inB_to_outA}")
+    log_lines.append(f"inB->outB={inB_to_outB}")
+    log_lines.append("")
     log_lines.append("－－－備考（定義）－－－")
     log_lines.append("A/B判定は『中心にどちら側から到達したか（流入側）』で行う。")
-    log_lines.append("矢印は外側→中心の向きで描画する。in=流入経路、out=流出経路。")
+    log_lines.append("in=中心へ向かう経路（流入）、out=中心を通過した後の経路（流出）。")
+    log_lines.append("ヒートマップのA_out/B_outは流入側で束ねる（inA起点の流出はA_out）。")
+    log_lines.append("矢印は外側→中心の向きで描画し、ラベルは矢印中央に置く。")
 
     write_log(OUTPUT_DIR / "LOG.txt", log_lines)
     print("\n".join(log_lines[-12:]))  # 末尾の要約だけ標準出力に出す（冗長防止）
