@@ -7,7 +7,19 @@
 - PDF 用語の「ビューア」で、性能 CSV を使ったレポート作成・確認を担う。
 ## 入力
 - 交差点性能 CSV（cp932, ヘッダ付き）: `{crossroad}_performance.csv`。
-- GUI で読み込む前提のため、ファイルパスをダイアログで指定。
+- 3ファイルが必要：
+  - 交差点定義CSV（11_crossroad_sampler出力）
+  - 交差点地図画像（jpg/png）
+  - 性能CSV（31_crossroad_trip_performance出力）
+
+### 運用モード
+#### 1) バッチモード（推奨：複数交差点を一括処理）
+`32_crossroad_viewer.py` の `BATCH_JOBS` に 3ファイル1組を複数記述して実行する。
+- `BATCH_JOBS` が1件以上ある場合、ダイアログ無しで順次処理し、Excelレポートを自動生成して終了する。
+- `output_xlsx` を省略した場合は、性能CSVの隣に `*_report.xlsx` を出力する。
+
+#### 2) GUIモード（単発確認）
+`BATCH_JOBS` が空の場合のみ、従来どおりダイアログで3ファイルを選択してGUI表示する。
 
 ### 重要：交通量と速度の扱い
 31の出力には以下の列が追加される：
@@ -21,7 +33,8 @@
 - Excel には性能テーブルとグラフ画像を貼り付ける（openpyxl を使用）。
 ## 実行方法
 - 必要ライブラリ: PySide6, matplotlib, pandas, openpyxl。
-- コマンド例: `python 32_crossroad_viewer.py` → GUI 起動 → 「ファイルを開く」で性能 CSV を選択。
+- バッチ例: `python 32_crossroad_viewer.py`（`BATCH_JOBS` が埋まっていれば自動で一括実行）
+- GUI例: `BATCH_JOBS=[]` にして `python 32_crossroad_viewer.py` → GUI 起動 → ダイアログで3ファイル選択
 - カレンダーやリストで日付/枝を選択し、速度分布・通過件数などを確認。エクスポートボタンで Excel/画像を保存。
 ## 判定ロジック（重要なものだけ）
 - pandas で CSV を読み込み、枝番号・方向・交通量（通過カウント）・速度（速度算出可否）を基にグラフを生成。

@@ -41,6 +41,26 @@ for font_name in preferred_fonts:
         break
 plt.rcParams["axes.unicode_minus"] = False
 
+# ============================================================
+# バッチ設定（ダイアログを使わず、ここに3ファイル1組を複数書く）
+#  - crossroad_csv: 交差点定義CSV（11_crossroad_sampler出力）
+#  - crossroad_img: 交差点地図画像（jpg/png）
+#  - performance_csv: 31_crossroad_trip_performance出力
+#  - output_xlsx: 出力Excel（省略可：performance_csvの隣に *_report.xlsx）
+# ============================================================
+BATCH_JOBS: list[dict] = [
+    # 例）
+    # {
+    #     "crossroad_csv": r"D:\GitHub\ETC\data\crossroad\Tsuyama-ST.csv",
+    #     "crossroad_img": r"D:\GitHub\ETC\data\crossroad\Tsuyama-ST.jpg",
+    #     "performance_csv": r"D:\GitHub\ETC\out\Tsuyama-ST_performance.csv",
+    #     "output_xlsx": r"D:\GitHub\ETC\out\Tsuyama-ST_report.xlsx",
+    # },
+]
+
+# BATCH_JOBS が空なら従来どおりGUI（ダイアログ）で3ファイルを選ぶ
+BATCH_MODE_ACTIVE = False
+
 # Column indices for performance data
 COL_FILE = 2
 COL_DATE = 3
@@ -651,6 +671,10 @@ class CrossroadViewer(QMainWindow):
         self.image_label.setPixmap(pixmap)
 
     def _show_error(self, message: str) -> None:
+        # バッチ中にダイアログを出すと止まるため、標準出力に切り替える
+        if BATCH_MODE_ACTIVE:
+            print(f"[ERROR] {message}")
+            return
         QMessageBox.critical(self, "Error", message)
 
     def export_to_excel(self) -> None:
@@ -939,15 +963,18 @@ class CrossroadViewer(QMainWindow):
 def pick_three_files() -> tuple[Path, Path, Path] | None:
     while True:
         csv_path, _ = QFileDialog.getOpenFileName(
-            None, "交差点ファイル（*.csv）を選択", "", "CSV (*.csv)"
+            None,
+            "交差点CSVを選択",
+            "",
+            "CSV Files (*.csv)",
         )
         if not csv_path:
             return None
 
         img_path, _ = QFileDialog.getOpenFileName(
             None,
-            "交差点画像（*.jpg）を選択",
-            str(Path(csv_path).parent),
+            "交差点画像（jpg/png）を選択",
+            "",
             "Images (*.jpg *.jpeg *.png *.bmp)",
         )
         if not img_path:
@@ -955,40 +982,84 @@ def pick_three_files() -> tuple[Path, Path, Path] | None:
 
         perf_path, _ = QFileDialog.getOpenFileName(
             None,
-            "交差点パフォーマンス（*_performance.csv）を選択",
-            str(Path(csv_path).parent),
-            "CSV (*.csv)",
+            "性能CSVを選択",
+            "",
+            "CSV Files (*.csv)",
         )
         if not perf_path:
             return None
 
-        csv_p = Path(csv_path)
-        img_p = Path(img_path)
-        perf_p = Path(perf_path)
+        return Path(csv_path), Path(img_path), Path(perf_path)
 
-        base = csv_p.stem
-        ok = (img_p.stem == base) and (perf_p.stem == f"{base}_performance")
-        if ok:
-            return csv_p, img_p, perf_p
 
-        QMessageBox.warning(
-            None,
-            "ファイル名が一致しません",
-            f"選択ルール：\n"
-            f"- {base}.csv\n"
-            f"- {base}.jpg\n"
-            f"- {base}_performance.csv\n\n"
-            f"もう一度選び直してください。",
-        )
+def run_batch(app: QApplication, jobs: list[dict]) -> None:
+    global BATCH_MODE_ACTIVE
+    BATCH_MODE_ACTIVE = True
+
+    print("=== 32_crossroad_viewer (batch mode) ===")
+    print(f"jobs: {len(jobs)}")
+
+    for idx, job in enumerate(jobs, start=1):
+        try:
+            crossroad_csv = Path(job["crossroad_csv"])
+            crossroad_img = Path(job["crossroad_img"])
+            performance_csv = Path(job["performance_csv"])
+
+            # 出力先（省略時は performance_csv の隣に *_report.xlsx）
+            if "output_xlsx" in job and str(job["output_xlsx"]).strip():
+                output_xlsx = Path(job["output_xlsx"])
+            else:
+                output_xlsx = performance_csv.with_name(f"{performance_csv.stem}_report.xlsx")
+
+            print(f"\n[{idx}/{len(jobs)}]")
+            print(f"  crossroad_csv : {crossroad_csv}")
+            print(f"  crossroad_img : {crossroad_img}")
+            print(f"  performance   : {performance_csv}")
+            print(f"  output_xlsx   : {output_xlsx}")
+
+            # 存在チェック（足りない場合は次へ）
+            missing = [p for p in [crossroad_csv, crossroad_img, performance_csv] if not p.exists()]
+            if missing:
+                print("  [SKIP] missing files:")
+                for m in missing:
+                    print(f"    - {m}")
+                continue
+
+            output_xlsx.parent.mkdir(parents=True, exist_ok=True)
+
+            viewer = CrossroadViewer(crossroad_csv, crossroad_img, performance_csv)
+
+            if viewer.clean_df.empty:
+                print("  [SKIP] no usable records (clean_df is empty)")
+            else:
+                viewer._create_excel_report(output_xlsx)
+                print("  [OK] saved excel")
+
+            viewer.close()
+            app.processEvents()
+
+        except Exception as exc:
+            print(f"  [ERROR] batch job failed: {exc}")
+            continue
+
+    print("\n=== batch finished ===")
+    BATCH_MODE_ACTIVE = False
+    app.quit()
 
 
 def main() -> None:
     app = QApplication(sys.argv)
+    # バッチ優先：BATCH_JOBS があればダイアログ無しで順次処理して終了
+    if BATCH_JOBS:
+        run_batch(app, BATCH_JOBS)
+        sys.exit(0)
+
+    # 従来GUI：ダイアログで3ファイルを選択
     picked = pick_three_files()
     if picked is None:
         sys.exit(0)
-    crossroad_csv, crossroad_jpg, performance_csv = picked
-    viewer = CrossroadViewer(crossroad_csv, crossroad_jpg, performance_csv)
+    crossroad_csv, crossroad_img, performance_csv = picked
+    viewer = CrossroadViewer(crossroad_csv, crossroad_img, performance_csv)
     viewer.resize(1200, 800)
     viewer.show()
     sys.exit(app.exec())
