@@ -51,7 +51,14 @@ COL_OUT_BRANCH = 10
 COL_DIST = 11
 COL_TIME = 12
 COL_SPEED = 13
-COL_CENTER_TIME = 31  # AF列：中心点_GPS時刻
+# 31_crossroad_trip_performance.py（新形式）追加列
+COL_PASS_COUNT = 14
+COL_SPEED_VALID = 15
+COL_SPEED_REASON = 16
+
+# 時間帯ヒストグラム用（優先：計測開始_GPS時刻(補間)、無ければ最近接線分_前点_GPS時刻）
+COL_TIME_PRIMARY = 25   # 計測開始_GPS時刻(補間)
+COL_TIME_FALLBACK = 31  # 最近接線分_前点_GPS時刻
 
 # Column indices for crossroad definition data
 COL_BRANCH_NO = 3
@@ -172,11 +179,13 @@ class CrossroadViewer(QMainWindow):
         self.performance_label = QLabel("Performance file: -")
         self.total_days_label = QLabel("総日数: -")
         self.total_records_label = QLabel("総レコード数: -")
+        self.speed_valid_label = QLabel("速度算出: -")
 
         header_layout.addWidget(self.crossroad_label)
         header_layout.addWidget(self.performance_label)
         header_layout.addWidget(self.total_days_label)
         header_layout.addWidget(self.total_records_label)
+        header_layout.addWidget(self.speed_valid_label)
         main_layout.addLayout(header_layout)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -306,16 +315,27 @@ class CrossroadViewer(QMainWindow):
             in_branch = pd.to_numeric(self.performance_df.iloc[:, COL_IN_BRANCH], errors="coerce")
             out_branch = pd.to_numeric(self.performance_df.iloc[:, COL_OUT_BRANCH], errors="coerce")
             speed = pd.to_numeric(self.performance_df.iloc[:, COL_SPEED], errors="coerce")
-            center_time = self.performance_df.iloc[:, COL_CENTER_TIME]
+            pass_count = pd.to_numeric(self.performance_df.iloc[:, COL_PASS_COUNT], errors="coerce")
+            speed_valid = pd.to_numeric(self.performance_df.iloc[:, COL_SPEED_VALID], errors="coerce")
+
+            # time (primary or fallback)
+            t1 = self.performance_df.iloc[:, COL_TIME_PRIMARY].fillna("").astype(str).str.strip()
+            t2 = self.performance_df.iloc[:, COL_TIME_FALLBACK].fillna("").astype(str).str.strip()
+            time_series = t1.where(t1 != "", t2)
 
             data = pd.DataFrame({
                 "date": date_series,
                 "in_b": in_branch,
                 "out_b": out_branch,
-                "spd": speed,
+                "spd": speed,                 # NaNあり（速度未算出）
+                "pass_cnt": pass_count,        # 通過カウント
+                "speed_valid": speed_valid,    # 1/0
+                "time": time_series,           # 時間帯ヒスト用
             })
-            data = data.dropna()
-            data["center_time"] = center_time.loc[data.index].values
+            # 交通量を落とさない：spd は欠損OK。date/in/out/pass_cnt は必須。
+            data = data.dropna(subset=["date", "in_b", "out_b", "pass_cnt"])
+            data["pass_cnt"] = data["pass_cnt"].astype(int)
+            data["speed_valid"] = data["speed_valid"].fillna(0).astype(int)
 
             data["in_b"] = data["in_b"].astype(int)
             data["out_b"] = data["out_b"].astype(int)
@@ -329,8 +349,9 @@ class CrossroadViewer(QMainWindow):
 
             total_days = len(self.unique_dates)
             grouped = data.groupby(["in_b", "out_b"]).agg(
-                総台数=("spd", "size"),
-                平均速度=("spd", "mean"),
+                総台数=("pass_cnt", "sum"),
+                速度算出OK=("speed_valid", "sum"),
+                平均速度=("spd", "mean"),  # NaNは自動で除外される
             )
             if total_days > 0:
                 grouped["日あたり台数"] = grouped["総台数"] / total_days
@@ -352,7 +373,11 @@ class CrossroadViewer(QMainWindow):
         self.crossroad_label.setText(f"Crossroad file: {self.crossroad_path.name}")
         self.performance_label.setText(f"Performance file: {self.performance_path.name}")
         self.total_days_label.setText(f"総日数: {len(self.unique_dates)}")
-        self.total_records_label.setText(f"総レコード数: {len(self.clean_df)}")
+        total_pass = int(self.clean_df["pass_cnt"].sum()) if not self.clean_df.empty else 0
+        ok = int(self.clean_df["speed_valid"].sum()) if not self.clean_df.empty else 0
+        ng = total_pass - ok
+        self.total_records_label.setText(f"総レコード数(通過): {total_pass}")
+        self.speed_valid_label.setText(f"速度算出: OK={ok} / NG={ng}")
 
     def _populate_table(self) -> None:
         df = self.grouped_df
@@ -442,9 +467,11 @@ class CrossroadViewer(QMainWindow):
             self.canvas.draw()
             return
 
-        speeds = subset["spd"].dropna().astype(float).tolist()
-        avg_speed = subset["spd"].mean()
-        count = len(speeds)
+        total_pass = int(subset["pass_cnt"].sum()) if not subset.empty else 0
+        ok = int(subset["speed_valid"].sum()) if not subset.empty else 0
+        speeds = subset[subset["speed_valid"] == 1]["spd"].dropna().astype(float).tolist()
+        avg_speed = subset[subset["speed_valid"] == 1]["spd"].mean()
+        count = len(speeds)  # 速度ヒスト用の母数（速度OKのみ）
 
         # Fixed bins as percentages:
         # 0-10,10-20,20-30,30-40,40-50,50-60,60+
@@ -480,9 +507,7 @@ class CrossroadViewer(QMainWindow):
 
         time_labels = ["0-3", "3-6", "6-9", "9-12", "12-15", "15-18", "18-21", "21-24"]
         time_counts = [0] * 8
-        parsed_times = [
-            dt for dt in subset["center_time"].apply(parse_center_datetime).tolist() if dt is not None
-        ]
+        parsed_times = [dt for dt in subset["time"].apply(parse_center_datetime).tolist() if dt is not None]
         for dt in parsed_times:
             hour = dt.hour
             if hour < 3:
@@ -515,7 +540,9 @@ class CrossroadViewer(QMainWindow):
             ax_time.axis("off")
             ax_time.text(0.5, 0.5, "時刻データなし", ha="center", va="center")
 
-        fig.suptitle(f"{in_b}→{out_b} / 台数:{count} / 平均速度:{avg_speed:.1f} km/h")
+        fig.suptitle(
+            f"{in_b}→{out_b} / 通過台数:{total_pass} / 速度OK:{ok} / 平均速度:{(avg_speed if avg_speed==avg_speed else 0):.1f} km/h"
+        )
         fig.tight_layout(rect=[0, 0, 1, 0.92])
         self.canvas.draw()
 
@@ -583,6 +610,9 @@ class CrossroadViewer(QMainWindow):
             dist_val = pd.to_numeric(row.iloc[COL_DIST], errors="coerce")
             time_val = pd.to_numeric(row.iloc[COL_TIME], errors="coerce")
             speed_val = pd.to_numeric(row.iloc[COL_SPEED], errors="coerce")
+            pass_cnt_val = pd.to_numeric(row.iloc[COL_PASS_COUNT], errors="coerce")
+            speed_valid_val = pd.to_numeric(row.iloc[COL_SPEED_VALID], errors="coerce")
+            speed_reason = str(row.iloc[COL_SPEED_REASON]) if not pd.isna(row.iloc[COL_SPEED_REASON]) else "不明"
 
             detail_lines = [
                 f"ファイル名：{file_name}",
@@ -591,6 +621,9 @@ class CrossroadViewer(QMainWindow):
                 f"道なり距離(m)：{_format_value(dist_val, '{:.0f}')}",
                 f"所要時間(s)：{_format_value(time_val, '{:.0f}')}",
                 f"交差点通過速度(km/h)：{_format_value(speed_val, '{:.1f}')}",
+                f"通過カウント：{_format_value(pass_cnt_val, '{:.0f}')}",
+                f"速度算出可否：{_format_value(speed_valid_val, '{:.0f}')}",
+                f"速度算出不可理由：{speed_reason}",
             ]
 
             self.detail_text.setPlainText("\n".join(detail_lines))
@@ -676,12 +709,12 @@ class CrossroadViewer(QMainWindow):
         combos: list[dict] = []
         grouped = self.clean_df.groupby(["in_b", "out_b"])
         for (in_b, out_b), subset in grouped:
-            count_total = len(subset)
+            count_total = int(subset["pass_cnt"].sum())
             daily_count = count_total / total_days if total_days else 0
-            avg_speed = subset["spd"].mean() if not subset.empty else 0
+            avg_speed = subset[subset["speed_valid"] == 1]["spd"].mean() if not subset.empty else 0
 
-            speed_perc = self._calc_speed_percent(subset["spd"])
-            time_perc = self._calc_time_percent(subset["center_time"])
+            speed_perc = self._calc_speed_percent(subset[subset["speed_valid"] == 1]["spd"])
+            time_perc = self._calc_time_percent(subset["time"])
 
             combos.append(
                 {
