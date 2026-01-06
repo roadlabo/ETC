@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import bisect
 import csv
 import time
 from dataclasses import dataclass
@@ -56,6 +57,18 @@ CROSSROAD_HIT_DIST_M = 20.0
 CROSSROAD_SEG_HIT_DIST_M = 20.0
 CROSSROAD_MIN_HITS = 1
 EARTH_RADIUS_M = 6_371_000.0
+
+# ============================================================
+# 枝判定（流入/流出）角度の安定化設定
+#  - 中心点の前後「2点」から走行方向を作り、枝(dir_deg)へマッチングする
+#  - in:  (center-60m -> center-10m) の走行方向を推定し、180度反転して "center->branch" に合わせる
+#  - out: (center+10m -> center+60m) の走行方向を推定し、そのまま "center->branch" として使う
+# ============================================================
+DIR_IN_FAR_M = 60.0
+DIR_IN_NEAR_M = 10.0
+DIR_OUT_NEAR_M = 10.0
+DIR_OUT_FAR_M = 60.0
+BRANCH_MAX_ANGLE_DIFF_DEG = 35.0  # これを超えたら枝番は未確定（空欄）
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -154,7 +167,6 @@ def interpolate_at_distance(points, dt_list, cumdist, target_m):
         return points[-1][0], points[-1][1], dt_list[-1]
 
     # 二分探索
-    import bisect
     j = bisect.bisect_right(cumdist, target_m) - 1
     j = max(0, min(j, len(points) - 2))
 
@@ -175,6 +187,26 @@ def interpolate_at_distance(points, dt_list, cumdist, target_m):
         return lat, lon, None
     dt = t0 + timedelta(seconds=r * (t1 - t0).total_seconds())
     return lat, lon, dt
+
+
+def interpolate_point_at_distance(points, cumdist, target_m):
+    """道なり距離target_m地点の (lat, lon) を線形補間で返す。範囲外はNone。"""
+    if target_m < 0 or target_m > cumdist[-1]:
+        return None
+    if target_m == 0:
+        return points[0]
+    if target_m == cumdist[-1]:
+        return points[-1]
+    j = bisect.bisect_right(cumdist, target_m) - 1
+    j = max(0, min(j, len(points) - 2))
+    d0 = cumdist[j]
+    d1 = cumdist[j + 1]
+    if d1 <= d0:
+        return points[j]
+    r = (target_m - d0) / (d1 - d0)
+    lat0, lon0 = points[j]
+    lat1, lon1 = points[j + 1]
+    return (lat0 + r * (lat1 - lat0), lon0 + r * (lon1 - lon0))
 
 
 def trip_passes_crossroad(points, center_lat, center_lon):
@@ -291,6 +323,18 @@ def find_nearest_branch(angle: float, branches: Iterable[Branch]) -> str:
     return min_branch or ""
 
 
+def find_nearest_branch_with_diff(angle: float, branches: Iterable[Branch]) -> tuple[str, float]:
+    """最も近い枝番と角度差を返す（枝が無ければ('',inf)）"""
+    min_branch = ""
+    min_diff = float("inf")
+    for br in branches:
+        diff = angular_diff(angle, br.dir_deg)
+        if diff < min_diff:
+            min_diff = diff
+            min_branch = br.branch_no
+    return min_branch, min_diff
+
+
 def read_csv_flexible(path: Path) -> pd.DataFrame:
     for enc in ("utf-8-sig", "utf-8", "cp932", "shift_jis"):
         try:
@@ -338,6 +382,9 @@ HEADER = [
     "用途",
     "流入枝番",
     "流出枝番",
+    "流入角度差(deg)",
+    "流出角度差(deg)",
+    "角度算出方式",
     "計測距離(m)",
     "所要時間(s)",
     "交差点通過速度(km/h)",
@@ -483,6 +530,7 @@ def main() -> None:
                     hit_trips += 1
 
                     # --------- ここから：通過したら必ず1行出す（速度は欠損でもOK） ---------
+                    cumdist = build_cumdist(points)
                     dist_m = MEASURE_PRE_M + MEASURE_POST_M  # 定義上の距離（110m固定）
                     elapsed = None
                     speed_kmh = None
@@ -508,32 +556,78 @@ def main() -> None:
                     lon_a = ""
                     lat_a = ""
                     gps_a = ""
+                    in_diff = float("inf")
+                    out_diff = float("inf")
+                    angle_method_str = ""
 
                     # 最近接線分（中心への最短距離となる線分）を求める
                     seg_i_i, seg_t_f, seg_d_f = closest_segment_to_center(points, cross.center_lat, cross.center_lon)
                     seg_i = seg_i_i
+                    idx_center = closest_center_index(points, cross.center_lat, cross.center_lon)
 
                     # 流入/流出枝番：基本は最近接線分の前後点。取れない場合は中心最近接点±1で代替。
                     if seg_i is not None:
                         idx_b = seg_i
                         idx_a = seg_i + 1
+                    elif idx_center is None:
+                        # ここまで来て points があるのに中心最寄りが取れないのは例外的
+                        speed_reason = "NO_SEGMENT"
+                        speed_valid = 0
+                        no_segment_trips += 1
+                        idx_b = 0
+                        idx_a = min(1, len(points) - 1)
                     else:
-                        idx_center = closest_center_index(points, cross.center_lat, cross.center_lon)
-                        if idx_center is None:
-                            # ここまで来て points があるのに中心最寄りが取れないのは例外的
-                            speed_reason = "NO_SEGMENT"
-                            speed_valid = 0
-                            no_segment_trips += 1
-                            idx_b = 0
-                            idx_a = min(1, len(points) - 1)
-                        else:
-                            idx_b = max(0, idx_center - 1)
-                            idx_a = min(len(points) - 1, idx_center + 1)
+                        idx_b = max(0, idx_center - 1)
+                        idx_a = min(len(points) - 1, idx_center + 1)
 
-                    in_angle = bearing_deg(cross.center_lat, cross.center_lon, points[idx_b][0], points[idx_b][1])
-                    out_angle = bearing_deg(cross.center_lat, cross.center_lon, points[idx_a][0], points[idx_a][1])
-                    in_branch = find_nearest_branch(in_angle, cross.branches)
-                    out_branch = find_nearest_branch(out_angle, cross.branches)
+                    # ============================================================
+                    # 枝判定角度：中心前後の「2点」から走行方向を推定して安定化
+                    # ============================================================
+                    angle_method = []
+                    center_pos_val = cumdist[idx_center] if idx_center is not None and idx_center < len(cumdist) else None
+
+                    # ---- IN（流入）: (center-60m -> center-10m) の走行方向を推定し、180度反転 ----
+                    if center_pos_val is not None:
+                        p_in_far = interpolate_point_at_distance(points, cumdist, center_pos_val - DIR_IN_FAR_M)
+                        p_in_near = interpolate_point_at_distance(points, cumdist, center_pos_val - DIR_IN_NEAR_M)
+                    else:
+                        p_in_far = None
+                        p_in_near = None
+
+                    if p_in_far and p_in_near:
+                        approach_bearing = bearing_deg(p_in_far[0], p_in_far[1], p_in_near[0], p_in_near[1])
+                        in_angle = (approach_bearing + 180.0) % 360.0  # center->branch と同じ向きへ
+                        angle_method.append("IN:interp2pt")
+                    else:
+                        idx_center_fallback = idx_center if idx_center is not None else idx_b
+                        idx_in = max(0, idx_center_fallback - 2)
+                        in_angle = bearing_deg(points[idx_center_fallback][0], points[idx_center_fallback][1],
+                                               points[idx_in][0], points[idx_in][1])
+                        angle_method.append("IN:fallback_idx-2")
+
+                    # ---- OUT（流出）: (center+10m -> center+60m) の走行方向を推定 ----
+                    if center_pos_val is not None:
+                        p_out_near = interpolate_point_at_distance(points, cumdist, center_pos_val + DIR_OUT_NEAR_M)
+                        p_out_far = interpolate_point_at_distance(points, cumdist, center_pos_val + DIR_OUT_FAR_M)
+                    else:
+                        p_out_near = None
+                        p_out_far = None
+
+                    if p_out_near and p_out_far:
+                        out_angle = bearing_deg(p_out_near[0], p_out_near[1], p_out_far[0], p_out_far[1])
+                        angle_method.append("OUT:interp2pt")
+                    else:
+                        idx_center_fallback = idx_center if idx_center is not None else idx_a
+                        idx_out = min(len(points) - 1, idx_center_fallback + 2)
+                        out_angle = bearing_deg(points[idx_center_fallback][0], points[idx_center_fallback][1],
+                                                points[idx_out][0], points[idx_out][1])
+                        angle_method.append("OUT:fallback_idx+2")
+
+                    in_branch_raw, in_diff = find_nearest_branch_with_diff(in_angle, cross.branches)
+                    out_branch_raw, out_diff = find_nearest_branch_with_diff(out_angle, cross.branches)
+                    in_branch = in_branch_raw if in_diff <= BRANCH_MAX_ANGLE_DIFF_DEG else ""
+                    out_branch = out_branch_raw if out_diff <= BRANCH_MAX_ANGLE_DIFF_DEG else ""
+                    angle_method_str = "/".join(angle_method)
 
                     # 最近接線分の診断情報（可能な範囲で記録）
                     if seg_i is not None:
@@ -560,7 +654,6 @@ def main() -> None:
                             speed_reason = "NO_SEGMENT"
                             no_segment_trips += 1
                         else:
-                            cumdist = build_cumdist(points)
                             seg_len = cumdist[seg_i + 1] - cumdist[seg_i]
                             center_pos_val = cumdist[seg_i] + seg_t_f * seg_len
                             center_pos_m = f"{center_pos_val:.3f}"
@@ -609,6 +702,9 @@ def main() -> None:
                         vehicle_use,
                         str(in_branch),
                         str(out_branch),
+                        f"{in_diff:.1f}" if in_diff != float("inf") else "",
+                        f"{out_diff:.1f}" if out_diff != float("inf") else "",
+                        angle_method_str,
                         f"{dist_m:.3f}",
                         f"{elapsed:.3f}" if elapsed else "",
                         f"{speed_kmh:.3f}" if speed_kmh else "",
