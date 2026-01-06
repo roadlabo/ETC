@@ -38,6 +38,17 @@ TARGET_WEEKDAYS = ["TUE", "WED", "THU"]
 # 全曜日を対象にしたい場合は空リストにする：
 # TARGET_WEEKDAYS: list[str] = []
 
+
+# ============================================================
+# 交差点通過速度（独自指標）の計測区間設定
+# 交差点中心（最近接点）を基準として、走行方向に
+#   前 MEASURE_PRE_M 〜 後 MEASURE_POST_M の所要時間を線形補間で算出し、
+#   (MEASURE_PRE_M + MEASURE_POST_M) / 所要時間 で速度を算出する。
+# 例：前100m〜後10m → 距離110m固定。
+# ============================================================
+MEASURE_PRE_M = 100.0
+MEASURE_POST_M = 10.0
+
 # ============================================================
 # 交差点通過判定ロジック（31 / 16 と完全一致）
 # ============================================================
@@ -80,6 +91,90 @@ def point_to_segment_distance_m(cx, cy, ax, ay, bx, by):
     px = axm + t * vx
     py = aym + t * vy
     return (px*px + py*py)**0.5
+
+
+def segment_closest_t_and_dist_m(cx, cy, ax, ay, bx, by):
+    """中心点(cx,cy)から線分A(ax,ay)-B(bx,by)への最接近パラメータt(0-1)と距離[m]を返す。"""
+    import math
+    km_lat = 111.32
+    km_lon = km_lat * math.cos(math.radians(cy))
+
+    axm = (ax - cx) * km_lon * 1000
+    aym = (ay - cy) * km_lat * 1000
+    bxm = (bx - cx) * km_lon * 1000
+    bym = (by - cy) * km_lat * 1000
+
+    vx = bxm - axm
+    vy = bym - aym
+    vv = vx*vx + vy*vy
+    if vv == 0:
+        return 0.0, (axm*axm + aym*aym) ** 0.5
+
+    # 中心点(0,0)からの射影
+    t = ((-axm)*vx + (-aym)*vy) / vv
+    t = max(0.0, min(1.0, t))
+    px = axm + t * vx
+    py = aym + t * vy
+    d = (px*px + py*py) ** 0.5
+    return t, d
+
+
+def closest_segment_to_center(points, center_lat, center_lon):
+    """交差点中心への最近接線分(i,i+1)と、その線分上の最近接t(0-1),距離[m]を返す。"""
+    best_i = None
+    best_t = 0.0
+    best_d = float("inf")
+    for i in range(len(points) - 1):
+        lat1, lon1 = points[i]
+        lat2, lon2 = points[i + 1]
+        t, d = segment_closest_t_and_dist_m(center_lon, center_lat, lon1, lat1, lon2, lat2)
+        if d < best_d:
+            best_d = d
+            best_t = t
+            best_i = i
+    return best_i, best_t, best_d
+
+
+def build_cumdist(points):
+    """points[0]からの道なり累積距離[m]（点数と同じ長さ）"""
+    cum = [0.0]
+    for i in range(len(points) - 1):
+        lat1, lon1 = points[i]
+        lat2, lon2 = points[i + 1]
+        cum.append(cum[-1] + haversine_m(lat1, lon1, lat2, lon2))
+    return cum
+
+
+def interpolate_at_distance(points, dt_list, cumdist, target_m):
+    """道なり距離target_m地点の (lat, lon, datetime) を線形補間で返す。"""
+    from datetime import timedelta
+    if target_m <= 0:
+        return points[0][0], points[0][1], dt_list[0]
+    if target_m >= cumdist[-1]:
+        return points[-1][0], points[-1][1], dt_list[-1]
+
+    # 二分探索
+    import bisect
+    j = bisect.bisect_right(cumdist, target_m) - 1
+    j = max(0, min(j, len(points) - 2))
+
+    d0 = cumdist[j]
+    d1 = cumdist[j + 1]
+    if d1 <= d0:
+        return points[j][0], points[j][1], dt_list[j]
+
+    r = (target_m - d0) / (d1 - d0)
+    lat0, lon0 = points[j]
+    lat1, lon1 = points[j + 1]
+    lat = lat0 + r * (lat1 - lat0)
+    lon = lon0 + r * (lon1 - lon0)
+
+    t0 = dt_list[j]
+    t1 = dt_list[j + 1]
+    if not t0 or not t1:
+        return lat, lon, None
+    dt = t0 + timedelta(seconds=r * (t1 - t0).total_seconds())
+    return lat, lon, dt
 
 
 def trip_passes_crossroad(points, center_lat, center_lon):
@@ -243,21 +338,21 @@ HEADER = [
     "用途",
     "流入枝番",
     "流出枝番",
-    "道なり距離(m)",
+    "計測距離(m)",
     "所要時間(s)",
     "交差点通過速度(km/h)",
-    # ここから追加 → 前後5点の経度/緯度/GPS時刻
-    "5P前_経度","5P前_緯度","5P前_GPS時刻",
-    "4P前_経度","4P前_緯度","4P前_GPS時刻",
-    "3P前_経度","3P前_緯度","3P前_GPS時刻",
-    "2P前_経度","2P前_緯度","2P前_GPS時刻",
-    "1P前_経度","1P前_緯度","1P前_GPS時刻",
-    "中心点_経度","中心点_緯度","中心点_GPS時刻",
-    "1P後_経度","1P後_緯度","1P後_GPS時刻",
-    "2P後_経度","2P後_緯度","2P後_GPS時刻",
-    "3P後_経度","3P後_緯度","3P後_GPS時刻",
-    "4P後_経度","4P後_緯度","4P後_GPS時刻",
-    "5P後_経度","5P後_緯度","5P後_GPS時刻",
+    # ---- ここから診断用（補間区間・最近接情報）----
+    "計測区間_前(m)",
+    "計測区間_後(m)",
+    "中心最近接距離(m)",
+    "中心最近接位置(m)",
+    "計測開始位置(m)",
+    "計測終了位置(m)",
+    "計測開始_経度(補間)", "計測開始_緯度(補間)", "計測開始_GPS時刻(補間)",
+    "計測終了_経度(補間)", "計測終了_緯度(補間)", "計測終了_GPS時刻(補間)",
+    "最近接線分_前点_経度", "最近接線分_前点_緯度", "最近接線分_前点_GPS時刻",
+    "最近接線分_後点_経度", "最近接線分_後点_緯度", "最近接線分_後点_GPS時刻",
+    "最近接線分_t(0-1)",
 ]
 
 
@@ -273,13 +368,11 @@ COL_LAT = 15          # P列: 緯度
 
 
 def main() -> None:
-    WINDOW = 5  # 5点前後
-
     # -------------------- 全体開始 --------------------
     start_all = time.time()
     start_all_str = time.strftime("%Y-%m-%d %H:%M:%S")
 
-    print("=== 交差点性能解析: 70_crossroad_trip_performance ===")
+    print("=== 交差点性能解析: 31_crossroad_trip_performance ===")
     print(f"開始時間: {start_all_str}")
     print(f"出力フォルダ: {OUTPUT_BASE_DIR}")
     print(f"設定セット数: {len(CONFIG)}")
@@ -287,6 +380,7 @@ def main() -> None:
         print(f"対象曜日: {', '.join(TARGET_WEEKDAYS)}")
     else:
         print("対象曜日: 全曜日")
+    print(f"計測区間: 前{MEASURE_PRE_M:.0f}m〜後{MEASURE_POST_M:.0f}m（距離{MEASURE_PRE_M+MEASURE_POST_M:.0f}m固定）")
     print("--------------------------------------------------")
 
     # ==============================================================
@@ -315,6 +409,8 @@ def main() -> None:
         total_trips = 0
         hit_trips = 0
         nopass_trips = 0
+        bad_time_trips = 0
+        out_of_range_trips = 0
 
         print(f"\n[{cfg_idx}/{len(CONFIG)}] 交差点: {crossroad_path.name}")
         print(f"  入力フォルダ: {trip_folder}")
@@ -380,34 +476,49 @@ def main() -> None:
 
                     hit_trips += 1
 
-                    idx_center = closest_center_index(points, cross.center_lat, cross.center_lon)
-                    if idx_center is None:
+                    # 最近接線分（中心への最短距離となる線分）を求め、線分上の最近接点を「中心基準位置」とする
+                    seg_i, seg_t, seg_d = closest_segment_to_center(points, cross.center_lat, cross.center_lon)
+                    if seg_i is None:
                         nopass_trips += 1
                         continue
 
-                    idx_s = max(0, idx_center - WINDOW)
-                    idx_e = min(len(points)-1, idx_center + WINDOW)
+                    # GPS時刻（datetime）を用意（補間で必要）
+                    dt_list = [parse_dt14(t) for t in gps_times]
+                    if any(d is None for d in dt_list):
+                        bad_time_trips += 1
+                        continue
 
-                    idx_b = max(0, idx_center - 1)
-                    idx_a = min(len(points)-1, idx_center + 1)
+                    cumdist = build_cumdist(points)
+                    seg_len = cumdist[seg_i + 1] - cumdist[seg_i]
+                    center_pos_m = cumdist[seg_i] + seg_t * seg_len
 
-                    # dir_deg（center → branch）と同じ座標系で比較するため、
-                    # in_angle も交差点中心から流入元ブランチ方向を取る
-                    in_angle = bearing_deg(points[idx_center][0], points[idx_center][1],
-                                           points[idx_b][0], points[idx_b][1])
-                    # out_angle は交差点中心から流出先ブランチ方向
-                    out_angle = bearing_deg(points[idx_center][0], points[idx_center][1],
-                                            points[idx_a][0], points[idx_a][1])
+                    start_pos_m = center_pos_m - MEASURE_PRE_M
+                    end_pos_m = center_pos_m + MEASURE_POST_M
+
+                    # 計測区間がトリップ範囲外になるものは除外（定義を固定するため）
+                    if start_pos_m < 0 or end_pos_m > cumdist[-1]:
+                        out_of_range_trips += 1
+                        continue
+
+                    lat_s, lon_s, dt_s = interpolate_at_distance(points, dt_list, cumdist, start_pos_m)
+                    lat_e, lon_e, dt_e = interpolate_at_distance(points, dt_list, cumdist, end_pos_m)
+                    if dt_s is None or dt_e is None:
+                        bad_time_trips += 1
+                        continue
+
+                    elapsed = (dt_e - dt_s).total_seconds()
+                    dist_m = MEASURE_PRE_M + MEASURE_POST_M
+                    speed_kmh = dist_m / elapsed * 3.6 if elapsed and elapsed > 0 else None
+
+                    # 流入/流出方向は最近接線分の前後点で近似
+                    idx_b = seg_i
+                    idx_a = seg_i + 1
+
+                    in_angle = bearing_deg(cross.center_lat, cross.center_lon, points[idx_b][0], points[idx_b][1])
+                    out_angle = bearing_deg(cross.center_lat, cross.center_lon, points[idx_a][0], points[idx_a][1])
 
                     in_branch = find_nearest_branch(in_angle, cross.branches)
                     out_branch = find_nearest_branch(out_angle, cross.branches)
-
-                    dist_m = accum_distance(points, idx_s, idx_e)
-
-                    t_start = parse_dt14(gps_times[idx_s])
-                    t_end = parse_dt14(gps_times[idx_e])
-                    elapsed = (t_end - t_start).total_seconds() if (t_start and t_end) else None
-                    speed_kmh = dist_m / elapsed * 3.6 if elapsed and elapsed > 0 else None
 
                     row_out = [
                         crossroad_path.name,
@@ -425,17 +536,26 @@ def main() -> None:
                         f"{elapsed:.3f}" if elapsed else "",
                         f"{speed_kmh:.3f}" if speed_kmh else "",
                     ]
+                    # ---- 診断用列（補間区間・最近接情報） ----
+                    row_out.extend([
+                        f"{MEASURE_PRE_M:.0f}",
+                        f"{MEASURE_POST_M:.0f}",
+                        f"{seg_d:.3f}",
+                        f"{center_pos_m:.3f}",
+                        f"{start_pos_m:.3f}",
+                        f"{end_pos_m:.3f}",
+                        f"{lon_s:.8f}", f"{lat_s:.8f}", dt_s.strftime("%Y%m%d%H%M%S"),
+                        f"{lon_e:.8f}", f"{lat_e:.8f}", dt_e.strftime("%Y%m%d%H%M%S"),
+                    ])
 
-                    def safe(idx):
-                        if 0 <= idx < len(points):
-                            lat, lon = points[idx]
-                            t = gps_times[idx]
-                            return f"{lon}", f"{lat}", t
-                        return "", "", ""
-
-                    for offset in range(-5, 6):
-                        lon_s, lat_s, t_s = safe(idx_center + offset)
-                        row_out.extend([lon_s, lat_s, t_s])
+                    # 最近接線分の前後点（生の点）
+                    lat_b, lon_b = points[idx_b]
+                    lat_a, lon_a = points[idx_a]
+                    row_out.extend([
+                        f"{lon_b}", f"{lat_b}", gps_times[idx_b],
+                        f"{lon_a}", f"{lat_a}", gps_times[idx_a],
+                        f"{seg_t:.6f}",
+                    ])
 
                     writer.writerow(row_out)
 
@@ -462,7 +582,9 @@ def main() -> None:
         print(f"  セット終了時間: {cfg_end_str}")
         print(
             f"  完了: ファイル={total_files}, 対象トリップ={total_trips}, "
-            f"HIT={hit_trips}, 該当なし={nopass_trips}, 所要時間={cfg_minutes:5.1f}分"
+            f"HIT={hit_trips}, 該当なし={nopass_trips}, "
+            f"除外(時刻欠損)={bad_time_trips}, 除外(区間範囲外)={out_of_range_trips}, "
+            f"所要時間={cfg_minutes:5.1f}分"
         )
 
     # -------------------- 全体終了 --------------------
