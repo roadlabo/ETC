@@ -102,6 +102,7 @@ LEAFLET_HTML = r"""
 
   let centerMarker = null;
   let centerCircle = null;
+  let calcMarker = null;
 
   let branchLayer = L.layerGroup();
   let tripLayer = L.layerGroup();
@@ -122,8 +123,10 @@ LEAFLET_HTML = r"""
 
     map.setView([centerLat, centerLon], zoom);
 
-    centerMarker = L.circleMarker([centerLat, centerLon], {radius: 6}).addTo(map);
-    centerCircle = L.circle([centerLat, centerLon], {radius: 100}).addTo(map);
+    centerMarker = L.circleMarker([centerLat, centerLon], {
+      radius: 7, color: 'red', fillColor: 'red', fillOpacity: 1.0
+    }).addTo(map);
+    centerCircle = L.circle([centerLat, centerLon], {radius: 200}).addTo(map);
   }
 
   function clearLayer(layer){
@@ -157,15 +160,15 @@ LEAFLET_HTML = r"""
   }
 
   function showTrip(tr){
-    // tr: {center:{lat,lon}, start:{lat,lon}, end:{lat,lon}, in_branch, out_branch, in_diff, out_diff}
-    if (!map) initMap(tr.center.lat, tr.center.lon, 19);
+    // tr: {center_spec:{lat,lon}, center_calc:{lat,lon}, start:{lat,lon}, end:{lat,lon}, ...}
+    if (!map) initMap(tr.center_spec.lat, tr.center_spec.lon, 19);
 
-    // 100mに寄せる（fitBoundsで軽く固定）
-    const dlat = 100.0 / 111320.0;
-    const dlon = 100.0 / (111320.0 * Math.cos(tr.center.lat * Math.PI/180.0));
+    // 200mに寄せる
+    const dlat = 200.0 / 111320.0;
+    const dlon = 200.0 / (111320.0 * Math.cos(tr.center_spec.lat * Math.PI/180.0));
     const b = L.latLngBounds(
-      [tr.center.lat - dlat, tr.center.lon - dlon],
-      [tr.center.lat + dlat, tr.center.lon + dlon]
+      [tr.center_spec.lat - dlat, tr.center_spec.lon - dlon],
+      [tr.center_spec.lat + dlat, tr.center_spec.lon + dlon]
     );
     map.fitBounds(b, {padding:[20,20]});
 
@@ -175,14 +178,16 @@ LEAFLET_HTML = r"""
     // center circle & marker refresh
     if (centerMarker) map.removeLayer(centerMarker);
     if (centerCircle) map.removeLayer(centerCircle);
-    centerMarker = L.circleMarker([tr.center.lat, tr.center.lon], {radius: 6}).addTo(map);
-    centerCircle = L.circle([tr.center.lat, tr.center.lon], {radius: 100}).addTo(map);
+    if (calcMarker) map.removeLayer(calcMarker);
+    centerMarker = L.circleMarker([tr.center_spec.lat, tr.center_spec.lon], {
+      radius: 7, color: 'red', fillColor: 'red', fillOpacity: 1.0
+    }).addTo(map);
+    centerCircle = L.circle([tr.center_spec.lat, tr.center_spec.lon], {radius: 200}).addTo(map);
+    calcMarker = L.circleMarker([tr.center_calc.lat, tr.center_calc.lon], {radius: 6}).addTo(map);
 
-    // line
-    const line = L.polyline(
-      [[tr.start.lat, tr.start.lon], [tr.end.lat, tr.end.lon]],
-      {}
-    ).addTo(tripLayer);
+    // 2-segment line: start -> center_calc -> end
+    const line1 = L.polyline([[tr.start.lat, tr.start.lon], [tr.center_calc.lat, tr.center_calc.lon]], {}).addTo(tripLayer);
+    const line2 = L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [tr.end.lat, tr.end.lon]], {}).addTo(tripLayer);
 
     // start/end markers
     const startM = L.circleMarker([tr.start.lat, tr.start.lon], {radius: 6}).addTo(tripLayer);
@@ -198,16 +203,44 @@ LEAFLET_HTML = r"""
     }).addTo(tripLayer);
 
     // animation: move marker along start->end (simple interpolation)
-    const steps = 60;
+    const steps = 80;
     let i = 0;
     animMarker = L.circleMarker([tr.start.lat, tr.start.lon], {radius: 7}).addTo(tripLayer);
 
+    function havDist(a, b){
+      const R = 6371000.0;
+      const toRad = (x)=>x*Math.PI/180.0;
+      const dLat = toRad(b.lat - a.lat);
+      const dLon = toRad(b.lon - a.lon);
+      const la1 = toRad(a.lat);
+      const la2 = toRad(b.lat);
+      const s = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
+      return 2*R*Math.atan2(Math.sqrt(s), Math.sqrt(1-s));
+    }
+    const A = {lat: tr.start.lat, lon: tr.start.lon};
+    const C = {lat: tr.center_calc.lat, lon: tr.center_calc.lon};
+    const B = {lat: tr.end.lat, lon: tr.end.lon};
+    const d1 = havDist(A, C);
+    const d2 = havDist(C, B);
+    const total = Math.max(1.0, d1 + d2);
+    const steps1 = Math.max(1, Math.round(steps * (d1 / total)));
+    const steps2 = Math.max(1, steps - steps1);
+
     animTimer = setInterval(() => {
       i += 1;
-      if (i > steps) { i = 0; }
-      const t = i / steps;
-      const lat = tr.start.lat + (tr.end.lat - tr.start.lat) * t;
-      const lon = tr.start.lon + (tr.end.lon - tr.start.lon) * t;
+      if (i > (steps1 + steps2)) { i = 0; }
+
+      let lat, lon;
+      if (i <= steps1){
+        const t = i / steps1;
+        lat = tr.start.lat + (tr.center_calc.lat - tr.start.lat) * t;
+        lon = tr.start.lon + (tr.center_calc.lon - tr.start.lon) * t;
+      }else{
+        const j = i - steps1;
+        const t = j / steps2;
+        lat = tr.center_calc.lat + (tr.end.lat - tr.center_calc.lat) * t;
+        lon = tr.center_calc.lon + (tr.end.lon - tr.center_calc.lon) * t;
+      }
       animMarker.setLatLng([lat, lon]);
     }, 40);
   }
@@ -245,11 +278,10 @@ REQUIRED_COLS = [
     "計測開始_緯度(補間)",
     "計測終了_経度(補間)",
     "計測終了_緯度(補間)",
-    "最近接線分_前点_経度",
-    "最近接線分_前点_緯度",
-    "最近接線分_後点_経度",
-    "最近接線分_後点_緯度",
-    "最近接線分_t(0-1)",
+    "交差点中心_経度",
+    "交差点中心_緯度",
+    "算出中心_経度",
+    "算出中心_緯度",
 ]
 
 DISPLAY_COLS_IN_TABLE = [
@@ -299,28 +331,18 @@ class BranchCheckWindow(QMainWindow):
         # 数値列をなるべく数値化
         for c in ["流入角度差(deg)", "流出角度差(deg)", "計測距離(m)", "所要時間(s)", "交差点通過速度(km/h)",
                   "計測開始_経度(補間)", "計測開始_緯度(補間)", "計測終了_経度(補間)", "計測終了_緯度(補間)",
-                  "最近接線分_前点_経度", "最近接線分_前点_緯度", "最近接線分_後点_経度", "最近接線分_後点_緯度",
-                  "最近接線分_t(0-1)"]:
+                  "交差点中心_経度", "交差点中心_緯度", "算出中心_経度", "算出中心_緯度",
+                  "中心最近接距離(m)"]:
             self.df[c] = pd.to_numeric(self.df[c], errors="coerce")
 
         self.df = self.df.dropna(subset=[
             "計測開始_経度(補間)", "計測開始_緯度(補間)", "計測終了_経度(補間)", "計測終了_緯度(補間)",
-            "最近接線分_前点_経度", "最近接線分_前点_緯度", "最近接線分_後点_経度", "最近接線分_後点_緯度",
-            "最近接線分_t(0-1)",
+            "交差点中心_経度", "交差点中心_緯度", "算出中心_経度", "算出中心_緯度",
         ]).reset_index(drop=True)
 
-        # 交差点中心推定（最近接点の中央値）
-        t = self.df["最近接線分_t(0-1)"].to_numpy()
-        lon1 = self.df["最近接線分_前点_経度"].to_numpy()
-        lat1 = self.df["最近接線分_前点_緯度"].to_numpy()
-        lon2 = self.df["最近接線分_後点_経度"].to_numpy()
-        lat2 = self.df["最近接線分_後点_緯度"].to_numpy()
-
-        lon_closest = lon1 + t * (lon2 - lon1)
-        lat_closest = lat1 + t * (lat2 - lat1)
-
-        self.center_lon = float(np.nanmedian(lon_closest))
-        self.center_lat = float(np.nanmedian(lat_closest))
+        # 交差点中心（交差点データで指定された中心点を使用）
+        self.center_lon = float(np.nanmedian(self.df["交差点中心_経度"].to_numpy()))
+        self.center_lat = float(np.nanmedian(self.df["交差点中心_緯度"].to_numpy()))
 
         # 枝レイ推定（流入枝番ごと：中心→開始点 代表方向）
         self.branch_rays = self._compute_branch_rays()
@@ -492,7 +514,11 @@ class BranchCheckWindow(QMainWindow):
 
         # map payload
         tr = {
-            "center": {"lat": self.center_lat, "lon": self.center_lon},
+            "center_spec": {"lat": self.center_lat, "lon": self.center_lon},
+            "center_calc": {
+                "lat": float(row["算出中心_緯度"]),
+                "lon": float(row["算出中心_経度"]),
+            },
             "start": {
                 "lat": float(row["計測開始_緯度(補間)"]),
                 "lon": float(row["計測開始_経度(補間)"]),

@@ -400,9 +400,9 @@ HEADER = [
     "計測終了位置(m)",
     "計測開始_経度(補間)", "計測開始_緯度(補間)", "計測開始_GPS時刻(補間)",
     "計測終了_経度(補間)", "計測終了_緯度(補間)", "計測終了_GPS時刻(補間)",
-    "最近接線分_前点_経度", "最近接線分_前点_緯度", "最近接線分_前点_GPS時刻",
-    "最近接線分_後点_経度", "最近接線分_後点_緯度", "最近接線分_後点_GPS時刻",
-    "最近接線分_t(0-1)",
+    # ---- 可視化・検証用（中心点ずれの確認）----
+    "交差点中心_経度", "交差点中心_緯度",
+    "算出中心_経度", "算出中心_緯度", "算出中心_GPS時刻",
 ]
 
 
@@ -539,7 +539,6 @@ def main() -> None:
 
                     # 診断用のデフォルト（埋まるところだけ埋める）
                     seg_i = None
-                    seg_t = ""
                     seg_d = ""
                     center_pos_m = ""
                     start_pos_m = ""
@@ -550,20 +549,33 @@ def main() -> None:
                     lon_e = ""
                     lat_e = ""
                     t_e = ""
-                    lon_b = ""
-                    lat_b = ""
-                    gps_b = ""
-                    lon_a = ""
-                    lat_a = ""
-                    gps_a = ""
                     in_diff = float("inf")
                     out_diff = float("inf")
                     angle_method_str = ""
+                    # 交差点中心（指定）と、算出中心（トリップ最近接点）
+                    cross_center_lon_s = ""
+                    cross_center_lat_s = ""
+                    center_lon_calc_s = ""
+                    center_lat_calc_s = ""
+                    center_time_calc_s = ""
 
                     # 最近接線分（中心への最短距離となる線分）を求める
                     seg_i_i, seg_t_f, seg_d_f = closest_segment_to_center(points, cross.center_lat, cross.center_lon)
                     seg_i = seg_i_i
                     idx_center = closest_center_index(points, cross.center_lat, cross.center_lon)
+
+                    # 交差点指定中心（比較表示用）
+                    cross_center_lon_s = f"{cross.center_lon:.8f}"
+                    cross_center_lat_s = f"{cross.center_lat:.8f}"
+
+                    # 算出中心（線分上最近接点の座標）
+                    if seg_i is not None:
+                        lat1, lon1 = points[seg_i]
+                        lat2, lon2 = points[seg_i + 1]
+                        lat_c = lat1 + seg_t_f * (lat2 - lat1)
+                        lon_c = lon1 + seg_t_f * (lon2 - lon1)
+                        center_lon_calc_s = f"{lon_c:.8f}"
+                        center_lat_calc_s = f"{lat_c:.8f}"
 
                     # --- 枝判定用の中心位置（道なり距離）を「最近接線分上の最近接点」にする ---
                     center_pos_val_dir = None
@@ -641,13 +653,6 @@ def main() -> None:
                     # 最近接線分の診断情報（可能な範囲で記録）
                     if seg_i is not None:
                         seg_d = f"{seg_d_f:.3f}"
-                        seg_t = f"{seg_t_f:.6f}"
-                        lat_b_v, lon_b_v = points[idx_b]
-                        lat_a_v, lon_a_v = points[idx_a]
-                        lon_b, lat_b = f"{lon_b_v}", f"{lat_b_v}"
-                        lon_a, lat_a = f"{lon_a_v}", f"{lat_a_v}"
-                        gps_b = gps_times[idx_b] if 0 <= idx_b < len(gps_times) else ""
-                        gps_a = gps_times[idx_a] if 0 <= idx_a < len(gps_times) else ""
 
                     # GPS時刻（datetime）を用意（補間で必要）
                     dt_list = [parse_dt14(t) for t in gps_times]
@@ -657,6 +662,15 @@ def main() -> None:
                         speed_reason = "TIME_MISSING"
                         bad_time_trips += 1
                     else:
+                        # 算出中心の時刻（線分上最近接点：seg_i と seg_t_f で補間）
+                        if seg_i is not None:
+                            from datetime import timedelta
+                            dt0 = dt_list[seg_i]
+                            dt1 = dt_list[seg_i + 1]
+                            if dt0 is not None and dt1 is not None:
+                                dtc = dt0 + timedelta(seconds=seg_t_f * (dt1 - dt0).total_seconds())
+                                center_time_calc_s = dtc.strftime("%Y%m%d%H%M%S")
+
                         # 道なり距離と中心基準位置（線分上最近接）を計算
                         if seg_i is None:
                             speed_valid = 0
@@ -731,12 +745,8 @@ def main() -> None:
                         end_pos_m,
                         lon_s, lat_s, t_s,
                         lon_e, lat_e, t_e,
-                    ])
-
-                    row_out.extend([
-                        lon_b, lat_b, gps_b,
-                        lon_a, lat_a, gps_a,
-                        seg_t,
+                        cross_center_lon_s, cross_center_lat_s,
+                        center_lon_calc_s, center_lat_calc_s, center_time_calc_s,
                     ])
 
                     writer.writerow(row_out)
