@@ -80,7 +80,7 @@ COL_SPEED_REASON = 19  # 速度算出不可理由
 
 # time-of-day histogram
 COL_TIME_PRIMARY = 28   # 計測開始_GPS時刻(補間)
-COL_TIME_FALLBACK = 34  # 最近接線分_前点_GPS時刻
+COL_TIME_FALLBACK = 36  # 算出中心_GPS時刻（31の新出力）
 
 # Column indices for crossroad definition data
 COL_BRANCH_NO = 3
