@@ -15,7 +15,7 @@
 - 列前提（入力 CSV, 0 始まり）: 運行日=2, 運行ID=3, 種別=4, 用途=5, GPS時刻=6, TRIP_NO=8, 経度=14, 緯度=15。
 - `TARGET_WEEKDAYS` で曜日フィルタを適用可能（例: ["TUE","WED","THU"]）。
 ## 出力
-- `OUTPUT_BASE_DIR/{crossroad_name}_performance.csv`（cp932）。
+- `{PROJECT_ID}/31_交差点パフォーマンス/{crossroad_name}_performance.csv`（cp932）。
 - 主要列（例）:
   - 流入枝番 / 流出枝番
   - 計測距離(m)
@@ -47,7 +47,7 @@
   - `TIME_MISSING`：GPS時刻欠損等で補間不可
   - `NO_SEGMENT`：中心最近接線分が取得できない（例外）
 ## 実行方法
-- スクリプト冒頭で `OUTPUT_BASE_DIR`, `CONFIG`, `TARGET_WEEKDAYS` を設定。
+- スクリプト冒頭で `OUTPUT_BASE_DIR`, `CONFIG`, `TARGET_WEEKDAYS` を設定（`OUTPUT_BASE_DIR` は `{PROJECT_ID}/31_交差点パフォーマンス/` に合わせる）。
 - コマンド例: `python 31_crossroad_trip_performance.py`
 - セットごとに進捗を標準出力へ表示。入力フォルダに CSV が無ければスキップ。
 ## 判定ロジック（重要なものだけ）
