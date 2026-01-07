@@ -61,24 +61,26 @@ BATCH_JOBS: list[dict] = [
 # BATCH_JOBS が空なら従来どおりGUI（ダイアログ）で3ファイルを選ぶ
 BATCH_MODE_ACTIVE = False
 
-# Column indices for performance data
+# Column indices for performance data (0-based, header row is read by pandas)
 COL_FILE = 2
 COL_DATE = 3
 COL_VTYPE = 7
 COL_USE = 8
 COL_IN_BRANCH = 9
 COL_OUT_BRANCH = 10
-COL_DIST = 11
-COL_TIME = 12
-COL_SPEED = 13
-# 31_crossroad_trip_performance.py（新形式）追加列
-COL_PASS_COUNT = 14
-COL_SPEED_VALID = 15
-COL_SPEED_REASON = 16
 
-# 時間帯ヒストグラム用（優先：計測開始_GPS時刻(補間)、無ければ最近接線分_前点_GPS時刻）
-COL_TIME_PRIMARY = 25   # 計測開始_GPS時刻(補間)
-COL_TIME_FALLBACK = 31  # 最近接線分_前点_GPS時刻
+# aligned to 31_crossroad_trip_performance.py output
+COL_DIST = 14          # 計測距離(m)
+COL_TIME = 15          # 所要時間(s)
+COL_SPEED = 16         # 交差点通過速度(km/h)
+
+COL_PASS_COUNT = 17    # 通過カウント
+COL_SPEED_VALID = 18   # 速度算出可否
+COL_SPEED_REASON = 19  # 速度算出不可理由
+
+# time-of-day histogram
+COL_TIME_PRIMARY = 28   # 計測開始_GPS時刻(補間)
+COL_TIME_FALLBACK = 34  # 最近接線分_前点_GPS時刻
 
 # Column indices for crossroad definition data
 COL_BRANCH_NO = 3
