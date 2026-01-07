@@ -12,7 +12,7 @@
 - KP ラベルは `KP_INTERVAL` ごとに付与（既定: 5 点ごと）、フォント/余白はスクリプト先頭の定数で調整。
 ## 実行方法
 - コマンド例: `python 06_route_mapper_kp.py` → フォルダ選択 → CSV 選択。
-- パターン指定: `python 06_route_mapper_kp.py "out/*.csv"`。
+- パターン指定: `python 06_route_mapper_kp.py "{PROJECT_ID}/20_第２スクリーニング/**/*.csv"`。
 ## 判定ロジック（重要なものだけ）
 - 緯度経度を numpy で差分計算し、ハバーシン距離から区間距離 `d_km` と累積距離 `kp_km` を算出。
 - FLAG を用いて区切りを判定し、区間ごとにポリラインを描画。

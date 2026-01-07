@@ -59,6 +59,9 @@ A/B の矢印が潰れて見づらい場合に、線の長さ・太さ・ラベ�
 3) 流入/流出を左右に並べた比較ページ（A方向交通/B方向交通）
 - `{stem}_heatmap_A方向交通.html`（A矢印のみ。左=流入、右=流出）
 - `{stem}_heatmap_B方向交通.html`（B矢印のみ。左=流入、右=流出）
+
+※作業フォルダ構成は `docs/05_work_folder_structure.md` を正とする。  
+本スクリプトの出力先は `{PROJECT_ID}/50_経路分析/` で運用する。
 ## 実行方法
 - スクリプト冒頭で `INPUT_DIR`, `POINT_FILE`, `OUTPUT_DIR` と各種パラメータを設定する
 - コマンド例: `python 50_Path_Analysis.py`

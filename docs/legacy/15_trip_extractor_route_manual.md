@@ -186,7 +186,7 @@ TARGET_WEEKDAYS = set()
      ↓
 (7) 仕様に従ったファイル名を生成
      ↓
-(8) output/ に保存
+(8) {PROJECT_ID}/20_第２スクリーニング/ に保存
 
 
 # 6. 使い方（Windows例）
@@ -196,7 +196,7 @@ python 15_trip_extractor_route.py
 でOK。
 
 # 7. 出力例
-output/
+{PROJECT_ID}/20_第２スクリーニング/
  ├── 2nd_sample_route_MON__ID000000123456_20250203_t001_E01_F01.csv
  ├── 2nd_sample_route_SAT-SUN__ID000000987654_20250315_t003_E02_F03.csv
 
@@ -230,7 +230,6 @@ TARGET_WEEKDAYS	曜日	set() or {2–6}
 # 10. お問い合わせ
 
 バグ報告・改良要望は GitHub Issue または RoadLabo まで。
-
 
 
 

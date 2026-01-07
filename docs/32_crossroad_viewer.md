@@ -31,6 +31,9 @@
 ## 出力
 - GUI 上でのグラフ表示に加え、Excel ファイルと PNG を生成可能。
 - Excel には性能テーブルとグラフ画像を貼り付ける（openpyxl を使用）。
+
+※作業フォルダ構成は `docs/05_work_folder_structure.md` を正とする。  
+本スクリプトの出力先は `{PROJECT_ID}/31_交差点パフォーマンス/` で運用する。
 ## 実行方法
 - 必要ライブラリ: PySide6, matplotlib, pandas, openpyxl。
 - バッチ例: `python 32_crossroad_viewer.py`（`BATCH_JOBS` が埋まっていれば自動で一括実行）

@@ -13,6 +13,9 @@
   - `index_od_heatmap.html`: 上記 2 ファイルへのリンク集。
   - `od_summary.txt`: 行数や範囲のサマリ。
 - 既定のヒートマップ設定: RADIUS=16, BLUR=18, MIN_OPACITY=0.15, MAX_ZOOM=12。
+
+※作業フォルダ構成は `docs/05_work_folder_structure.md` を正とする。  
+本スクリプトの出力先は `{PROJECT_ID}/41_ODヒートマップ/` で運用する。
 ## 実行方法
 - スクリプト冒頭で `INPUT_CSV_PATH`, `OUTPUT_DIR` を設定。
 - コマンド例: `python 41_od_heatmap_viewer.py`

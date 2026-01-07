@@ -15,6 +15,9 @@
 - `OUTPUT_DIR/{output_od_list_name}`（UTF-8）。ヘッダ:
   - `dataset, operation_date, weekday, opid, trip_no, o_lon, o_lat, d_lon, d_lat, status, src_files_count`
 - status にはヒット状況を記録（例: `matched`, `missing_zip`, `missing_trip`）。
+
+※作業フォルダ構成は `docs/05_work_folder_structure.md` を正とする。  
+本スクリプトの出力先は `{PROJECT_ID}/40_様式1-3参照ODリスト/` で運用する。
 ## 実行方法
 - スクリプト冒頭の `OUTPUT_DIR`, `TARGET_WEEKDAYS`, `DATASETS` を設定。
 - コマンド例: `python 40_trip_od_screening.py`

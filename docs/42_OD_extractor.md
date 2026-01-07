@@ -18,6 +18,9 @@
   - `zone_production_attraction.csv`: ゾーン別発生量・集中量。
   - `42_OD_extractor_LOG.txt`: 対象トリップ日一覧・総日数・標準出力ログ全文。
 - 重要: `od_matrix*.csv` の行/列ラベルは「ゾーン名のみ」を使用（`002:` 等の付番は出力しない）。
+
+※作業フォルダ構成は `docs/05_work_folder_structure.md` を正とする。  
+本スクリプトの出力先は `{PROJECT_ID}/42_ODマトリクス/` で運用する。
 ## 実行方法
 - スクリプト冒頭で `OUTPUT_DIR`, `OD_LIST_FILES`, `ZONES_CSV_PATH`, `TARGET_WEEKDAYS` を設定。
 - コマンド例: `python 42_OD_extractor.py`
