@@ -1,4 +1,4 @@
-# 71_Path_Analysis（流入側A/B判定・流入/流出経路ヒートマップ）
+# 50_Path_Analysis（流入側A/B判定・流入/流出経路ヒートマップ）
 ## 目的（何をする）
 単路ポイント（交差点中心など）を基準に、トリップが「どの流入側から交差点中心へ到達し（A/B）」「中心を通過した後にどこへ向かうか（流入経路/流出経路）」を 10m メッシュで集計し、A方向交通とB方向交通ごとにヒートマップHTMLを作成する。
 ## 位置づけ（分析フロー上のどこ）
@@ -8,6 +8,11 @@
 - A/B判定は「交通の進行方向」ではなく「交差点中心にどちら側から到達したか（流入側）」で行う。交差点ファイル2行目をA方向、3行目をB方向とし、`dir_deg` は「外側→中心（outside→center）」の方位角として扱う。
 - 地図上の矢印も outside→center 向きで描画し、A方向交通画面にはA矢印のみ、B方向交通画面にはB矢印のみを表示する。
 - `in` は交差点に入るまでの流入経路、`out` は交差点を出た後の流出経路を指す。
+## マニュアル要約（誤認識防止）
+1. A方向交通とは「A方向（外側）から交差点中心へ到達した交通」を指し、B方向交通も同様に「外側から中心へ到達した交通」を指す。
+2. A/B は進行方向ではなく流入側の判定であるため、向きの解釈を混同しない。
+3. 矢印は「外側→中心」に向かう矢印として描画し、A方向交通画面にはA矢印のみ、B方向交通画面にはB矢印のみを表示する。
+4. ヒートマップの濃淡は `HEATMAP_*` 定数で調整し、vmax は上位パーセンタイルで飽和させて外れ値の影響を抑える。
 ## 入力
 - `INPUT_DIR`: 第2スクリーニング後の様式1-2 CSV 群（サブフォルダ含め rglob）。
 - `POINT_FILE`: 単路ポイント指定 CSV（11_crossroad_sampler.py の出力を想定）。
@@ -42,10 +47,10 @@ A/B の矢印が潰れて見づらい場合に、線の長さ・太さ・ラベ�
 ## 出力
 `OUTPUT_DIR` に以下を生成する（prefix は `POINT_FILE.stem`）。
 1) CSV（% 表記の整数、北が上になるよう上下反転して保存）
-- `71_path_matrix_A_in.csv`
-- `71_path_matrix_A_out.csv`
-- `71_path_matrix_B_in.csv`
-- `71_path_matrix_B_out.csv`
+- `50_path_matrix_A_in.csv`
+- `50_path_matrix_A_out.csv`
+- `50_path_matrix_B_in.csv`
+- `50_path_matrix_B_out.csv`
 2) ヒートマップHTML（10mメッシュ矩形を Folium で塗り分け、矢印は表示する方向のみ）
 - `{stem}_heatmap_A（流入）.html`
 - `{stem}_heatmap_A（流出）.html`
@@ -56,9 +61,9 @@ A/B の矢印が潰れて見づらい場合に、線の長さ・太さ・ラベ�
 - `{stem}_heatmap_B方向交通.html`（B矢印のみ。左=流入、右=流出）
 ## 実行方法
 - スクリプト冒頭で `INPUT_DIR`, `POINT_FILE`, `OUTPUT_DIR` と各種パラメータを設定する
-- コマンド例: `python 71_Path_Analysis.py`
+- コマンド例: `python 50_Path_Analysis.py`
 - 進捗は 1行更新（改行増殖しない）で表示される:
-  - `[71_PathAnalysis] xx.x% (i/total) empty=... started=...`
+  - `[50_PathAnalysis] xx.x% (i/total) empty=... started=...`
 - 終了時に処理概要、方向別セル統計、方向別HIT数、in→out遷移数を標準出力する
 ## 判定ロジック（重要なものだけ）
 - POINT_FILEから中心座標（lon0,lat0）と A/B 方位角（dirA_deg,dirB_deg）を取得し、「outside→center」の基準ベクトル v_dir_A/v_dir_B を作る。
@@ -88,3 +93,5 @@ A/B の矢印が潰れて見づらい場合に、線の長さ・太さ・ラベ�
 - 前段: [docs/21_point_trip_extractor.md](./21_point_trip_extractor.md), [docs/11_crossroad_sampler.md](./11_crossroad_sampler.md)
 - 兄弟: OD 系は [docs/42_OD_extractor.md](./42_OD_extractor.md)
 - フロー全体: [docs/01_pipeline.md](./01_pipeline.md)
+## 変更履歴
+- 2026-01-07: 71_Path_Analysis.py を 50_Path_Analysis.py に改名（参照・文書も追従）

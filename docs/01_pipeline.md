@@ -31,7 +31,7 @@
   - [41_od_heatmap_viewer.py](./41_od_heatmap_viewer.md): OD リストを Origin/Destination のヒートマップに可視化。
   - [42_OD_extractor.py](./42_OD_extractor.md): ゾーン割当、OD マトリクス、発生集中量を一括生成。
 - **経路分析**
-  - [71_Path_Analysis.py](./71_Path_Analysis.md): 単路ポイントに対する方向別メッシュ集計と可視化。
+  - [50_Path_Analysis.py](./50_Path_Analysis.md): 単路ポイントに対する方向別メッシュ集計と可視化。
 - **ビューア出力例**
   - [map.html](./map.md): 05/06 が生成する HTML のサンプルとして扱う。
 
