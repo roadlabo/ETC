@@ -11,6 +11,9 @@
 - CSV（ヘッダなし、UTF-8）。列仕様（0 始まり）:
   - E=TYPE: `2` 固定、F=USE: `1` 固定、G=TIME: 先頭から10秒刻みの時刻文字列、M=FLAG: `2` 固定、O=lon, P=lat（小数10桁）、S=SPEED: `30.0` 固定、その他は `0` 埋め。
 - 保存先は `--outdir`（未指定ならスクリプトと同階層）、ファイル名は `--filename`（拡張子 `.csv` を自動付与）。
+
+※作業フォルダ構成は `docs/05_work_folder_structure.md` を正とする。  
+本スクリプトの成果物は `{PROJECT_ID}/10_ルート(Route)データ/`（該当番号フォルダ）に出力して運用する。
 ## 実行方法
 - コマンド例: `python 10_route_sampler.py --outdir "D:\\ETC" --filename "route_sample.csv" --port 5009`
 - Flask が起動し、ブラウザが自動で `http://127.0.0.1:<port>/` を開く。左クリックで点追加、右クリックで直前の点削除、「保存」で CSV 書き出し。

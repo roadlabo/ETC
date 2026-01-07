@@ -11,6 +11,9 @@
 - `crossroads/crossroad{ID}.csv`: 列は `crossroad_id,center_lon,center_lat,branch_no,branch_name,dir_deg`。branch_name は空欄のままでも可。
 - 同名ベースの JPG: 地図キャプチャを html2canvas で保存。
 - `crossroad{ID}.html`: 生成された操作用 HTML（Leaflet UI）。
+
+※作業フォルダ構成は `docs/05_work_folder_structure.md` を正とする。  
+本スクリプトの成果物は `{PROJECT_ID}/11_交差点(Point)データ/`（該当番号フォルダ）に出力して運用する。
 ## 実行方法
 - CROSSROAD_ID, OUTPUT_DIR, 初期座標をスクリプト先頭で設定。
 - コマンド例: `python 11_crossroad_sampler.py`

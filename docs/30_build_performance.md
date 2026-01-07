@@ -11,6 +11,9 @@
 ## 出力
 - `OUTPUT_PATH`: Shift_JIS/CRLF の CSV。ヘッダは `KP[km]`、時速24列、`KP[km]` 再掲、件数24列。
 - ファイル名例: `paformance001.csv`（任意指定）。
+
+※作業フォルダ構成は `docs/05_work_folder_structure.md` を正とする。  
+本スクリプトの成果物は `{PROJECT_ID}/30_ルートパフォーマンス/`（該当番号フォルダ）に出力して運用する。
 ## 実行方法
 - スクリプト冒頭で `INPUT_DIR`, `ROUTE_PATH`, `OUTPUT_PATH`, `RADIUS_M`（近接閾値[m]）を設定。
 - コマンド例: `python 30_build_performance.py`

@@ -12,6 +12,9 @@
 - `--output-dir` 配下に `2nd_{crossroad}_{weekday}_ID{opid}_{yyyymmdd}_{tXXX}_{E??}_{F??}.csv`
   - weekday は含まれる曜日略称、TRIP/車種/用途タグ付き。
   - 行は元 CSV の行をそのまま保存（ヘッダなし）。
+
+※作業フォルダ構成は `docs/05_work_folder_structure.md` を正とする。  
+本スクリプトの成果物は `{PROJECT_ID}/20_第２スクリーニング/`（該当番号フォルダ）に出力して運用する。
 ## 実行方法
 - コマンド例: `python 21_point_trip_extractor.py --input-dir ./opid_split --output-dir ./screening2_points`
 - 交差点 CSV の置き場所: `CROSSROAD_CSV_DIR` を設定するか、`CROSSROAD_CSV_LIST` に個別パスを指定。

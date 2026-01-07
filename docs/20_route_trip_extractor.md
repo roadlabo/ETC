@@ -13,6 +13,9 @@
   - weekday 部は抽出区間に含まれる曜日略称をソートして連結（例: MON-TUE）。
   - TRIP_NO, 車種/用途をタグに付与。
   - 行内容は元 CSV の行をそのまま保存（ヘッダなし、UTF-8）。
+
+※作業フォルダ構成は `docs/05_work_folder_structure.md` を正とする。  
+本スクリプトの成果物は `{PROJECT_ID}/20_第２スクリーニング/`（該当番号フォルダ）に出力して運用する。
 ## 実行方法
 - コマンド例: `python 20_route_trip_extractor.py --sample sample_route.csv --input-dir ./opid_split --output-dir ./screening2`
 - 閾値はスクリプト冒頭の定数で調整: `THRESH_M`（距離[m]）, `MIN_HITS`（一致点数）, `TARGET_WEEKDAYS`（曜日集合）, `DRY_RUN`（保存しない場合 True）。
