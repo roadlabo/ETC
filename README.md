@@ -22,7 +22,9 @@ ETC2.0 プローブデータを「行政 EBPM の説明責任」に耐える形�
 - FAQ（できること/できないこと）: [docs/99_faq.md](docs/99_faq.md)
 - 個別スクリプトの詳細: docs/ 配下で src と同じ basename の MD を参照（例: `src/20_route_trip_extractor.py` → `docs/20_route_trip_extractor.md`）。
 
-作業フォルダ構成は [docs/05_work_folder_structure.md](docs/05_work_folder_structure.md) を参照する。受領データは書き換え禁止とし、成果ができたフォルダのみ作成する。
+作業フォルダ構成は [docs/05_work_folder_structure.md](docs/05_work_folder_structure.md) を参照する。
+00_受領データは書き換え禁止とする。
+成果ができたフォルダのみ作成する。
 
 ## スクリプト抜粋
 - 50_Path_Analysis.py：指定断面（交差点中心）を通過したトリップの「流入経路(in)」「流出経路(out)」を10mメッシュで集計し、ヒートマップHTMLを出力する。A/B判定は交通の進行方向ではなく「交差点中心にどちら側から到達したか（流入側）」で判定する。交差点ファイル2行目をA方向、3行目をB方向とし、dir_degは外側→中心の方位角として扱う。出力は (stem)_heatmap_A方向交通.html と (stem)_heatmap_B方向交通.html（左右に流入/流出を並べる）である。
