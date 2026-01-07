@@ -47,8 +47,8 @@ TARGET_WEEKDAYS = ["TUE", "WED", "THU"]
 #   (MEASURE_PRE_M + MEASURE_POST_M) / 所要時間 で速度を算出する。
 # 例：前100m〜後10m → 距離110m固定。
 # ============================================================
-MEASURE_PRE_M = 100.0
-MEASURE_POST_M = 10.0
+MEASURE_PRE_M = 200.0
+MEASURE_POST_M = 20.0
 
 # ============================================================
 # 交差点通過判定ロジック（31 / 16 と完全一致）
@@ -565,6 +565,14 @@ def main() -> None:
                     seg_i = seg_i_i
                     idx_center = closest_center_index(points, cross.center_lat, cross.center_lon)
 
+                    # --- 枝判定用の中心位置（道なり距離）を「最近接線分上の最近接点」にする ---
+                    center_pos_val_dir = None
+                    if seg_i is not None:
+                        seg_len_dir = cumdist[seg_i + 1] - cumdist[seg_i]
+                        center_pos_val_dir = cumdist[seg_i] + seg_t_f * seg_len_dir
+                    elif idx_center is not None and idx_center < len(cumdist):
+                        center_pos_val_dir = cumdist[idx_center]
+
                     # 流入/流出枝番：基本は最近接線分の前後点。取れない場合は中心最近接点±1で代替。
                     if seg_i is not None:
                         idx_b = seg_i
@@ -584,7 +592,8 @@ def main() -> None:
                     # 枝判定角度：中心前後の「2点」から走行方向を推定して安定化
                     # ============================================================
                     angle_method = []
-                    center_pos_val = cumdist[idx_center] if idx_center is not None and idx_center < len(cumdist) else None
+                    # ※ center_pos_val_dir は「指定中心点に対するトリップ最近接点」（線分上）を優先する
+                    center_pos_val = center_pos_val_dir
 
                     # ---- IN（流入）: (center-60m -> center-10m) の走行方向を推定し、180度反転 ----
                     if center_pos_val is not None:
