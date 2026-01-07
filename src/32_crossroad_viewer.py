@@ -1,16 +1,13 @@
+import os
 import sys
 import re
 from datetime import date, datetime
 from pathlib import Path
 
-import pandas as pd
-import matplotlib.font_manager as font_manager
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
-from openpyxl import Workbook
-from openpyxl.drawing.image import Image as XLImage
-from openpyxl.styles import Alignment, Font, Side, Border
+# --- Force Qt binding for matplotlib to PySide6 ---
+os.environ.setdefault("QT_API", "pyside6")
+os.environ.setdefault("MPLBACKEND", "QtAgg")
+
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor, QPixmap, QTextCharFormat
 from PySide6.QtWidgets import (
@@ -32,6 +29,15 @@ from PySide6.QtWidgets import (
     QWidget,
     QHBoxLayout,
 )
+
+import pandas as pd
+import matplotlib.font_manager as font_manager
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XLImage
+from openpyxl.styles import Alignment, Font, Side, Border
 
 preferred_fonts = ["Meiryo", "Yu Gothic", "MS Gothic"]
 installed_fonts = {f.name for f in font_manager.fontManager.ttflist}
