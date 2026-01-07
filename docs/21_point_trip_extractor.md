@@ -29,5 +29,5 @@
 - 交差点 CSV の列順を変更し、`dir_deg` 読み込みに失敗。
 ## 関連スクリプト
 - 前段: [docs/11_crossroad_sampler.md](./11_crossroad_sampler.md)（交差点定義）。
-- 後段: [docs/31_crossroad_trip_performance.md](./31_crossroad_trip_performance.md), [docs/32_crossroad_viewer.md](./32_crossroad_viewer.md), [docs/71_Path_Analysis.md](./71_Path_Analysis.md)。
+- 後段: [docs/31_crossroad_trip_performance.md](./31_crossroad_trip_performance.md), [docs/32_crossroad_viewer.md](./32_crossroad_viewer.md), [docs/50_Path_Analysis.md](./50_Path_Analysis.md)。
 - フロー全体: [docs/01_pipeline.md](./01_pipeline.md)

@@ -609,7 +609,7 @@ def main():
             total_trips_excluded += 1
             progress = idx / total_files * 100 if total_files else 100.0
             msg = (
-                f"[71_PathAnalysis] {progress:5.1f}% ({idx}/{total_files}) "
+                f"[50_PathAnalysis] {progress:5.1f}% ({idx}/{total_files}) "
                 f"empty={empty_files} started={started_dt.strftime('%H:%M:%S')}"
             )
             print("\r" + msg, end="", flush=True)
@@ -621,7 +621,7 @@ def main():
             total_trips_excluded += 1
             progress = idx / total_files * 100 if total_files else 100.0
             msg = (
-                f"[71_PathAnalysis] {progress:5.1f}% ({idx}/{total_files}) "
+                f"[50_PathAnalysis] {progress:5.1f}% ({idx}/{total_files}) "
                 f"empty={empty_files} started={started_dt.strftime('%H:%M:%S')}"
             )
             print("\r" + msg, end="", flush=True)
@@ -634,7 +634,7 @@ def main():
             total_trips_excluded += 1
             progress = idx / total_files * 100 if total_files else 100.0
             msg = (
-                f"[71_PathAnalysis] {progress:5.1f}% ({idx}/{total_files}) "
+                f"[50_PathAnalysis] {progress:5.1f}% ({idx}/{total_files}) "
                 f"empty={empty_files} started={started_dt.strftime('%H:%M:%S')}"
             )
             print("\r" + msg, end="", flush=True)
@@ -663,7 +663,7 @@ def main():
 
         progress = idx / total_files * 100 if total_files else 100.0
         msg = (
-            f"[71_PathAnalysis] {progress:5.1f}% ({idx}/{total_files}) "
+            f"[50_PathAnalysis] {progress:5.1f}% ({idx}/{total_files}) "
             f"empty={empty_files} started={started_dt.strftime('%H:%M:%S')}"
         )
         print("\r" + msg, end="", flush=True)
@@ -685,11 +685,11 @@ def main():
     for key, arr in matrices.items():
         nz = int((arr > 0).sum())
         vmax = int(arr.max())
-        print(f"[71_PathAnalysis] {key}: nonzero_cells={nz}, max={vmax}%")
+        print(f"[50_PathAnalysis] {key}: nonzero_cells={nz}, max={vmax}%")
 
-    print(f"[71_PathAnalysis] total_A_in_hits={total_A_in_hits} total_B_in_hits={total_B_in_hits}")
+    print(f"[50_PathAnalysis] total_A_in_hits={total_A_in_hits} total_B_in_hits={total_B_in_hits}")
     print(
-        "[71_PathAnalysis] transitions: "
+        "[50_PathAnalysis] transitions: "
         f"inA->outA={inA_to_outA}, inA->outB={inA_to_outB}, "
         f"inB->outA={inB_to_outA}, inB->outB={inB_to_outB}"
     )
@@ -699,10 +699,10 @@ def main():
         flipped = np.flipud(matrix)
         np.savetxt(OUTPUT_DIR / name, flipped, delimiter=",", fmt="%d")
 
-    _save_matrix_csv("71_path_matrix_A_in.csv",  matrices["A_in"])
-    _save_matrix_csv("71_path_matrix_A_out.csv", matrices["A_out"])
-    _save_matrix_csv("71_path_matrix_B_in.csv",  matrices["B_in"])
-    _save_matrix_csv("71_path_matrix_B_out.csv", matrices["B_out"])
+    _save_matrix_csv("50_path_matrix_A_in.csv",  matrices["A_in"])
+    _save_matrix_csv("50_path_matrix_A_out.csv", matrices["A_out"])
+    _save_matrix_csv("50_path_matrix_B_in.csv",  matrices["B_in"])
+    _save_matrix_csv("50_path_matrix_B_out.csv", matrices["B_out"])
 
     # ---- 10mメッシュ塗りのマップを出力（A/B × in/out） ----
     a_in_html = f"{stem}_heatmap_A（流入）.html"
@@ -746,9 +746,9 @@ def main():
 """
     (OUTPUT_DIR / f"{stem}_heatmap_B方向交通.html").write_text(b_pair, encoding="utf-8")
 
-    print("[71_PathAnalysis] 判定定義: A/B=中心へどちら側から来たか（流入側）, dir_deg=outside→center")
-    print("[71_PathAnalysis] 表記: in=流入経路, out=流出経路")
-    print(f"[71_PathAnalysis] 出力: {stem}_heatmap_A方向交通.html / {stem}_heatmap_B方向交通.html")
+    print("[50_PathAnalysis] 判定定義: A/B=中心へどちら側から来たか（流入側）, dir_deg=outside→center")
+    print("[50_PathAnalysis] 表記: in=流入経路, out=流出経路")
+    print(f"[50_PathAnalysis] 出力: {stem}_heatmap_A方向交通.html / {stem}_heatmap_B方向交通.html")
 
     log_lines: list[str] = []
     log_lines.append("－－－解析LOG－－－")
