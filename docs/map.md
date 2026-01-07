@@ -16,6 +16,10 @@
 - できないこと: データ更新や再描画、分析ロジックへの影響。
 ## よくあるミス
 - ローカルファイルの JS 読み込みをブラウザ設定でブロックしてしまう。
+## ドキュメント案内
+- [docs/00_concept.md](./00_concept.md)
+- [docs/01_pipeline.md](./01_pipeline.md)
+- [docs/02_folder_convention.md](./02_folder_convention.md)
 ## 関連スクリプト
 - [docs/05_route_mapper_simple.md](./05_route_mapper_simple.md)
 - [docs/06_route_mapper_kp.md](./06_route_mapper_kp.md)
