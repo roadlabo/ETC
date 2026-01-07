@@ -93,7 +93,7 @@ crossroad 定義JPG群 ──┘        （交差点IDは CSV の crossroad_id �
 python 31_crossroad_extractor.py \
     --input ./trip_data/trip_*.csv \
     --crossroad-dir ./crossroads \
-    --output ./output/crossroad_extracted.csv
+    --output {PROJECT_ID}/80_中間成果/crossroad_extracted.csv
 ```
 
 ### 主なオプション
