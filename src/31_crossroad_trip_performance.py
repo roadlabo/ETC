@@ -3,8 +3,11 @@
 """
 from __future__ import annotations
 
+import argparse
 import bisect
 import csv
+import os
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,9 +47,9 @@ TARGET_WEEKDAYS = ["TUE", "WED", "THU"]
 # 交差点影響区間（独自定義）の計測区間設定
 # 交差点中心（算出中心：線分上最近接点）を基準として、走行方向に
 #   前 MEASURE_PRE_M 〜 後 MEASURE_POST_M の所要時間を線形補間で算出する。
-# 例：前100m〜後20m → 距離120m固定。
+# 例：前100m〜後20m → 距離（MEASURE_PRE_M+MEASURE_POST_M）m固定。
 #
-# 本スクリプトは「速度」ではなく、所要時間(s)を基本量として出力し、
+# 本スクリプトは所要時間(s)を基本量として出力し、
 # 方向別（流入枝番×流出枝番）に
 #   閑散時所要時間 T0（所要時間 下位5%平均）
 # を求め、遅れ時間(s)=所要時間(s)-T0(s) を算出して出力する。
@@ -422,6 +425,13 @@ COL_LAT = 15          # P列: 緯度
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="交差点通過性能算出スクリプト")
+    parser.add_argument(
+        "--keep-temp",
+        action="store_true",
+        help="デバッグ用: 中間temp CSVを削除せず残す",
+    )
+    args = parser.parse_args()
     # -------------------- 全体開始 --------------------
     start_all = time.time()
     start_all_str = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -445,362 +455,425 @@ def main() -> None:
     #   各 CONFIG セット（交差点ごと）の処理
     # ==============================================================
     for cfg_idx, cfg in enumerate(CONFIG, start=1):
-        rows_buffer = []
-        elapsed_map = {}
-        trip_folder = Path(cfg["trip_folder"])
-        crossroad_path = Path(cfg["crossroad_file"])
+        tmp_path = None
+        tmp_fh = None
+        tmp_writer = None
+        try:
+            trip_folder = Path(cfg["trip_folder"])
+            crossroad_path = Path(cfg["crossroad_file"])
 
-        out_dir = Path(OUTPUT_BASE_DIR)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_csv = out_dir / f"{crossroad_path.stem}_performance.csv"
+            out_dir = Path(OUTPUT_BASE_DIR)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_csv = out_dir / f"{crossroad_path.stem}_performance.csv"
 
-        trip_files = sorted(trip_folder.glob("*.csv"))
-        total_files = len(trip_files)
+            trip_files = sorted(trip_folder.glob("*.csv"))
+            total_files = len(trip_files)
 
-        if total_files == 0:
-            print(f"[{cfg_idx}/{len(CONFIG)}] 交差点: {crossroad_path.name}  入力CSVなし（スキップ）")
-            continue
+            if total_files == 0:
+                print(f"[{cfg_idx}/{len(CONFIG)}] 交差点: {crossroad_path.name}  入力CSVなし（スキップ）")
+                continue
 
-        # -------------------- セット開始 --------------------
-        cfg_start = time.time()
-        cfg_start_str = time.strftime("%Y-%m-%d %H:%M:%S")
+            # -------------------- セット開始 --------------------
+            cfg_start = time.time()
+            cfg_start_str = time.strftime("%Y-%m-%d %H:%M:%S")
 
-        # カウンタ類
-        total_trips = 0
-        hit_trips = 0
-        nopass_trips = 0
-        bad_time_trips = 0
-        out_of_range_trips = 0
-        time_ok_trips = 0
-        time_ng_trips = 0
-        no_segment_trips = 0
+            # カウンタ類
+            total_trips = 0
+            hit_trips = 0
+            nopass_trips = 0
+            bad_time_trips = 0
+            out_of_range_trips = 0
+            time_ok_trips = 0
+            time_ng_trips = 0
+            no_segment_trips = 0
 
-        print(f"\n[{cfg_idx}/{len(CONFIG)}] 交差点: {crossroad_path.name}")
-        print(f"  入力フォルダ: {trip_folder}")
-        print(f"  対象CSVファイル数: {total_files}")
-        print(f"  セット開始時間: {cfg_start_str}")
-        if TARGET_WEEKDAYS:
-            print(f"  曜日フィルタ: {', '.join(TARGET_WEEKDAYS)}")
-        else:
-            print("  曜日フィルタ: なし（全曜日）")
+            print(f"\n[{cfg_idx}/{len(CONFIG)}] 交差点: {crossroad_path.name}")
+            print(f"  入力フォルダ: {trip_folder}")
+            print(f"  対象CSVファイル数: {total_files}")
+            print(f"  セット開始時間: {cfg_start_str}")
+            if TARGET_WEEKDAYS:
+                print(f"  曜日フィルタ: {', '.join(TARGET_WEEKDAYS)}")
+            else:
+                print("  曜日フィルタ: なし（全曜日）")
 
-        with out_csv.open("w", encoding="cp932", errors="ignore", newline="") as fw:
-            writer = csv.writer(fw)
-            writer.writerow(HEADER)
-
-            cross = load_crossroad_file(crossroad_path)
-
-            # ====================== CSVループ ======================
-            for file_idx, trip_csv in enumerate(trip_files, start=1):
-                df = pd.read_csv(trip_csv, dtype=str, encoding="cp932", header=None)
-
-                if df.empty:
-                    continue
-
-                if COL_TRIP_NO < df.shape[1]:
-                    trip_groups = df.groupby(df[COL_TRIP_NO])
-                else:
-                    trip_groups = [("ALL", df)]
-
-                # ------------------- トリップごとの処理 -------------------
-                for trip_key, g in trip_groups:
-                    trip_date = str(g.iloc[0, COL_DATE])
-                    weekday = weekday_abbr(trip_date[:8]) if trip_date else ""
-
-                    if TARGET_WEEKDAYS and weekday not in TARGET_WEEKDAYS:
-                        continue
-
-                    total_trips += 1
-
-                    run_id = str(g.iloc[0, COL_RUN_ID])
-                    trip_id = str(trip_key)
-                    vehicle_type = str(g.iloc[0, COL_VEHICLE_TYPE])
-                    vehicle_use = str(g.iloc[0, COL_VEHICLE_USE])
-
-                    # 座標と時刻
-                    points = []
-                    gps_times = []
-                    for _, row in g.iterrows():
-                        try:
-                            lon = float(row[COL_LON])
-                            lat = float(row[COL_LAT])
-                        except:
-                            continue
-                        points.append((lat, lon))
-                        gps_times.append(str(row[COL_GPS_TIME]))
-
-                    if not points:
-                        nopass_trips += 1
-                        continue
-
-                    if not trip_passes_crossroad(points, cross.center_lat, cross.center_lon):
-                        nopass_trips += 1
-                        continue
-
-                    hit_trips += 1
-
-                    # --------- ここから：通過したら必ず1行出す（速度は欠損でもOK） ---------
-                    cumdist = build_cumdist(points)
-                    dist_m = MEASURE_PRE_M + MEASURE_POST_M  # 定義上の距離（110m固定）
-                    elapsed = None
-                    time_valid = 0
-                    time_reason = "OK"
-
-                    # 診断用のデフォルト（埋まるところだけ埋める）
-                    seg_i = None
-                    seg_d = ""
-                    center_pos_m = ""
-                    start_pos_m = ""
-                    end_pos_m = ""
-                    lon_s = ""
-                    lat_s = ""
-                    t_s = ""
-                    lon_e = ""
-                    lat_e = ""
-                    t_e = ""
-                    in_diff = float("inf")
-                    out_diff = float("inf")
-                    angle_method_str = ""
-                    # 交差点中心（指定）と、算出中心（トリップ最近接点）
-                    cross_center_lon_s = ""
-                    cross_center_lat_s = ""
-                    center_lon_calc_s = ""
-                    center_lat_calc_s = ""
-                    center_time_calc_s = ""
-
-                    # 最近接線分（中心への最短距離となる線分）を求める
-                    seg_i_i, seg_t_f, seg_d_f = closest_segment_to_center(points, cross.center_lat, cross.center_lon)
-                    seg_i = seg_i_i
-                    idx_center = closest_center_index(points, cross.center_lat, cross.center_lon)
-
-                    # 交差点指定中心（比較表示用）
-                    cross_center_lon_s = f"{cross.center_lon:.8f}"
-                    cross_center_lat_s = f"{cross.center_lat:.8f}"
-
-                    # 算出中心（線分上最近接点の座標）
-                    if seg_i is not None:
-                        lat1, lon1 = points[seg_i]
-                        lat2, lon2 = points[seg_i + 1]
-                        lat_c = lat1 + seg_t_f * (lat2 - lat1)
-                        lon_c = lon1 + seg_t_f * (lon2 - lon1)
-                        center_lon_calc_s = f"{lon_c:.8f}"
-                        center_lat_calc_s = f"{lat_c:.8f}"
-
-                    # --- 枝判定用の中心位置（道なり距離）を「最近接線分上の最近接点」にする ---
-                    center_pos_val_dir = None
-                    if seg_i is not None:
-                        seg_len_dir = cumdist[seg_i + 1] - cumdist[seg_i]
-                        center_pos_val_dir = cumdist[seg_i] + seg_t_f * seg_len_dir
-                    elif idx_center is not None and idx_center < len(cumdist):
-                        center_pos_val_dir = cumdist[idx_center]
-
-                    # 流入/流出枝番：基本は最近接線分の前後点。取れない場合は中心最近接点±1で代替。
-                    if seg_i is not None:
-                        idx_b = seg_i
-                        idx_a = seg_i + 1
-                    elif idx_center is None:
-                        # ここまで来て points があるのに中心最寄りが取れないのは例外的
-                        time_reason = "NO_SEGMENT"
-                        time_valid = 0
-                        no_segment_trips += 1
-                        idx_b = 0
-                        idx_a = min(1, len(points) - 1)
-                    else:
-                        idx_b = max(0, idx_center - 1)
-                        idx_a = min(len(points) - 1, idx_center + 1)
-
-                    # ============================================================
-                    # 枝判定角度：中心前後の「2点」から走行方向を推定して安定化
-                    # ============================================================
-                    angle_method = []
-                    # ※ center_pos_val_dir は「指定中心点に対するトリップ最近接点」（線分上）を優先する
-                    center_pos_val = center_pos_val_dir
-
-                    # ---- IN（流入）: (center-60m -> center-10m) の走行方向を推定し、180度反転 ----
-                    if center_pos_val is not None:
-                        p_in_far = interpolate_point_at_distance(points, cumdist, center_pos_val - DIR_IN_FAR_M)
-                        p_in_near = interpolate_point_at_distance(points, cumdist, center_pos_val - DIR_IN_NEAR_M)
-                    else:
-                        p_in_far = None
-                        p_in_near = None
-
-                    if p_in_far and p_in_near:
-                        approach_bearing = bearing_deg(p_in_far[0], p_in_far[1], p_in_near[0], p_in_near[1])
-                        in_angle = (approach_bearing + 180.0) % 360.0  # center->branch と同じ向きへ
-                        angle_method.append("IN:interp2pt")
-                    else:
-                        idx_center_fallback = idx_center if idx_center is not None else idx_b
-                        idx_in = max(0, idx_center_fallback - 2)
-                        in_angle = bearing_deg(points[idx_center_fallback][0], points[idx_center_fallback][1],
-                                               points[idx_in][0], points[idx_in][1])
-                        angle_method.append("IN:fallback_idx-2")
-
-                    # ---- OUT（流出）: (center+10m -> center+60m) の走行方向を推定 ----
-                    if center_pos_val is not None:
-                        p_out_near = interpolate_point_at_distance(points, cumdist, center_pos_val + DIR_OUT_NEAR_M)
-                        p_out_far = interpolate_point_at_distance(points, cumdist, center_pos_val + DIR_OUT_FAR_M)
-                    else:
-                        p_out_near = None
-                        p_out_far = None
-
-                    if p_out_near and p_out_far:
-                        out_angle = bearing_deg(p_out_near[0], p_out_near[1], p_out_far[0], p_out_far[1])
-                        angle_method.append("OUT:interp2pt")
-                    else:
-                        idx_center_fallback = idx_center if idx_center is not None else idx_a
-                        idx_out = min(len(points) - 1, idx_center_fallback + 2)
-                        out_angle = bearing_deg(points[idx_center_fallback][0], points[idx_center_fallback][1],
-                                                points[idx_out][0], points[idx_out][1])
-                        angle_method.append("OUT:fallback_idx+2")
-
-                    in_branch_raw, in_diff = find_nearest_branch_with_diff(in_angle, cross.branches)
-                    out_branch_raw, out_diff = find_nearest_branch_with_diff(out_angle, cross.branches)
-                    in_branch = in_branch_raw if in_diff <= BRANCH_MAX_ANGLE_DIFF_DEG else ""
-                    out_branch = out_branch_raw if out_diff <= BRANCH_MAX_ANGLE_DIFF_DEG else ""
-                    angle_method_str = "/".join(angle_method)
-
-                    # 最近接線分の診断情報（可能な範囲で記録）
-                    if seg_i is not None:
-                        seg_d = f"{seg_d_f:.3f}"
-
-                    # GPS時刻（datetime）を用意（補間で必要）
-                    dt_list = [parse_dt14(t) for t in gps_times]
-                    if any(d is None for d in dt_list):
-                        # 通過としてはカウントするが、速度は算出不可
-                        time_valid = 0
-                        time_reason = "TIME_MISSING"
-                        bad_time_trips += 1
-                    else:
-                        # 算出中心の時刻（線分上最近接点：seg_i と seg_t_f で補間）
-                        if seg_i is not None:
-                            from datetime import timedelta
-                            dt0 = dt_list[seg_i]
-                            dt1 = dt_list[seg_i + 1]
-                            if dt0 is not None and dt1 is not None:
-                                dtc = dt0 + timedelta(seconds=seg_t_f * (dt1 - dt0).total_seconds())
-                                center_time_calc_s = dtc.strftime("%Y%m%d%H%M%S")
-
-                        # 道なり距離と中心基準位置（線分上最近接）を計算
-                        if seg_i is None:
-                            time_valid = 0
-                            time_reason = "NO_SEGMENT"
-                            no_segment_trips += 1
-                        else:
-                            seg_len = cumdist[seg_i + 1] - cumdist[seg_i]
-                            center_pos_val = cumdist[seg_i] + seg_t_f * seg_len
-                            center_pos_m = f"{center_pos_val:.3f}"
-
-                            start_pos_val = center_pos_val - MEASURE_PRE_M
-                            end_pos_val = center_pos_val + MEASURE_POST_M
-                            start_pos_m = f"{start_pos_val:.3f}"
-                            end_pos_m = f"{end_pos_val:.3f}"
-
-                            # 計測区間がトリップ範囲外 → 速度算出不可（ただし行は出す）
-                            if start_pos_val < 0 or end_pos_val > cumdist[-1]:
-                                time_valid = 0
-                                time_reason = "OUT_OF_RANGE"
-                                out_of_range_trips += 1
-                            else:
-                                lat_s_v, lon_s_v, dt_s = interpolate_at_distance(points, dt_list, cumdist, start_pos_val)
-                                lat_e_v, lon_e_v, dt_e = interpolate_at_distance(points, dt_list, cumdist, end_pos_val)
-                                if dt_s is None or dt_e is None:
-                                    time_valid = 0
-                                    time_reason = "TIME_MISSING"
-                                    bad_time_trips += 1
-                                else:
-                                    elapsed = (dt_e - dt_s).total_seconds()
-                                    if elapsed and elapsed > 0:
-                                        time_valid = 1
-                                        time_reason = "OK"
-                                    else:
-                                        elapsed = None
-                                        time_valid = 0
-                                        time_reason = "TIME_MISSING"
-                                    lon_s, lat_s = f"{lon_s_v:.8f}", f"{lat_s_v:.8f}"
-                                    lon_e, lat_e = f"{lon_e_v:.8f}", f"{lat_e_v:.8f}"
-                                    t_s = dt_s.strftime("%Y%m%d%H%M%S")
-                                    t_e = dt_e.strftime("%Y%m%d%H%M%S")
-
-                    if time_valid == 1:
-                        time_ok_trips += 1
-                    else:
-                        time_ng_trips += 1
-
-                    row_out = [
-                        crossroad_path.name,
-                        cross.cross_id,
-                        trip_csv.name,
-                        trip_date,
-                        weekday,
-                        run_id,
-                        trip_id,
-                        vehicle_type,
-                        vehicle_use,
-                        str(in_branch),
-                        str(out_branch),
-                        f"{in_diff:.1f}" if in_diff != float("inf") else "",
-                        f"{out_diff:.1f}" if out_diff != float("inf") else "",
-                        angle_method_str,
-                        f"{dist_m:.3f}",
-                        f"{elapsed:.3f}" if elapsed else "",
-                        "",
-                        "",
-                        str(time_valid),
-                        time_reason,
-                    ]
-                    # ---- 診断用列（補間区間・最近接情報） ----
-                    row_out.extend([
-                        f"{MEASURE_PRE_M:.0f}",
-                        f"{MEASURE_POST_M:.0f}",
-                        seg_d,
-                        center_pos_m,
-                        start_pos_m,
-                        end_pos_m,
-                        lon_s, lat_s, t_s,
-                        lon_e, lat_e, t_e,
-                        cross_center_lon_s, cross_center_lat_s,
-                        center_lon_calc_s, center_lat_calc_s, center_time_calc_s,
-                    ])
-
-                    assert len(row_out) == len(HEADER)
-                    key = (str(in_branch), str(out_branch))
-                    rows_buffer.append({"row": row_out, "key": key, "elapsed": elapsed})
-                    if elapsed is not None:
-                        elapsed_map.setdefault(key, []).append(float(elapsed))
-
-                # ----------- 進捗表示（1行上書き） -----------
-                progress = file_idx / total_files * 100.0
-                elapsed_cfg = time.time() - cfg_start
-
-                print(
-                    f"\r  進捗: {file_idx:4d}/{total_files:4d} "
-                    f"({progress:5.1f}%)  "
-                    f"対象トリップ: {total_trips:6d}  HIT: {hit_trips:6d}  "
-                    f"該当なし: {nopass_trips:6d}  "
-                    f"経過時間: {elapsed_cfg/60:5.1f}分",
-                    end="",
-                    flush=True,
-                )
-
-            t0_map = {}
-            for key, vals in elapsed_map.items():
-                vals_sorted = sorted(vals)
-                k = max(1, int(len(vals_sorted) * 0.05))
-                t0 = sum(vals_sorted[:k]) / k
-                t0_map[key] = t0
+            tmp_fh = tempfile.NamedTemporaryFile(
+                mode="w",
+                newline="",
+                encoding="utf-8-sig",
+                delete=False,
+                prefix="tmp_31_crossroad_",
+                suffix=".csv",
+            )
+            tmp_path = tmp_fh.name
+            tmp_writer = csv.writer(tmp_fh)
+            tmp_writer.writerow(HEADER)
 
             idx_t0 = HEADER.index("閑散時所要時間(s)")
             idx_delay = HEADER.index("遅れ時間(s)")
+            elapsed_map = {}
 
-            for entry in rows_buffer:
-                row = entry["row"]
-                elapsed_val = entry["elapsed"]
-                key = entry["key"]
-                if elapsed_val is not None and key in t0_map:
-                    t0 = t0_map[key]
-                    row[idx_t0] = f"{t0:.3f}"
-                    row[idx_delay] = f"{(elapsed_val - t0):.3f}"
-                writer.writerow(row)
+            with out_csv.open("w", encoding="cp932", errors="ignore", newline="") as fw:
+                final_writer = csv.writer(fw)
+                final_writer.writerow(HEADER)
+
+                cross = load_crossroad_file(crossroad_path)
+
+                # ====================== CSVループ ======================
+                for file_idx, trip_csv in enumerate(trip_files, start=1):
+                    df = pd.read_csv(trip_csv, dtype=str, encoding="cp932", header=None)
+
+                    if df.empty:
+                        continue
+
+                    if COL_TRIP_NO < df.shape[1]:
+                        trip_groups = df.groupby(df[COL_TRIP_NO])
+                    else:
+                        trip_groups = [("ALL", df)]
+
+                    # ------------------- トリップごとの処理 -------------------
+                    for trip_key, g in trip_groups:
+                        trip_date = str(g.iloc[0, COL_DATE])
+                        weekday = weekday_abbr(trip_date[:8]) if trip_date else ""
+
+                        if TARGET_WEEKDAYS and weekday not in TARGET_WEEKDAYS:
+                            continue
+
+                        total_trips += 1
+
+                        run_id = str(g.iloc[0, COL_RUN_ID])
+                        trip_id = str(trip_key)
+                        vehicle_type = str(g.iloc[0, COL_VEHICLE_TYPE])
+                        vehicle_use = str(g.iloc[0, COL_VEHICLE_USE])
+
+                        # 座標と時刻
+                        points = []
+                        gps_times = []
+                        for _, row in g.iterrows():
+                            try:
+                                lon = float(row[COL_LON])
+                                lat = float(row[COL_LAT])
+                            except:
+                                continue
+                            points.append((lat, lon))
+                            gps_times.append(str(row[COL_GPS_TIME]))
+
+                        if not points:
+                            nopass_trips += 1
+                            continue
+
+                        if not trip_passes_crossroad(points, cross.center_lat, cross.center_lon):
+                            nopass_trips += 1
+                            continue
+
+                        hit_trips += 1
+
+                        # --------- ここから：通過したら必ず1行出す（所要時間は欠損でもOK） ---------
+                        cumdist = build_cumdist(points)
+                        dist_m = MEASURE_PRE_M + MEASURE_POST_M  # 定義上の距離（MEASURE_PRE_M+MEASURE_POST_M固定）
+                        elapsed = None
+                        time_valid = 0
+                        time_reason = "OK"
+
+                        # 診断用のデフォルト（埋まるところだけ埋める）
+                        seg_i = None
+                        seg_d = ""
+                        center_pos_m = ""
+                        start_pos_m = ""
+                        end_pos_m = ""
+                        lon_s = ""
+                        lat_s = ""
+                        t_s = ""
+                        lon_e = ""
+                        lat_e = ""
+                        t_e = ""
+                        in_diff = float("inf")
+                        out_diff = float("inf")
+                        angle_method_str = ""
+                        # 交差点中心（指定）と、算出中心（トリップ最近接点）
+                        cross_center_lon_s = ""
+                        cross_center_lat_s = ""
+                        center_lon_calc_s = ""
+                        center_lat_calc_s = ""
+                        center_time_calc_s = ""
+
+                        # 最近接線分（中心への最短距離となる線分）を求める
+                        seg_i_i, seg_t_f, seg_d_f = closest_segment_to_center(points, cross.center_lat, cross.center_lon)
+                        seg_i = seg_i_i
+                        idx_center = closest_center_index(points, cross.center_lat, cross.center_lon)
+
+                        # 交差点指定中心（比較表示用）
+                        cross_center_lon_s = f"{cross.center_lon:.8f}"
+                        cross_center_lat_s = f"{cross.center_lat:.8f}"
+
+                        # 算出中心（線分上最近接点の座標）
+                        if seg_i is not None:
+                            lat1, lon1 = points[seg_i]
+                            lat2, lon2 = points[seg_i + 1]
+                            lat_c = lat1 + seg_t_f * (lat2 - lat1)
+                            lon_c = lon1 + seg_t_f * (lon2 - lon1)
+                            center_lon_calc_s = f"{lon_c:.8f}"
+                            center_lat_calc_s = f"{lat_c:.8f}"
+
+                        # --- 枝判定用の中心位置（道なり距離）を「最近接線分上の最近接点」にする ---
+                        center_pos_val_dir = None
+                        if seg_i is not None:
+                            seg_len_dir = cumdist[seg_i + 1] - cumdist[seg_i]
+                            center_pos_val_dir = cumdist[seg_i] + seg_t_f * seg_len_dir
+                        elif idx_center is not None and idx_center < len(cumdist):
+                            center_pos_val_dir = cumdist[idx_center]
+
+                        # 流入/流出枝番：基本は最近接線分の前後点。取れない場合は中心最近接点±1で代替。
+                        if seg_i is not None:
+                            idx_b = seg_i
+                            idx_a = seg_i + 1
+                        elif idx_center is None:
+                            # ここまで来て points があるのに中心最寄りが取れないのは例外的
+                            time_reason = "NO_SEGMENT"
+                            time_valid = 0
+                            no_segment_trips += 1
+                            idx_b = 0
+                            idx_a = min(1, len(points) - 1)
+                        else:
+                            idx_b = max(0, idx_center - 1)
+                            idx_a = min(len(points) - 1, idx_center + 1)
+
+                        # ============================================================
+                        # 枝判定角度：中心前後の「2点」から走行方向を推定して安定化
+                        # ============================================================
+                        angle_method = []
+                        # ※ center_pos_val_dir は「指定中心点に対するトリップ最近接点」（線分上）を優先する
+                        center_pos_val = center_pos_val_dir
+
+                        # ---- IN（流入）: (center-60m -> center-10m) の走行方向を推定し、180度反転 ----
+                        if center_pos_val is not None:
+                            p_in_far = interpolate_point_at_distance(points, cumdist, center_pos_val - DIR_IN_FAR_M)
+                            p_in_near = interpolate_point_at_distance(points, cumdist, center_pos_val - DIR_IN_NEAR_M)
+                        else:
+                            p_in_far = None
+                            p_in_near = None
+
+                        if p_in_far and p_in_near:
+                            approach_bearing = bearing_deg(p_in_far[0], p_in_far[1], p_in_near[0], p_in_near[1])
+                            in_angle = (approach_bearing + 180.0) % 360.0  # center->branch と同じ向きへ
+                            angle_method.append("IN:interp2pt")
+                        else:
+                            idx_center_fallback = idx_center if idx_center is not None else idx_b
+                            idx_in = max(0, idx_center_fallback - 2)
+                            in_angle = bearing_deg(points[idx_center_fallback][0], points[idx_center_fallback][1],
+                                                   points[idx_in][0], points[idx_in][1])
+                            angle_method.append("IN:fallback_idx-2")
+
+                        # ---- OUT（流出）: (center+10m -> center+60m) の走行方向を推定 ----
+                        if center_pos_val is not None:
+                            p_out_near = interpolate_point_at_distance(points, cumdist, center_pos_val + DIR_OUT_NEAR_M)
+                            p_out_far = interpolate_point_at_distance(points, cumdist, center_pos_val + DIR_OUT_FAR_M)
+                        else:
+                            p_out_near = None
+                            p_out_far = None
+
+                        if p_out_near and p_out_far:
+                            out_angle = bearing_deg(p_out_near[0], p_out_near[1], p_out_far[0], p_out_far[1])
+                            angle_method.append("OUT:interp2pt")
+                        else:
+                            idx_center_fallback = idx_center if idx_center is not None else idx_a
+                            idx_out = min(len(points) - 1, idx_center_fallback + 2)
+                            out_angle = bearing_deg(points[idx_center_fallback][0], points[idx_center_fallback][1],
+                                                    points[idx_out][0], points[idx_out][1])
+                            angle_method.append("OUT:fallback_idx+2")
+
+                        in_branch_raw, in_diff = find_nearest_branch_with_diff(in_angle, cross.branches)
+                        out_branch_raw, out_diff = find_nearest_branch_with_diff(out_angle, cross.branches)
+                        in_branch = in_branch_raw if in_diff <= BRANCH_MAX_ANGLE_DIFF_DEG else ""
+                        out_branch = out_branch_raw if out_diff <= BRANCH_MAX_ANGLE_DIFF_DEG else ""
+                        angle_method_str = "/".join(angle_method)
+
+                        # 最近接線分の診断情報（可能な範囲で記録）
+                        if seg_i is not None:
+                            seg_d = f"{seg_d_f:.3f}"
+
+                        # GPS時刻（datetime）を用意（補間で必要）
+                        dt_list = [parse_dt14(t) for t in gps_times]
+                        if any(d is None for d in dt_list):
+                            # 通過としてはカウントするが、所要時間は算出不可
+                            time_valid = 0
+                            time_reason = "TIME_MISSING"
+                            bad_time_trips += 1
+                        else:
+                            # 算出中心の時刻（線分上最近接点：seg_i と seg_t_f で補間）
+                            if seg_i is not None:
+                                from datetime import timedelta
+                                dt0 = dt_list[seg_i]
+                                dt1 = dt_list[seg_i + 1]
+                                if dt0 is not None and dt1 is not None:
+                                    dtc = dt0 + timedelta(seconds=seg_t_f * (dt1 - dt0).total_seconds())
+                                    center_time_calc_s = dtc.strftime("%Y%m%d%H%M%S")
+
+                            # 道なり距離と中心基準位置（線分上最近接）を計算
+                            if seg_i is None:
+                                time_valid = 0
+                                time_reason = "NO_SEGMENT"
+                                no_segment_trips += 1
+                            else:
+                                seg_len = cumdist[seg_i + 1] - cumdist[seg_i]
+                                center_pos_val = cumdist[seg_i] + seg_t_f * seg_len
+                                center_pos_m = f"{center_pos_val:.3f}"
+
+                                start_pos_val = center_pos_val - MEASURE_PRE_M
+                                end_pos_val = center_pos_val + MEASURE_POST_M
+                                start_pos_m = f"{start_pos_val:.3f}"
+                                end_pos_m = f"{end_pos_val:.3f}"
+
+                                # 計測区間がトリップ範囲外 → 所要時間算出不可（ただし行は出す）
+                                if start_pos_val < 0 or end_pos_val > cumdist[-1]:
+                                    time_valid = 0
+                                    time_reason = "OUT_OF_RANGE"
+                                    out_of_range_trips += 1
+                                else:
+                                    lat_s_v, lon_s_v, dt_s = interpolate_at_distance(
+                                        points,
+                                        dt_list,
+                                        cumdist,
+                                        start_pos_val,
+                                    )
+                                    lat_e_v, lon_e_v, dt_e = interpolate_at_distance(
+                                        points,
+                                        dt_list,
+                                        cumdist,
+                                        end_pos_val,
+                                    )
+                                    if dt_s is None or dt_e is None:
+                                        time_valid = 0
+                                        time_reason = "TIME_MISSING"
+                                        bad_time_trips += 1
+                                    else:
+                                        elapsed = (dt_e - dt_s).total_seconds()
+                                        if elapsed and elapsed > 0:
+                                            time_valid = 1
+                                            time_reason = "OK"
+                                        else:
+                                            elapsed = None
+                                            time_valid = 0
+                                            time_reason = "TIME_MISSING"
+                                        lon_s, lat_s = f"{lon_s_v:.8f}", f"{lat_s_v:.8f}"
+                                        lon_e, lat_e = f"{lon_e_v:.8f}", f"{lat_e_v:.8f}"
+                                        t_s = dt_s.strftime("%Y%m%d%H%M%S")
+                                        t_e = dt_e.strftime("%Y%m%d%H%M%S")
+
+                        if time_valid == 1:
+                            time_ok_trips += 1
+                        else:
+                            time_ng_trips += 1
+
+                        row_out = [
+                            crossroad_path.name,
+                            cross.cross_id,
+                            trip_csv.name,
+                            trip_date,
+                            weekday,
+                            run_id,
+                            trip_id,
+                            vehicle_type,
+                            vehicle_use,
+                            str(in_branch),
+                            str(out_branch),
+                            f"{in_diff:.1f}" if in_diff != float("inf") else "",
+                            f"{out_diff:.1f}" if out_diff != float("inf") else "",
+                            angle_method_str,
+                            f"{dist_m:.3f}",
+                            f"{elapsed:.3f}" if elapsed is not None else "",
+                            "",
+                            "",
+                            str(time_valid),
+                            time_reason,
+                        ]
+                        # ---- 診断用列（補間区間・最近接情報） ----
+                        row_out.extend([
+                            f"{MEASURE_PRE_M:.0f}",
+                            f"{MEASURE_POST_M:.0f}",
+                            seg_d,
+                            center_pos_m,
+                            start_pos_m,
+                            end_pos_m,
+                            lon_s, lat_s, t_s,
+                            lon_e, lat_e, t_e,
+                            cross_center_lon_s, cross_center_lat_s,
+                            center_lon_calc_s, center_lat_calc_s, center_time_calc_s,
+                        ])
+
+                        assert len(row_out) == len(HEADER)
+                        row_out[idx_t0] = ""
+                        row_out[idx_delay] = ""
+                        tmp_writer.writerow(row_out)
+
+                        if elapsed is not None:
+                            key = (str(in_branch), str(out_branch))
+                            elapsed_map.setdefault(key, []).append(float(elapsed))
+
+                    # ----------- 進捗表示（1行上書き） -----------
+                    progress = file_idx / total_files * 100.0
+                    elapsed_cfg = time.time() - cfg_start
+
+                    print(
+                        f"\r  進捗: {file_idx:4d}/{total_files:4d} "
+                        f"({progress:5.1f}%)  "
+                        f"対象トリップ: {total_trips:6d}  HIT: {hit_trips:6d}  "
+                        f"該当なし: {nopass_trips:6d}  "
+                        f"経過時間: {elapsed_cfg/60:5.1f}分",
+                        end="",
+                        flush=True,
+                    )
+
+                tmp_fh.close()
+                tmp_fh = None
+
+                t0_map = {}
+                for key, vals in elapsed_map.items():
+                    if not vals:
+                        continue
+                    vals.sort()
+                    k = max(1, int(len(vals) * 0.05))
+                    t0 = sum(vals[:k]) / k
+                    t0_map[key] = t0
+
+                idx_in_b = HEADER.index("流入枝番")
+                idx_out_b = HEADER.index("流出枝番")
+                idx_elapsed = HEADER.index("所要時間(s)")
+
+                with open(tmp_path, "r", newline="", encoding="utf-8-sig") as rf:
+                    reader = csv.reader(rf)
+                    header_in = next(reader, None)
+                    if header_in != HEADER:
+                        raise RuntimeError(
+                            "temp CSV header mismatch: HEADERが一致しません。31/32の列整合を確認してください。"
+                        )
+                    for row in reader:
+                        in_b = row[idx_in_b]
+                        out_b = row[idx_out_b]
+                        key = (in_b, out_b)
+                        if row[idx_elapsed] != "" and key in t0_map:
+                            try:
+                                elapsed_val = float(row[idx_elapsed])
+                                t0 = float(t0_map[key])
+                                row[idx_t0] = f"{t0:.3f}"
+                                row[idx_delay] = f"{(elapsed_val - t0):.3f}"
+                            except Exception:
+                                pass
+                        final_writer.writerow(row)
+        finally:
+            try:
+                if tmp_fh is not None:
+                    tmp_fh.close()
+            except Exception:
+                pass
+            if tmp_path is not None and not args.keep_temp:
+                try:
+                    os.remove(tmp_path)
+                except FileNotFoundError:
+                    pass
+                except Exception as e:
+                    print(f"[WARN] failed to delete temp: {tmp_path} ({e})")
+            if tmp_path is not None and args.keep_temp:
+                print(f"[KEEP] temp kept: {tmp_path}")
 
         # --------------- セット終了情報 ---------------
         cfg_end = time.time()
