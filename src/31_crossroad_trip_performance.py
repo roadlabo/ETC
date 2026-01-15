@@ -387,10 +387,10 @@ HEADER = [
     "角度算出方式",
     "計測距離(m)",
     "所要時間(s)",
-    "交差点通過速度(km/h)",
-    "通過カウント",
-    "速度算出可否",
-    "速度算出不可理由",
+    "閑散時所要時間(s)",
+    "遅れ時間(s)",
+    "所要時間算出可否",
+    "所要時間算出不可理由",
     # ---- ここから診断用（補間区間・最近接情報）----
     "計測区間_前(m)",
     "計測区間_後(m)",
@@ -437,6 +437,8 @@ def main() -> None:
     #   各 CONFIG セット（交差点ごと）の処理
     # ==============================================================
     for cfg_idx, cfg in enumerate(CONFIG, start=1):
+        rows_buffer = []
+        elapsed_map = {}
         trip_folder = Path(cfg["trip_folder"])
         crossroad_path = Path(cfg["crossroad_file"])
 
@@ -461,8 +463,8 @@ def main() -> None:
         nopass_trips = 0
         bad_time_trips = 0
         out_of_range_trips = 0
-        speed_ok_trips = 0
-        speed_ng_trips = 0
+        time_ok_trips = 0
+        time_ng_trips = 0
         no_segment_trips = 0
 
         print(f"\n[{cfg_idx}/{len(CONFIG)}] 交差点: {crossroad_path.name}")
@@ -533,9 +535,8 @@ def main() -> None:
                     cumdist = build_cumdist(points)
                     dist_m = MEASURE_PRE_M + MEASURE_POST_M  # 定義上の距離（110m固定）
                     elapsed = None
-                    speed_kmh = None
-                    speed_valid = 0
-                    speed_reason = "OK"
+                    time_valid = 0
+                    time_reason = "OK"
 
                     # 診断用のデフォルト（埋まるところだけ埋める）
                     seg_i = None
@@ -591,8 +592,8 @@ def main() -> None:
                         idx_a = seg_i + 1
                     elif idx_center is None:
                         # ここまで来て points があるのに中心最寄りが取れないのは例外的
-                        speed_reason = "NO_SEGMENT"
-                        speed_valid = 0
+                        time_reason = "NO_SEGMENT"
+                        time_valid = 0
                         no_segment_trips += 1
                         idx_b = 0
                         idx_a = min(1, len(points) - 1)
@@ -658,8 +659,8 @@ def main() -> None:
                     dt_list = [parse_dt14(t) for t in gps_times]
                     if any(d is None for d in dt_list):
                         # 通過としてはカウントするが、速度は算出不可
-                        speed_valid = 0
-                        speed_reason = "TIME_MISSING"
+                        time_valid = 0
+                        time_reason = "TIME_MISSING"
                         bad_time_trips += 1
                     else:
                         # 算出中心の時刻（線分上最近接点：seg_i と seg_t_f で補間）
@@ -673,8 +674,8 @@ def main() -> None:
 
                         # 道なり距離と中心基準位置（線分上最近接）を計算
                         if seg_i is None:
-                            speed_valid = 0
-                            speed_reason = "NO_SEGMENT"
+                            time_valid = 0
+                            time_reason = "NO_SEGMENT"
                             no_segment_trips += 1
                         else:
                             seg_len = cumdist[seg_i + 1] - cumdist[seg_i]
@@ -688,30 +689,34 @@ def main() -> None:
 
                             # 計測区間がトリップ範囲外 → 速度算出不可（ただし行は出す）
                             if start_pos_val < 0 or end_pos_val > cumdist[-1]:
-                                speed_valid = 0
-                                speed_reason = "OUT_OF_RANGE"
+                                time_valid = 0
+                                time_reason = "OUT_OF_RANGE"
                                 out_of_range_trips += 1
                             else:
                                 lat_s_v, lon_s_v, dt_s = interpolate_at_distance(points, dt_list, cumdist, start_pos_val)
                                 lat_e_v, lon_e_v, dt_e = interpolate_at_distance(points, dt_list, cumdist, end_pos_val)
                                 if dt_s is None or dt_e is None:
-                                    speed_valid = 0
-                                    speed_reason = "TIME_MISSING"
+                                    time_valid = 0
+                                    time_reason = "TIME_MISSING"
                                     bad_time_trips += 1
                                 else:
                                     elapsed = (dt_e - dt_s).total_seconds()
-                                    speed_kmh = dist_m / elapsed * 3.6 if elapsed and elapsed > 0 else None
-                                    speed_valid = 1 if (speed_kmh is not None) else 0
-                                    speed_reason = "OK" if speed_valid == 1 else "TIME_MISSING"
+                                    if elapsed and elapsed > 0:
+                                        time_valid = 1
+                                        time_reason = "OK"
+                                    else:
+                                        elapsed = None
+                                        time_valid = 0
+                                        time_reason = "TIME_MISSING"
                                     lon_s, lat_s = f"{lon_s_v:.8f}", f"{lat_s_v:.8f}"
                                     lon_e, lat_e = f"{lon_e_v:.8f}", f"{lat_e_v:.8f}"
                                     t_s = dt_s.strftime("%Y%m%d%H%M%S")
                                     t_e = dt_e.strftime("%Y%m%d%H%M%S")
 
-                    if speed_valid == 1:
-                        speed_ok_trips += 1
+                    if time_valid == 1:
+                        time_ok_trips += 1
                     else:
-                        speed_ng_trips += 1
+                        time_ng_trips += 1
 
                     row_out = [
                         crossroad_path.name,
@@ -730,10 +735,10 @@ def main() -> None:
                         angle_method_str,
                         f"{dist_m:.3f}",
                         f"{elapsed:.3f}" if elapsed else "",
-                        f"{speed_kmh:.3f}" if speed_kmh else "",
-                        "1",  # 通過カウント
-                        str(speed_valid),
-                        speed_reason,
+                        "",
+                        "",
+                        str(time_valid),
+                        time_reason,
                     ]
                     # ---- 診断用列（補間区間・最近接情報） ----
                     row_out.extend([
@@ -749,7 +754,11 @@ def main() -> None:
                         center_lon_calc_s, center_lat_calc_s, center_time_calc_s,
                     ])
 
-                    writer.writerow(row_out)
+                    assert len(row_out) == len(HEADER)
+                    key = (str(in_branch), str(out_branch))
+                    rows_buffer.append({"row": row_out, "key": key, "elapsed": elapsed})
+                    if elapsed is not None:
+                        elapsed_map.setdefault(key, []).append(float(elapsed))
 
                 # ----------- 進捗表示（1行上書き） -----------
                 progress = file_idx / total_files * 100.0
@@ -765,6 +774,26 @@ def main() -> None:
                     flush=True,
                 )
 
+            t0_map = {}
+            for key, vals in elapsed_map.items():
+                vals_sorted = sorted(vals)
+                k = max(1, int(len(vals_sorted) * 0.05))
+                t0 = sum(vals_sorted[:k]) / k
+                t0_map[key] = t0
+
+            idx_t0 = HEADER.index("閑散時所要時間(s)")
+            idx_delay = HEADER.index("遅れ時間(s)")
+
+            for entry in rows_buffer:
+                row = entry["row"]
+                elapsed_val = entry["elapsed"]
+                key = entry["key"]
+                if elapsed_val is not None and key in t0_map:
+                    t0 = t0_map[key]
+                    row[idx_t0] = f"{t0:.3f}"
+                    row[idx_delay] = f"{(elapsed_val - t0):.3f}"
+                writer.writerow(row)
+
         # --------------- セット終了情報 ---------------
         cfg_end = time.time()
         cfg_end_str = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -775,9 +804,9 @@ def main() -> None:
         print(
             f"  完了: ファイル={total_files}, 対象トリップ={total_trips}, "
             f"HIT={hit_trips}, 該当なし={nopass_trips}, "
-            f"速度OK={speed_ok_trips}, 速度NG={speed_ng_trips}, "
-            f"速度NG(時刻欠損)={bad_time_trips}, 速度NG(区間範囲外)={out_of_range_trips}, "
-            f"速度NG(線分取得不可)={no_segment_trips}, "
+            f"所要時間OK={time_ok_trips}, 所要時間NG={time_ng_trips}, "
+            f"所要時間NG(時刻欠損)={bad_time_trips}, 所要時間NG(区間範囲外)={out_of_range_trips}, "
+            f"所要時間NG(線分取得不可)={no_segment_trips}, "
             f"所要時間={cfg_minutes:5.1f}分"
         )
 
