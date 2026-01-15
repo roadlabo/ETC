@@ -67,25 +67,21 @@ BATCH_JOBS: list[dict] = [
 # BATCH_JOBS が空なら従来どおりGUI（ダイアログ）で3ファイルを選ぶ
 BATCH_MODE_ACTIVE = False
 
-# Column indices for performance data (0-based, header row is read by pandas)
-COL_FILE = 2
-COL_DATE = 3
-COL_VTYPE = 7
-COL_USE = 8
-COL_IN_BRANCH = 9
-COL_OUT_BRANCH = 10
-
-# aligned to 31_crossroad_trip_performance.py output (new)
-COL_DIST = 14          # 計測距離(m)
-COL_TIME = 15          # 所要時間(s)
-COL_T0 = 16            # 閑散時所要時間(s)
-COL_DELAY = 17         # 遅れ時間(s)
-COL_TIME_VALID = 18    # 所要時間算出可否 (1/0)
-COL_TIME_REASON = 19   # 所要時間算出不可理由
-
-# time-of-day histogram
-COL_TIME_PRIMARY = 28   # 計測開始_GPS時刻(補間)
-COL_TIME_FALLBACK = 36  # 算出中心_GPS時刻（31の新出力）
+# Column names for performance data (header row is read by pandas)
+COL_FILE = "抽出CSVファイル名"
+COL_DATE = "運行日"
+COL_VTYPE = "自動車の種別"
+COL_USE = "用途"
+COL_IN_BRANCH = "流入枝番"
+COL_OUT_BRANCH = "流出枝番"
+COL_DIST = "計測距離(m)"
+COL_TIME = "所要時間(s)"
+COL_T0 = "閑散時所要時間(s)"
+COL_DELAY = "遅れ時間(s)"
+COL_TIME_VALID = "所要時間算出可否"
+COL_TIME_REASON = "所要時間算出不可理由"
+COL_TIME_PRIMARY = "計測開始_GPS時刻(補間)"
+COL_TIME_FALLBACK = "算出中心_GPS時刻"
 
 # Column indices for crossroad definition data
 COL_BRANCH_NO = 3
@@ -338,17 +334,38 @@ class CrossroadViewer(QMainWindow):
 
     def _prepare_data(self) -> bool:
         try:
-            date_series = self.performance_df.iloc[:, COL_DATE].astype(str).apply(self._parse_date)
-            in_branch = pd.to_numeric(self.performance_df.iloc[:, COL_IN_BRANCH], errors="coerce")
-            out_branch = pd.to_numeric(self.performance_df.iloc[:, COL_OUT_BRANCH], errors="coerce")
-            time_val = pd.to_numeric(self.performance_df.iloc[:, COL_TIME], errors="coerce")
-            t0_val = pd.to_numeric(self.performance_df.iloc[:, COL_T0], errors="coerce")
-            delay_val = pd.to_numeric(self.performance_df.iloc[:, COL_DELAY], errors="coerce")
-            time_valid = pd.to_numeric(self.performance_df.iloc[:, COL_TIME_VALID], errors="coerce")
+            required_cols = [
+                COL_FILE,
+                COL_DATE,
+                COL_VTYPE,
+                COL_USE,
+                COL_IN_BRANCH,
+                COL_OUT_BRANCH,
+                COL_DIST,
+                COL_TIME,
+                COL_T0,
+                COL_DELAY,
+                COL_TIME_VALID,
+                COL_TIME_REASON,
+                COL_TIME_PRIMARY,
+                COL_TIME_FALLBACK,
+            ]
+            missing = [col for col in required_cols if col not in self.performance_df.columns]
+            if missing:
+                self._show_error(f"必要な列が見つかりません: {', '.join(missing)}")
+                return False
+
+            date_series = self.performance_df[COL_DATE].astype(str).apply(self._parse_date)
+            in_branch = pd.to_numeric(self.performance_df[COL_IN_BRANCH], errors="coerce")
+            out_branch = pd.to_numeric(self.performance_df[COL_OUT_BRANCH], errors="coerce")
+            time_val = pd.to_numeric(self.performance_df[COL_TIME], errors="coerce")
+            t0_val = pd.to_numeric(self.performance_df[COL_T0], errors="coerce")
+            delay_val = pd.to_numeric(self.performance_df[COL_DELAY], errors="coerce")
+            time_valid = pd.to_numeric(self.performance_df[COL_TIME_VALID], errors="coerce")
 
             # time (primary or fallback)
-            t1 = self.performance_df.iloc[:, COL_TIME_PRIMARY].fillna("").astype(str).str.strip()
-            t2 = self.performance_df.iloc[:, COL_TIME_FALLBACK].fillna("").astype(str).str.strip()
+            t1 = self.performance_df[COL_TIME_PRIMARY].fillna("").astype(str).str.strip()
+            t2 = self.performance_df[COL_TIME_FALLBACK].fillna("").astype(str).str.strip()
             time_series = t1.where(t1 != "", t2)
 
             data = pd.DataFrame({
@@ -379,8 +396,15 @@ class CrossroadViewer(QMainWindow):
             grouped = data.groupby(["in_b", "out_b"]).agg(
                 総台数=("in_b", "size"),
                 所要時間算出OK=("time_valid", "sum"),
-                平均遅れ時間=("delay_s", "mean"),
             )
+            avg_delay = (
+                data[data["time_valid"] == 1]
+                .groupby(["in_b", "out_b"])["delay_s"]
+                .mean()
+                .rename("平均遅れ時間")
+            )
+            grouped = grouped.join(avg_delay, on=["in_b", "out_b"])
+            grouped["平均遅れ時間"] = grouped["平均遅れ時間"].fillna(0)
             if total_days > 0:
                 grouped["日あたり台数"] = grouped["総台数"] / total_days
             else:
@@ -576,14 +600,14 @@ class CrossroadViewer(QMainWindow):
         self.file_list.clear()
         self.detail_text.setPlainText("")
         try:
-            in_series = pd.to_numeric(self.performance_df.iloc[:, COL_IN_BRANCH], errors="coerce")
-            out_series = pd.to_numeric(self.performance_df.iloc[:, COL_OUT_BRANCH], errors="coerce")
+            in_series = pd.to_numeric(self.performance_df[COL_IN_BRANCH], errors="coerce")
+            out_series = pd.to_numeric(self.performance_df[COL_OUT_BRANCH], errors="coerce")
             mask = (in_series == in_b) & (out_series == out_b)
             filtered = self.performance_df[mask]
             if filtered.empty:
                 return
 
-            file_series = filtered.iloc[:, COL_FILE].fillna("").astype(str)
+            file_series = filtered[COL_FILE].fillna("").astype(str)
             seen: set[str] = set()
             for idx, file_name in zip(filtered.index, file_series):
                 if not file_name or file_name in seen:
@@ -621,24 +645,25 @@ class CrossroadViewer(QMainWindow):
                     return "不明"
                 return fmt.format(value)
 
-            file_name = _format_value(row.iloc[COL_FILE])
+            file_name = _format_value(row.get(COL_FILE))
 
-            vtype_val = pd.to_numeric(row.iloc[COL_VTYPE], errors="coerce")
+            vtype_val = pd.to_numeric(row.get(COL_VTYPE), errors="coerce")
             vtype_int = int(vtype_val) if not pd.isna(vtype_val) else None
             vtype_text = vtype_map.get(vtype_int, "不明") if vtype_int is not None else "不明"
             vtype_display = f"{vtype_int}" if vtype_int is not None else "不明"
 
-            use_val = pd.to_numeric(row.iloc[COL_USE], errors="coerce")
+            use_val = pd.to_numeric(row.get(COL_USE), errors="coerce")
             use_int = int(use_val) if not pd.isna(use_val) else None
             use_text = use_map.get(use_int, "不明") if use_int is not None else "不明"
             use_display = f"{use_int}" if use_int is not None else "不明"
 
-            dist_val = pd.to_numeric(row.iloc[COL_DIST], errors="coerce")
-            time_val = pd.to_numeric(row.iloc[COL_TIME], errors="coerce")
-            t0_val = pd.to_numeric(row.iloc[COL_T0], errors="coerce")
-            delay_val = pd.to_numeric(row.iloc[COL_DELAY], errors="coerce")
-            time_valid_val = pd.to_numeric(row.iloc[COL_TIME_VALID], errors="coerce")
-            time_reason = str(row.iloc[COL_TIME_REASON]) if not pd.isna(row.iloc[COL_TIME_REASON]) else "不明"
+            dist_val = pd.to_numeric(row.get(COL_DIST), errors="coerce")
+            time_val = pd.to_numeric(row.get(COL_TIME), errors="coerce")
+            t0_val = pd.to_numeric(row.get(COL_T0), errors="coerce")
+            delay_val = pd.to_numeric(row.get(COL_DELAY), errors="coerce")
+            time_valid_val = pd.to_numeric(row.get(COL_TIME_VALID), errors="coerce")
+            time_reason_val = row.get(COL_TIME_REASON)
+            time_reason = str(time_reason_val) if not pd.isna(time_reason_val) else "不明"
 
             detail_lines = [
                 f"ファイル名：{file_name}",
