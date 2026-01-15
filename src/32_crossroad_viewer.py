@@ -75,14 +75,13 @@ COL_USE = 8
 COL_IN_BRANCH = 9
 COL_OUT_BRANCH = 10
 
-# aligned to 31_crossroad_trip_performance.py output
+# aligned to 31_crossroad_trip_performance.py output (new)
 COL_DIST = 14          # 計測距離(m)
 COL_TIME = 15          # 所要時間(s)
-COL_SPEED = 16         # 交差点通過速度(km/h)
-
-COL_PASS_COUNT = 17    # 通過カウント
-COL_SPEED_VALID = 18   # 速度算出可否
-COL_SPEED_REASON = 19  # 速度算出不可理由
+COL_T0 = 16            # 閑散時所要時間(s)
+COL_DELAY = 17         # 遅れ時間(s)
+COL_TIME_VALID = 18    # 所要時間算出可否 (1/0)
+COL_TIME_REASON = 19   # 所要時間算出不可理由
 
 # time-of-day histogram
 COL_TIME_PRIMARY = 28   # 計測開始_GPS時刻(補間)
@@ -92,16 +91,16 @@ COL_TIME_FALLBACK = 36  # 算出中心_GPS時刻（31の新出力）
 COL_BRANCH_NO = 3
 COL_DIR_DEG = 5
 
-SPEED_BINS = [
-    (0, 10),
+DELAY_BINS = [
+    (0, 5),
+    (5, 10),
     (10, 20),
     (20, 30),
-    (30, 40),
-    (40, 50),
-    (50, 60),
-    (60, None),
+    (30, 60),
+    (60, 120),
+    (120, None),
 ]
-SPEED_LABELS = ["0-10", "10-20", "20-30", "30-40", "40-50", "50-60", "60+"]
+DELAY_LABELS = ["0-5", "5-10", "10-20", "20-30", "30-60", "60-120", "120+"]
 TIME_BINS = [(0, 3), (3, 6), (6, 9), (9, 12), (12, 15), (15, 18), (18, 21), (21, 24)]
 TIME_LABELS = ["0-3", "3-6", "6-9", "9-12", "12-15", "15-18", "18-21", "21-24"]
 
@@ -207,13 +206,13 @@ class CrossroadViewer(QMainWindow):
         self.performance_label = QLabel("Performance file: -")
         self.total_days_label = QLabel("総日数: -")
         self.total_records_label = QLabel("総レコード数: -")
-        self.speed_valid_label = QLabel("速度算出: -")
+        self.time_valid_label = QLabel("所要時間算出: -")
 
         header_layout.addWidget(self.crossroad_label)
         header_layout.addWidget(self.performance_label)
         header_layout.addWidget(self.total_days_label)
         header_layout.addWidget(self.total_records_label)
-        header_layout.addWidget(self.speed_valid_label)
+        header_layout.addWidget(self.time_valid_label)
         main_layout.addLayout(header_layout)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -265,7 +264,7 @@ class CrossroadViewer(QMainWindow):
             "流出枝番",
             "総台数",
             "日あたり台数",
-            "平均速度(km/h)",
+            "平均遅れ時間(s)",
         ])
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -342,9 +341,10 @@ class CrossroadViewer(QMainWindow):
             date_series = self.performance_df.iloc[:, COL_DATE].astype(str).apply(self._parse_date)
             in_branch = pd.to_numeric(self.performance_df.iloc[:, COL_IN_BRANCH], errors="coerce")
             out_branch = pd.to_numeric(self.performance_df.iloc[:, COL_OUT_BRANCH], errors="coerce")
-            speed = pd.to_numeric(self.performance_df.iloc[:, COL_SPEED], errors="coerce")
-            pass_count = pd.to_numeric(self.performance_df.iloc[:, COL_PASS_COUNT], errors="coerce")
-            speed_valid = pd.to_numeric(self.performance_df.iloc[:, COL_SPEED_VALID], errors="coerce")
+            time_val = pd.to_numeric(self.performance_df.iloc[:, COL_TIME], errors="coerce")
+            t0_val = pd.to_numeric(self.performance_df.iloc[:, COL_T0], errors="coerce")
+            delay_val = pd.to_numeric(self.performance_df.iloc[:, COL_DELAY], errors="coerce")
+            time_valid = pd.to_numeric(self.performance_df.iloc[:, COL_TIME_VALID], errors="coerce")
 
             # time (primary or fallback)
             t1 = self.performance_df.iloc[:, COL_TIME_PRIMARY].fillna("").astype(str).str.strip()
@@ -355,15 +355,15 @@ class CrossroadViewer(QMainWindow):
                 "date": date_series,
                 "in_b": in_branch,
                 "out_b": out_branch,
-                "spd": speed,                 # NaNあり（速度未算出）
-                "pass_cnt": pass_count,        # 通過カウント
-                "speed_valid": speed_valid,    # 1/0
-                "time": time_series,           # 時間帯ヒスト用
+                "time_s": time_val,
+                "t0_s": t0_val,
+                "delay_s": delay_val,
+                "time_valid": time_valid,
+                "time": time_series,  # 時間帯ヒスト用
             })
-            # 交通量を落とさない：spd は欠損OK。date/in/out/pass_cnt は必須。
-            data = data.dropna(subset=["date", "in_b", "out_b", "pass_cnt"])
-            data["pass_cnt"] = data["pass_cnt"].astype(int)
-            data["speed_valid"] = data["speed_valid"].fillna(0).astype(int)
+            # 交通量を落とさない：date/in/out は必須。
+            data = data.dropna(subset=["date", "in_b", "out_b"])
+            data["time_valid"] = data["time_valid"].fillna(0).astype(int)
 
             data["in_b"] = data["in_b"].astype(int)
             data["out_b"] = data["out_b"].astype(int)
@@ -377,9 +377,9 @@ class CrossroadViewer(QMainWindow):
 
             total_days = len(self.unique_dates)
             grouped = data.groupby(["in_b", "out_b"]).agg(
-                総台数=("pass_cnt", "sum"),
-                速度算出OK=("speed_valid", "sum"),
-                平均速度=("spd", "mean"),  # NaNは自動で除外される
+                総台数=("in_b", "size"),
+                所要時間算出OK=("time_valid", "sum"),
+                平均遅れ時間=("delay_s", "mean"),
             )
             if total_days > 0:
                 grouped["日あたり台数"] = grouped["総台数"] / total_days
@@ -401,11 +401,11 @@ class CrossroadViewer(QMainWindow):
         self.crossroad_label.setText(f"Crossroad file: {self.crossroad_path.name}")
         self.performance_label.setText(f"Performance file: {self.performance_path.name}")
         self.total_days_label.setText(f"総日数: {len(self.unique_dates)}")
-        total_pass = int(self.clean_df["pass_cnt"].sum()) if not self.clean_df.empty else 0
-        ok = int(self.clean_df["speed_valid"].sum()) if not self.clean_df.empty else 0
+        total_pass = len(self.clean_df) if not self.clean_df.empty else 0
+        ok = int(self.clean_df["time_valid"].sum()) if not self.clean_df.empty else 0
         ng = total_pass - ok
         self.total_records_label.setText(f"総レコード数(通過): {total_pass}")
-        self.speed_valid_label.setText(f"速度算出: OK={ok} / NG={ng}")
+        self.time_valid_label.setText(f"所要時間算出: OK={ok} / NG={ng}")
 
     def _populate_table(self) -> None:
         df = self.grouped_df
@@ -418,7 +418,7 @@ class CrossroadViewer(QMainWindow):
             out_item = QTableWidgetItem(str(out_b))
             total_item = QTableWidgetItem(str(int(rec["総台数"])))
             daily_item = QTableWidgetItem(f"{rec['日あたり台数']:.2f}")
-            avg_item = QTableWidgetItem(f"{rec['平均速度']:.2f}")
+            avg_item = QTableWidgetItem(f"{rec['平均遅れ時間']:.2f}")
 
             for item in (in_item, out_item, total_item, daily_item, avg_item):
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -495,35 +495,33 @@ class CrossroadViewer(QMainWindow):
             self.canvas.draw()
             return
 
-        total_pass = int(subset["pass_cnt"].sum()) if not subset.empty else 0
-        ok = int(subset["speed_valid"].sum()) if not subset.empty else 0
-        speeds = subset[subset["speed_valid"] == 1]["spd"].dropna().astype(float).tolist()
-        avg_speed = subset[subset["speed_valid"] == 1]["spd"].mean()
-        count = len(speeds)  # 速度ヒスト用の母数（速度OKのみ）
+        total_pass = len(subset) if not subset.empty else 0
+        ok = int(subset["time_valid"].sum()) if not subset.empty else 0
+        delays = subset[subset["time_valid"] == 1]["delay_s"].dropna().astype(float).tolist()
+        avg_delay = subset[subset["time_valid"] == 1]["delay_s"].mean()
+        count = len(delays)  # 遅れヒスト用の母数（所要時間OKのみ）
 
-        # Fixed bins as percentages:
-        # 0-10,10-20,20-30,30-40,40-50,50-60,60+
-        labels = ["0-10", "10-20", "20-30", "30-40", "40-50", "50-60", "60+"]
+        labels = ["0-5", "5-10", "10-20", "20-30", "30-60", "60-120", "120+"]
         counts = [0] * 7
-        for v in speeds:
-            if v < 10:
+        for v in delays:
+            if v < 5:
                 counts[0] += 1
-            elif v < 20:
+            elif v < 10:
                 counts[1] += 1
-            elif v < 30:
+            elif v < 20:
                 counts[2] += 1
-            elif v < 40:
+            elif v < 30:
                 counts[3] += 1
-            elif v < 50:
-                counts[4] += 1
             elif v < 60:
+                counts[4] += 1
+            elif v < 120:
                 counts[5] += 1
             else:
                 counts[6] += 1
         perc = [c * 100.0 / count for c in counts] if count else [0.0] * 7
 
-        ax_speed.set_title("通過平均速度ヒストグラム")
-        if speeds:
+        ax_speed.set_title("遅れ時間ヒストグラム")
+        if delays:
             ax_speed.bar(labels, perc, color="red")
             ax_speed.set_ylim(0, max(perc) * 1.2 if max(perc) > 0 else 1)
             ax_speed.set_ylabel("割合(%)")
@@ -531,7 +529,7 @@ class CrossroadViewer(QMainWindow):
                 ax_speed.text(i, p, f"{p:.1f}%", ha="center", va="bottom", fontsize=9)
         else:
             ax_speed.axis("off")
-            ax_speed.text(0.5, 0.5, "速度データなし", ha="center", va="center")
+            ax_speed.text(0.5, 0.5, "遅れデータなし", ha="center", va="center")
 
         time_labels = ["0-3", "3-6", "6-9", "9-12", "12-15", "15-18", "18-21", "21-24"]
         time_counts = [0] * 8
@@ -569,7 +567,7 @@ class CrossroadViewer(QMainWindow):
             ax_time.text(0.5, 0.5, "時刻データなし", ha="center", va="center")
 
         fig.suptitle(
-            f"{in_b}→{out_b} / 通過台数:{total_pass} / 速度OK:{ok} / 平均速度:{(avg_speed if avg_speed==avg_speed else 0):.1f} km/h"
+            f"{in_b}→{out_b} / 通過台数:{total_pass} / 所要時間OK:{ok} / 平均遅れ:{(avg_delay if avg_delay==avg_delay else 0):.1f} s"
         )
         fig.tight_layout(rect=[0, 0, 1, 0.92])
         self.canvas.draw()
@@ -637,10 +635,10 @@ class CrossroadViewer(QMainWindow):
 
             dist_val = pd.to_numeric(row.iloc[COL_DIST], errors="coerce")
             time_val = pd.to_numeric(row.iloc[COL_TIME], errors="coerce")
-            speed_val = pd.to_numeric(row.iloc[COL_SPEED], errors="coerce")
-            pass_cnt_val = pd.to_numeric(row.iloc[COL_PASS_COUNT], errors="coerce")
-            speed_valid_val = pd.to_numeric(row.iloc[COL_SPEED_VALID], errors="coerce")
-            speed_reason = str(row.iloc[COL_SPEED_REASON]) if not pd.isna(row.iloc[COL_SPEED_REASON]) else "不明"
+            t0_val = pd.to_numeric(row.iloc[COL_T0], errors="coerce")
+            delay_val = pd.to_numeric(row.iloc[COL_DELAY], errors="coerce")
+            time_valid_val = pd.to_numeric(row.iloc[COL_TIME_VALID], errors="coerce")
+            time_reason = str(row.iloc[COL_TIME_REASON]) if not pd.isna(row.iloc[COL_TIME_REASON]) else "不明"
 
             detail_lines = [
                 f"ファイル名：{file_name}",
@@ -648,10 +646,10 @@ class CrossroadViewer(QMainWindow):
                 f"用途：{use_display}（{use_text}）",
                 f"道なり距離(m)：{_format_value(dist_val, '{:.0f}')}",
                 f"所要時間(s)：{_format_value(time_val, '{:.0f}')}",
-                f"交差点通過速度(km/h)：{_format_value(speed_val, '{:.1f}')}",
-                f"通過カウント：{_format_value(pass_cnt_val, '{:.0f}')}",
-                f"速度算出可否：{_format_value(speed_valid_val, '{:.0f}')}",
-                f"速度算出不可理由：{speed_reason}",
+                f"閑散時所要時間(s)：{_format_value(t0_val, '{:.0f}')}",
+                f"遅れ時間(s)：{_format_value(delay_val, '{:.0f}')}",
+                f"所要時間算出可否：{_format_value(time_valid_val, '{:.0f}')}",
+                f"所要時間算出不可理由：{time_reason}",
             ]
 
             self.detail_text.setPlainText("\n".join(detail_lines))
@@ -741,11 +739,11 @@ class CrossroadViewer(QMainWindow):
         combos: list[dict] = []
         grouped = self.clean_df.groupby(["in_b", "out_b"])
         for (in_b, out_b), subset in grouped:
-            count_total = int(subset["pass_cnt"].sum())
+            count_total = len(subset)
             daily_count = count_total / total_days if total_days else 0
-            avg_speed = subset[subset["speed_valid"] == 1]["spd"].mean() if not subset.empty else 0
+            avg_delay = subset[subset["time_valid"] == 1]["delay_s"].mean() if not subset.empty else 0
 
-            speed_perc = self._calc_speed_percent(subset[subset["speed_valid"] == 1]["spd"])
+            delay_perc = self._calc_delay_percent(subset[subset["time_valid"] == 1]["delay_s"])
             time_perc = self._calc_time_percent(subset["time"])
 
             combos.append(
@@ -754,8 +752,8 @@ class CrossroadViewer(QMainWindow):
                     "out_b": int(out_b),
                     "count_total": count_total,
                     "daily_count": daily_count,
-                    "avg_speed": avg_speed,
-                    "speed_percent": speed_perc,
+                    "avg_delay": avg_delay,
+                    "delay_percent": delay_perc,
                     "time_percent": time_perc,
                 }
             )
@@ -763,11 +761,11 @@ class CrossroadViewer(QMainWindow):
         combos.sort(key=lambda x: (-x["count_total"], x["in_b"], x["out_b"]))
         return combos
 
-    def _calc_speed_percent(self, speed_series: pd.Series) -> list[float]:
-        speeds = pd.to_numeric(speed_series, errors="coerce").dropna().astype(float).tolist()
-        counts = [0 for _ in SPEED_BINS]
-        for v in speeds:
-            for idx, (low, high) in enumerate(SPEED_BINS):
+    def _calc_delay_percent(self, delay_series: pd.Series) -> list[float]:
+        delays = pd.to_numeric(delay_series, errors="coerce").dropna().astype(float).tolist()
+        counts = [0 for _ in DELAY_BINS]
+        for v in delays:
+            for idx, (low, high) in enumerate(DELAY_BINS):
                 if high is None:
                     if v >= low:
                         counts[idx] += 1
@@ -777,7 +775,7 @@ class CrossroadViewer(QMainWindow):
                     break
         total = sum(counts)
         if total == 0:
-            return [0.0 for _ in SPEED_BINS]
+            return [0.0 for _ in DELAY_BINS]
         return [c * 100.0 / total for c in counts]
 
     def _calc_time_percent(self, time_series: pd.Series) -> list[float]:
@@ -800,7 +798,7 @@ class CrossroadViewer(QMainWindow):
             "out_b",
             "count_total",
             "daily_count",
-            "avg_speed",
+            "avg_delay",
             "metric_type",
             "bin_label",
             "percent",
@@ -812,10 +810,10 @@ class CrossroadViewer(QMainWindow):
                 combo["out_b"],
                 combo["count_total"],
                 combo["daily_count"],
-                combo["avg_speed"],
+                combo["avg_delay"],
             ]
-            for label, perc in zip(SPEED_LABELS, combo["speed_percent"]):
-                ws.append(base_info + ["speed", label, perc])
+            for label, perc in zip(DELAY_LABELS, combo["delay_percent"]):
+                ws.append(base_info + ["delay", label, perc])
             for label, perc in zip(TIME_LABELS, combo["time_percent"]):
                 ws.append(base_info + ["time", label, perc])
 
@@ -834,14 +832,14 @@ class CrossroadViewer(QMainWindow):
         if image_obj:
             ws.add_image(image_obj, "A10")
 
-        speed_title_row = 32
-        speed_header_row = 33
-        self._write_section_title(ws, speed_title_row, "通過平均速度ヒストグラム")
-        speed_table_last_row = self._write_speed_table(ws, combos, speed_header_row)
+        delay_title_row = 32
+        delay_header_row = 33
+        self._write_section_title(ws, delay_title_row, "遅れ時間ヒストグラム")
+        delay_table_last_row = self._write_delay_table(ws, combos, delay_header_row)
 
-        blank_row = speed_table_last_row + 1
-        time_title_row = speed_table_last_row + 2
-        time_header_row = speed_table_last_row + 3
+        blank_row = delay_table_last_row + 1
+        time_title_row = delay_table_last_row + 2
+        time_header_row = delay_table_last_row + 3
         ws.cell(row=blank_row, column=1, value="")
         self._write_section_title(ws, time_title_row, "時間帯ヒストグラム")
         self._write_time_table(ws, combos, time_header_row)
@@ -893,8 +891,8 @@ class CrossroadViewer(QMainWindow):
         end_text = f"{end_date.year}年{end_date.month}月{end_date.day}日"
         return f"({start_text}～{end_text})"
 
-    def _write_speed_table(self, ws, combos: list[dict], start_row: int) -> int:
-        headers = ["in_b", "out_b", "count", "/day", "avg_spd"] + SPEED_LABELS
+    def _write_delay_table(self, ws, combos: list[dict], start_row: int) -> int:
+        headers = ["in_b", "out_b", "count", "/day", "avg_delay"] + DELAY_LABELS
         header_row = start_row
         for col, text in enumerate(headers, start=1):
             cell = ws.cell(row=header_row, column=col, value=text)
@@ -909,8 +907,8 @@ class CrossroadViewer(QMainWindow):
                 combo["out_b"],
                 combo["count_total"],
                 combo["daily_count"],
-                combo["avg_speed"],
-                *[round(v, 1) for v in combo["speed_percent"]],
+                combo["avg_delay"],
+                *[round(v, 1) for v in combo["delay_percent"]],
             ]
             for col, val in enumerate(values, start=1):
                 cell = ws.cell(row=row_idx, column=col, value=val)
@@ -922,7 +920,7 @@ class CrossroadViewer(QMainWindow):
         return row_idx - 1
 
     def _write_time_table(self, ws, combos: list[dict], start_row: int) -> int:
-        headers = ["in_b", "out_b", "count", "/day", "avg_spd"] + TIME_LABELS
+        headers = ["in_b", "out_b", "count", "/day", "avg_delay"] + TIME_LABELS
         header_row = start_row
         for col, text in enumerate(headers, start=1):
             cell = ws.cell(row=header_row, column=col, value=text)
@@ -937,7 +935,7 @@ class CrossroadViewer(QMainWindow):
                 combo["out_b"],
                 combo["count_total"],
                 combo["daily_count"],
-                combo["avg_speed"],
+                combo["avg_delay"],
                 *[round(v, 1) for v in combo["time_percent"]],
             ]
             for col, val in enumerate(values, start=1):
