@@ -100,7 +100,7 @@ ETC2.0 等で点が粗い場合でも評価がブレないように、道なり�
 - `TARGET_WEEKDAYS` を設定したまま全曜日を想定して結果件数が減少する。
 ## 関連スクリプト
 - 前段: [docs/21_point_trip_extractor.md](./21_point_trip_extractor.md)（第2スクリーニング）。
-- 後段: [docs/32_crossroad_viewer.md](./32_crossroad_viewer.md)（性能 CSV の可視化）。
+- 後段: [docs/32_crossroad_report.md](./32_crossroad_report.md)（性能 CSV のレポート出力）。
 - フロー全体: [docs/01_pipeline.md](./01_pipeline.md)
 
 ## 変更履歴
