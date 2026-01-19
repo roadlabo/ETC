@@ -101,6 +101,8 @@ DELAY_BINS = [
 DELAY_LABELS = ["0-5", "5-10", "10-20", "20-30", "30-60", "60-120", "120-180", "180+"]
 TIME_BINS = [(0, 3), (3, 6), (6, 9), (9, 12), (12, 15), (15, 18), (18, 21), (21, 24)]
 TIME_LABELS = ["0-3", "3-6", "6-9", "9-12", "12-15", "15-18", "18-21", "21-24"]
+MAP_SCALE = 0.26
+MAP_ANCHOR_CELL = "B11"
 
 
 class ScaledPixmapLabel(QLabel):
@@ -749,16 +751,13 @@ class CrossroadReport(QMainWindow):
         ws.page_setup.paperSize = ws.PAPERSIZE_A4
         ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
         ws.page_setup.fitToWidth = 1
-        ws.page_setup.fitToHeight = 0
-        ws.page_margins.left = 0.7
-        ws.page_margins.right = 0.7
-        ws.page_margins.header = 0.3
-        ws.page_margins.footer = 0.3
+        ws.page_setup.fitToHeight = 1
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
         ws.page_margins = PageMargins(
-            left=ws.page_margins.left,
-            right=ws.page_margins.right,
-            top=1.0,
-            bottom=1.0,
+            left=0.7874,
+            right=0.5906,
+            top=0.7480,
+            bottom=0.5512,
             header=ws.page_margins.header,
             footer=ws.page_margins.footer,
         )
@@ -915,22 +914,23 @@ class CrossroadReport(QMainWindow):
                 cell.number_format = "0.0"
 
     def _populate_report_sheet(self, ws, combos: list[dict]) -> None:
-        title_cell = ws.cell(row=1, column=1, value="交差点パフォーマンス調査")
+        title_cell = ws.cell(row=1, column=1, value="ETC2.0 交差点パフォーマンス調査")
         title_cell.font = Font(size=16, bold=True)
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=11)
         title_cell.alignment = Alignment(horizontal="center")
 
-        self._write_summary_block(ws, 2)
+        summary_start_row = 3
+        self._write_summary_block(ws, summary_start_row)
         image_obj = self._create_resized_image()
         if image_obj:
-            ws.add_image(image_obj, "A11")
+            ws.add_image(image_obj, MAP_ANCHOR_CELL)
 
         combos_for_report = [c for c in combos if int(c["in_b"]) != int(c["out_b"])]
         combos_for_report.sort(key=lambda x: (-x["count_total"], int(x["in_b"]), int(x["out_b"])))
 
-        time_title_row = 31
-        time_header_row = 32
-        time_data_row = 33
+        time_title_row = 27
+        time_header_row = time_title_row + 1
+        time_data_row = time_title_row + 2
         time_last_row = time_data_row + len(combos_for_report) - 1
         self._write_time_table_pdf_style(
             ws, combos_for_report, time_title_row, time_header_row, time_data_row
@@ -1117,11 +1117,11 @@ class CrossroadReport(QMainWindow):
             return image
 
         if original_width and original_height:
-            image.width = max(1, int(original_width * 0.33))
-            image.height = max(1, int(original_height * 0.33))
+            image.width = max(1, int(original_width * MAP_SCALE))
+            image.height = max(1, int(original_height * MAP_SCALE))
         elif image.width and image.height:
-            image.width = max(1, int(image.width * 0.33))
-            image.height = max(1, int(image.height * 0.33))
+            image.width = max(1, int(image.width * MAP_SCALE))
+            image.height = max(1, int(image.height * MAP_SCALE))
         return image
 
 
