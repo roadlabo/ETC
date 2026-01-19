@@ -364,10 +364,10 @@ class CrossroadReport(QMainWindow):
             delay_val = pd.to_numeric(self.performance_df[COL_DELAY], errors="coerce")
             time_valid = pd.to_numeric(self.performance_df[COL_TIME_VALID], errors="coerce")
 
-            # time (primary or fallback)
-            t1 = self.performance_df[COL_TIME_PRIMARY].fillna("").astype(str).str.strip()
-            t2 = self.performance_df[COL_TIME_FALLBACK].fillna("").astype(str).str.strip()
-            time_series = t1.where(t1 != "", t2)
+            # 時間帯ヒストは「中心時刻」を使う（AK列を優先）
+            t_primary = self.performance_df[COL_TIME_FALLBACK].fillna("").astype(str).str.strip()
+            t_fallback = self.performance_df[COL_TIME_PRIMARY].fillna("").astype(str).str.strip()
+            time_series = t_primary.where(t_primary != "", t_fallback)
 
             data = pd.DataFrame({
                 "date": date_series,
@@ -559,9 +559,12 @@ class CrossroadReport(QMainWindow):
 
         time_labels = ["0-3", "3-6", "6-9", "9-12", "12-15", "15-18", "18-21", "21-24"]
         time_counts = [0] * 8
-        parsed_times = [dt for dt in subset["time"].apply(parse_center_datetime).tolist() if dt is not None]
-        for dt in parsed_times:
-            hour = dt.hour
+        for raw_time in subset["time"].tolist():
+            dt = parse_center_datetime(raw_time)
+            if dt is None:
+                hour = 0
+            else:
+                hour = dt.hour
             if hour < 3:
                 time_counts[0] += 1
             elif hour < 6:
@@ -580,16 +583,12 @@ class CrossroadReport(QMainWindow):
                 time_counts[7] += 1
 
         ax_time.set_title("時間帯ヒストグラム（台/日）")
-        if parsed_times:
-            time_per_day = [c / total_days for c in time_counts] if total_days else [0.0] * 8
-            ax_time.bar(time_labels, time_per_day, color="blue")
-            ax_time.set_ylim(0, max(time_per_day) * 1.2 if max(time_per_day) > 0 else 1)
-            ax_time.set_ylabel("台/日")
-            for i, v in enumerate(time_per_day):
-                ax_time.text(i, v, f"{v:.1f}", ha="center", va="bottom", fontsize=9)
-        else:
-            ax_time.axis("off")
-            ax_time.text(0.5, 0.5, "時刻データなし", ha="center", va="center")
+        time_per_day = [c / total_days for c in time_counts] if total_days else [0.0] * 8
+        ax_time.bar(time_labels, time_per_day, color="blue")
+        ax_time.set_ylim(0, max(time_per_day) * 1.2 if max(time_per_day) > 0 else 1)
+        ax_time.set_ylabel("台/日")
+        for i, v in enumerate(time_per_day):
+            ax_time.text(i, v, f"{v:.1f}", ha="center", va="bottom", fontsize=9)
 
         fig.suptitle(
             f"{in_b}→{out_b} / 通過台数:{total_pass} / 所要時間OK:{ok} / 平均遅れ(s):{(avg_delay if avg_delay==avg_delay else 0):.1f}"
@@ -758,9 +757,9 @@ class CrossroadReport(QMainWindow):
         ws.page_margins.footer = 0.3
         ws.print_options.horizontalCentered = True
         ws.print_title_rows = "1:1"
-        ws.column_dimensions["A"].width = 4.88
-        ws.column_dimensions["B"].width = 4.88
-        for col in ["C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M"]:
+        ws.column_dimensions["A"].width = 15.14
+        ws.column_dimensions["B"].width = 11.86
+        for col in ["C", "D", "E", "F", "G", "H", "I", "J", "K"]:
             ws.column_dimensions[col].width = 7.0
 
     def _collect_combination_data(self) -> list[dict]:
@@ -775,7 +774,25 @@ class CrossroadReport(QMainWindow):
             total_delay = ok_subset["delay_s"].sum() if not ok_subset.empty else 0
             daily_total_delay = total_delay / total_days if total_days else 0
             delay_per_day = self._calc_delay_per_day_counts(ok_subset["delay_s"], total_days)
-            time_per_day = self._calc_time_per_day_counts(subset["time"], total_days)
+            time_per_day, time_parse_ng_count, time_bin_total = self._calc_time_per_day_counts(
+                subset["time"], total_days
+            )
+            ok_count = len(ok_subset)
+            ok_per_day = ok_count / total_days if total_days else 0
+            time_bins_total_per_day = sum(time_per_day)
+            delay_bins_total_per_day = sum(delay_per_day)
+            print(
+                "[CHECK] direction="
+                f"{int(in_b)}→{int(out_b)} "
+                f"daily_count={daily_count:.6f} "
+                f"sum_time_bins_per_day={time_bins_total_per_day:.6f} "
+                f"ok_per_day={ok_per_day:.6f} "
+                f"sum_delay_bins_per_day={delay_bins_total_per_day:.6f} "
+                f"daily_total_delay={daily_total_delay:.6f} "
+                f"avg_delay={avg_delay:.6f} "
+                f"time_parse_ng_count={time_parse_ng_count} "
+                f"time_bin_total={time_bin_total}"
+            )
 
             combos.append(
                 {
@@ -810,18 +827,23 @@ class CrossroadReport(QMainWindow):
             return [0.0 for _ in DELAY_BINS]
         return [c / total_days for c in counts]
 
-    def _calc_time_per_day_counts(self, time_series: pd.Series, total_days: int) -> list[float]:
-        parsed = [parse_center_datetime(v) for v in time_series.tolist()]
-        valid_hours = [dt.hour for dt in parsed if dt is not None]
+    def _calc_time_per_day_counts(self, time_series: pd.Series, total_days: int) -> tuple[list[float], int, int]:
         counts = [0 for _ in TIME_BINS]
-        for hour in valid_hours:
+        time_parse_ng_count = 0
+        for value in time_series.tolist():
+            dt = parse_center_datetime(value)
+            if dt is None:
+                time_parse_ng_count += 1
+                hour = 0
+            else:
+                hour = dt.hour
             for idx, (low, high) in enumerate(TIME_BINS):
                 if low <= hour < high:
                     counts[idx] += 1
                     break
         if total_days == 0:
-            return [0.0 for _ in TIME_BINS]
-        return [c / total_days for c in counts]
+            return [0.0 for _ in TIME_BINS], time_parse_ng_count, sum(counts)
+        return [c / total_days for c in counts], time_parse_ng_count, sum(counts)
 
     def _populate_delay_data_sheet(self, ws, combos: list[dict]) -> None:
         headers = [
@@ -886,24 +908,24 @@ class CrossroadReport(QMainWindow):
     def _populate_report_sheet(self, ws, combos: list[dict]) -> None:
         title_cell = ws.cell(row=1, column=1, value="交差点パフォーマンス調査")
         title_cell.font = Font(size=16, bold=True)
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=13)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=11)
         title_cell.alignment = Alignment(horizontal="center")
 
         self._write_summary_block(ws, 4)
         image_obj = self._create_resized_image()
         if image_obj:
-            ws.add_image(image_obj, "A10")
+            ws.add_image(image_obj, "A11")
 
-        time_title_row = 26
-        time_header_row = 27
-        time_data_row = 28
-        self._write_time_table_pdf_style(ws, combos, time_title_row, time_header_row, time_data_row)
+        time_title_row = 30
+        time_header_row = 31
+        time_data_row = 32
+        time_end_row = self._write_time_table_pdf_style(
+            ws, combos, time_title_row, time_header_row, time_data_row
+        )
 
-        ws.cell(row=37, column=1, value="")
-
-        delay_title_row = 38
-        delay_header_row = 39
-        delay_data_row = 40
+        delay_title_row = time_end_row + 2
+        delay_header_row = delay_title_row + 1
+        delay_data_row = delay_title_row + 2
         self._write_delay_table_pdf_style(ws, combos, delay_title_row, delay_header_row, delay_data_row)
 
     def _write_summary_block(self, ws, start_row: int) -> int:
@@ -957,8 +979,11 @@ class CrossroadReport(QMainWindow):
         self, ws, combos: list[dict], title_row: int, header_row: int, data_row: int
     ) -> int:
         max_col = 11
-        ws.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=max_col)
-        title_cell = ws.cell(row=title_row, column=1, value="時間帯ヒストグラム（台/日）")
+        ws.cell(row=title_row, column=1, value="")
+        ws.cell(row=title_row, column=2, value="")
+        ws.cell(row=title_row, column=3, value="")
+        ws.merge_cells(start_row=title_row, start_column=4, end_row=title_row, end_column=max_col)
+        title_cell = ws.cell(row=title_row, column=4, value="時間帯ヒストグラム（台/日）")
         title_cell.font = Font(bold=True)
         title_cell.alignment = Alignment(horizontal="center", vertical="center")
 
@@ -997,21 +1022,25 @@ class CrossroadReport(QMainWindow):
                     cell.number_format = "0.0"
             row_idx += 1
 
-        self._apply_table_borders(ws, title_row, 1, row_idx - 1, max_col)
+        self._apply_table_borders(ws, title_row, 4, title_row, max_col)
+        self._apply_table_borders(ws, header_row, 1, row_idx - 1, max_col)
         return row_idx - 1
 
     def _write_delay_table_pdf_style(
         self, ws, combos: list[dict], title_row: int, header_row: int, data_row: int
     ) -> int:
         max_col = 11
-        ws.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=max_col)
-        title_cell = ws.cell(row=title_row, column=1, value="遅れ時間ヒストグラム（台/日）")
+        ws.cell(row=title_row, column=1, value="")
+        ws.cell(row=title_row, column=2, value="")
+        ws.cell(row=title_row, column=3, value="")
+        ws.merge_cells(start_row=title_row, start_column=4, end_row=title_row, end_column=max_col)
+        title_cell = ws.cell(row=title_row, column=4, value="遅れ時間ヒストグラム（台/日）")
         title_cell.font = Font(bold=True)
         title_cell.alignment = Alignment(horizontal="center", vertical="center")
 
         headers = [
             "方向\n（流入→流出）",
-            "総遅れ時\n間\n（秒/日）",
+            "総遅れ時間\n（秒/日）",
             "平均\n遅れ\n（秒）",
             "0-5秒",
             "5-10\n秒",
@@ -1044,7 +1073,8 @@ class CrossroadReport(QMainWindow):
                     cell.number_format = "0.0"
             row_idx += 1
 
-        self._apply_table_borders(ws, title_row, 1, row_idx - 1, max_col)
+        self._apply_table_borders(ws, title_row, 4, title_row, max_col)
+        self._apply_table_borders(ws, header_row, 1, row_idx - 1, max_col)
         return row_idx - 1
 
     @staticmethod
