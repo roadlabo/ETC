@@ -523,8 +523,7 @@ class CrossroadViewer(QMainWindow):
         ok = int(subset["time_valid"].sum()) if not subset.empty else 0
         delays = subset[subset["time_valid"] == 1]["delay_s"].dropna().astype(float).tolist()
         avg_delay = subset[subset["time_valid"] == 1]["delay_s"].mean()
-        count = len(delays)  # 遅れヒスト用の母数（所要時間OKのみ）
-
+        total_days = len(self.unique_dates)
         labels = ["0-5", "5-10", "10-20", "20-30", "30-60", "60-120", "120+"]
         counts = [0] * 7
         for v in delays:
@@ -542,15 +541,15 @@ class CrossroadViewer(QMainWindow):
                 counts[5] += 1
             else:
                 counts[6] += 1
-        perc = [c * 100.0 / count for c in counts] if count else [0.0] * 7
+        per_day = [c / total_days for c in counts] if total_days else [0.0] * 7
 
-        ax_speed.set_title("遅れ時間ヒストグラム")
+        ax_speed.set_title("遅れ時間ヒストグラム（台/日）")
         if delays:
-            ax_speed.bar(labels, perc, color="red")
-            ax_speed.set_ylim(0, max(perc) * 1.2 if max(perc) > 0 else 1)
-            ax_speed.set_ylabel("割合(%)")
-            for i, p in enumerate(perc):
-                ax_speed.text(i, p, f"{p:.1f}%", ha="center", va="bottom", fontsize=9)
+            ax_speed.bar(labels, per_day, color="red")
+            ax_speed.set_ylim(0, max(per_day) * 1.2 if max(per_day) > 0 else 1)
+            ax_speed.set_ylabel("台/日")
+            for i, v in enumerate(per_day):
+                ax_speed.text(i, v, f"{v:.1f}", ha="center", va="bottom", fontsize=9)
         else:
             ax_speed.axis("off")
             ax_speed.text(0.5, 0.5, "遅れデータなし", ha="center", va="center")
@@ -577,21 +576,20 @@ class CrossroadViewer(QMainWindow):
             elif hour < 24:
                 time_counts[7] += 1
 
-        ax_time.set_title("時間帯ヒストグラム")
+        ax_time.set_title("時間帯ヒストグラム（台/日）")
         if parsed_times:
-            time_total = len(parsed_times)
-            time_perc = [c * 100.0 / time_total for c in time_counts]
-            ax_time.bar(time_labels, time_perc, color="blue")
-            ax_time.set_ylim(0, max(time_perc) * 1.2 if max(time_perc) > 0 else 1)
-            ax_time.set_ylabel("割合(%)")
-            for i, p in enumerate(time_perc):
-                ax_time.text(i, p, f"{p:.1f}%", ha="center", va="bottom", fontsize=9)
+            time_per_day = [c / total_days for c in time_counts] if total_days else [0.0] * 8
+            ax_time.bar(time_labels, time_per_day, color="blue")
+            ax_time.set_ylim(0, max(time_per_day) * 1.2 if max(time_per_day) > 0 else 1)
+            ax_time.set_ylabel("台/日")
+            for i, v in enumerate(time_per_day):
+                ax_time.text(i, v, f"{v:.1f}", ha="center", va="bottom", fontsize=9)
         else:
             ax_time.axis("off")
             ax_time.text(0.5, 0.5, "時刻データなし", ha="center", va="center")
 
         fig.suptitle(
-            f"{in_b}→{out_b} / 通過台数:{total_pass} / 所要時間OK:{ok} / 平均遅れ:{(avg_delay if avg_delay==avg_delay else 0):.1f} s"
+            f"{in_b}→{out_b} / 通過台数:{total_pass} / 所要時間OK:{ok} / 平均遅れ(s):{(avg_delay if avg_delay==avg_delay else 0):.1f}"
         )
         fig.tight_layout(rect=[0, 0, 1, 0.92])
         self.canvas.draw()
@@ -733,11 +731,13 @@ class CrossroadViewer(QMainWindow):
         wb = Workbook()
         ws_report = wb.active
         ws_report.title = "Report"
-        ws_data = wb.create_sheet("Data")
+        ws_delay = wb.create_sheet("遅れ時間（データ）")
+        ws_time = wb.create_sheet("時間帯（データ）")
 
         self._configure_report_sheet(ws_report)
         combos = self._collect_combination_data()
-        self._populate_data_sheet(ws_data, combos)
+        self._populate_delay_data_sheet(ws_delay, combos)
+        self._populate_time_data_sheet(ws_time, combos)
         self._populate_report_sheet(ws_report, combos)
 
         wb.save(save_path)
@@ -766,10 +766,12 @@ class CrossroadViewer(QMainWindow):
         for (in_b, out_b), subset in grouped:
             count_total = len(subset)
             daily_count = count_total / total_days if total_days else 0
-            avg_delay = subset[subset["time_valid"] == 1]["delay_s"].mean() if not subset.empty else 0
-
-            delay_perc = self._calc_delay_percent(subset[subset["time_valid"] == 1]["delay_s"])
-            time_perc = self._calc_time_percent(subset["time"])
+            ok_subset = subset[subset["time_valid"] == 1]
+            avg_delay = ok_subset["delay_s"].mean() if not ok_subset.empty else 0
+            total_delay = ok_subset["delay_s"].sum() if not ok_subset.empty else 0
+            daily_total_delay = total_delay / total_days if total_days else 0
+            delay_per_day = self._calc_delay_per_day_counts(ok_subset["delay_s"], total_days)
+            time_per_day = self._calc_time_per_day_counts(subset["time"], total_days)
 
             combos.append(
                 {
@@ -778,15 +780,17 @@ class CrossroadViewer(QMainWindow):
                     "count_total": count_total,
                     "daily_count": daily_count,
                     "avg_delay": avg_delay,
-                    "delay_percent": delay_perc,
-                    "time_percent": time_perc,
+                    "total_delay": total_delay,
+                    "daily_total_delay": daily_total_delay,
+                    "delay_per_day": delay_per_day,
+                    "time_per_day": time_per_day,
                 }
             )
 
         combos.sort(key=lambda x: (-x["count_total"], x["in_b"], x["out_b"]))
         return combos
 
-    def _calc_delay_percent(self, delay_series: pd.Series) -> list[float]:
+    def _calc_delay_per_day_counts(self, delay_series: pd.Series, total_days: int) -> list[float]:
         delays = pd.to_numeric(delay_series, errors="coerce").dropna().astype(float).tolist()
         counts = [0 for _ in DELAY_BINS]
         for v in delays:
@@ -798,12 +802,11 @@ class CrossroadViewer(QMainWindow):
                 elif low <= v < high:
                     counts[idx] += 1
                     break
-        total = sum(counts)
-        if total == 0:
+        if total_days == 0:
             return [0.0 for _ in DELAY_BINS]
-        return [c * 100.0 / total for c in counts]
+        return [c / total_days for c in counts]
 
-    def _calc_time_percent(self, time_series: pd.Series) -> list[float]:
+    def _calc_time_per_day_counts(self, time_series: pd.Series, total_days: int) -> list[float]:
         parsed = [parse_center_datetime(v) for v in time_series.tolist()]
         valid_hours = [dt.hour for dt in parsed if dt is not None]
         counts = [0 for _ in TIME_BINS]
@@ -812,37 +815,67 @@ class CrossroadViewer(QMainWindow):
                 if low <= hour < high:
                     counts[idx] += 1
                     break
-        total = sum(counts)
-        if total == 0:
+        if total_days == 0:
             return [0.0 for _ in TIME_BINS]
-        return [c * 100.0 / total for c in counts]
+        return [c / total_days for c in counts]
 
-    def _populate_data_sheet(self, ws, combos: list[dict]) -> None:
+    def _populate_delay_data_sheet(self, ws, combos: list[dict]) -> None:
         headers = [
-            "in_b",
-            "out_b",
-            "count_total",
-            "daily_count",
-            "avg_delay",
-            "metric_type",
-            "bin_label",
-            "percent",
+            "方向（流入→流出）",
+            "総台数（台）",
+            "日あたり台数（台/日）",
+            "平均遅れ（秒）",
+            "1日あたり総遅れ時間（秒/日）",
+            "階級（秒）",
+            "台数（台/日）",
         ]
         ws.append(headers)
         for combo in combos:
+            direction = f"{combo['in_b']}→{combo['out_b']}"
             base_info = [
-                combo["in_b"],
-                combo["out_b"],
+                direction,
                 combo["count_total"],
                 combo["daily_count"],
                 combo["avg_delay"],
+                combo["daily_total_delay"],
             ]
-            for label, perc in zip(DELAY_LABELS, combo["delay_percent"]):
-                ws.append(base_info + ["delay", label, perc])
-            for label, perc in zip(TIME_LABELS, combo["time_percent"]):
-                ws.append(base_info + ["time", label, perc])
+            for label, per_day in zip(DELAY_LABELS, combo["delay_per_day"]):
+                ws.append(base_info + [label, per_day])
 
-        for row in ws.iter_rows(min_row=2, min_col=4, max_col=5):
+        for row in ws.iter_rows(min_row=2, min_col=3, max_col=5):
+            for cell in row:
+                cell.number_format = "0.0"
+        for row in ws.iter_rows(min_row=2, min_col=7, max_col=7):
+            for cell in row:
+                cell.number_format = "0.0"
+
+    def _populate_time_data_sheet(self, ws, combos: list[dict]) -> None:
+        headers = [
+            "方向（流入→流出）",
+            "総台数（台）",
+            "日あたり台数（台/日）",
+            "平均遅れ（秒）",
+            "1日あたり総遅れ時間（秒/日）",
+            "階級（時）",
+            "台数（台/日）",
+        ]
+        ws.append(headers)
+        for combo in combos:
+            direction = f"{combo['in_b']}→{combo['out_b']}"
+            base_info = [
+                direction,
+                combo["count_total"],
+                combo["daily_count"],
+                combo["avg_delay"],
+                combo["daily_total_delay"],
+            ]
+            for label, per_day in zip(TIME_LABELS, combo["time_per_day"]):
+                ws.append(base_info + [label, per_day])
+
+        for row in ws.iter_rows(min_row=2, min_col=3, max_col=5):
+            for cell in row:
+                cell.number_format = "0.0"
+        for row in ws.iter_rows(min_row=2, min_col=7, max_col=7):
             for cell in row:
                 cell.number_format = "0.0"
 
@@ -859,14 +892,14 @@ class CrossroadViewer(QMainWindow):
 
         delay_title_row = 32
         delay_header_row = 33
-        self._write_section_title(ws, delay_title_row, "遅れ時間ヒストグラム")
+        self._write_section_title(ws, delay_title_row, "遅れ時間ヒストグラム（台/日）")
         delay_table_last_row = self._write_delay_table(ws, combos, delay_header_row)
 
         blank_row = delay_table_last_row + 1
         time_title_row = delay_table_last_row + 2
         time_header_row = delay_table_last_row + 3
         ws.cell(row=blank_row, column=1, value="")
-        self._write_section_title(ws, time_title_row, "時間帯ヒストグラム")
+        self._write_section_title(ws, time_title_row, "時間帯ヒストグラム（台/日）")
         self._write_time_table(ws, combos, time_header_row)
 
     def _write_section_title(self, ws, row: int, title: str) -> None:
@@ -887,12 +920,16 @@ class CrossroadViewer(QMainWindow):
             unique_weekdays = sorted({d.weekday() for d in self.unique_dates}, key=weekday_order.index)
             weekdays = "・".join(weekday_map[d] for d in unique_weekdays)
 
+        total_records = len(self.clean_df)
+        ok_records = int(self.clean_df["time_valid"].sum()) if not self.clean_df.empty else 0
+        ng_records = total_records - ok_records
         info_pairs = [
-            ("Crossroad file", self.crossroad_path.name, None),
-            ("Performance file", self.performance_path.name, None),
+            ("交差点定義ファイル", self.crossroad_path.name, None),
+            ("パフォーマンスCSV", self.performance_path.name, None),
             ("総日数", f"{len(self.unique_dates)}日", self._format_date_range(start_date, end_date)),
             ("対象曜日", weekdays, None),
-            ("総レコード数", len(self.clean_df), None),
+            ("総レコード数（通過）（台）", total_records, None),
+            ("所要時間算出 OK/NG（台）", f"{ok_records} / {ng_records}", None),
         ]
 
         for offset, (label, value, extra) in enumerate(info_pairs):
@@ -917,7 +954,13 @@ class CrossroadViewer(QMainWindow):
         return f"({start_text}～{end_text})"
 
     def _write_delay_table(self, ws, combos: list[dict], start_row: int) -> int:
-        headers = ["in_b", "out_b", "count", "/day", "avg_delay"] + DELAY_LABELS
+        headers = [
+            "方向（流入→流出）",
+            "総台数（台）",
+            "日あたり台数（台/日）",
+            "平均遅れ（秒）",
+            "1日あたり総遅れ時間（秒/日）",
+        ] + [f"{label}秒（台/日）" for label in DELAY_LABELS]
         header_row = start_row
         for col, text in enumerate(headers, start=1):
             cell = ws.cell(row=header_row, column=col, value=text)
@@ -927,25 +970,32 @@ class CrossroadViewer(QMainWindow):
 
         row_idx = header_row + 1
         for combo in combos:
+            direction = f"{combo['in_b']}→{combo['out_b']}"
             values = [
-                combo["in_b"],
-                combo["out_b"],
+                direction,
                 combo["count_total"],
                 combo["daily_count"],
                 combo["avg_delay"],
-                *[round(v, 1) for v in combo["delay_percent"]],
+                combo["daily_total_delay"],
+                *[round(v, 1) for v in combo["delay_per_day"]],
             ]
             for col, val in enumerate(values, start=1):
                 cell = ws.cell(row=row_idx, column=col, value=val)
-                align = Alignment(horizontal="center") if col <= 2 else Alignment(horizontal="right")
+                align = Alignment(horizontal="center") if col == 1 else Alignment(horizontal="right")
                 cell.alignment = align
-                if col in (4, 5) or col > 5:
+                if col in (3, 4, 5) or col > 5:
                     cell.number_format = "0.0"
             row_idx += 1
         return row_idx - 1
 
     def _write_time_table(self, ws, combos: list[dict], start_row: int) -> int:
-        headers = ["in_b", "out_b", "count", "/day", "avg_delay"] + TIME_LABELS
+        headers = [
+            "方向（流入→流出）",
+            "総台数（台）",
+            "日あたり台数（台/日）",
+            "平均遅れ（秒）",
+            "1日あたり総遅れ時間（秒/日）",
+        ] + [f"{label}時（台/日）" for label in TIME_LABELS]
         header_row = start_row
         for col, text in enumerate(headers, start=1):
             cell = ws.cell(row=header_row, column=col, value=text)
@@ -955,19 +1005,20 @@ class CrossroadViewer(QMainWindow):
 
         row_idx = header_row + 1
         for combo in combos:
+            direction = f"{combo['in_b']}→{combo['out_b']}"
             values = [
-                combo["in_b"],
-                combo["out_b"],
+                direction,
                 combo["count_total"],
                 combo["daily_count"],
                 combo["avg_delay"],
-                *[round(v, 1) for v in combo["time_percent"]],
+                combo["daily_total_delay"],
+                *[round(v, 1) for v in combo["time_per_day"]],
             ]
             for col, val in enumerate(values, start=1):
                 cell = ws.cell(row=row_idx, column=col, value=val)
-                align = Alignment(horizontal="center") if col <= 2 else Alignment(horizontal="right")
+                align = Alignment(horizontal="center") if col == 1 else Alignment(horizontal="right")
                 cell.alignment = align
-                if col in (4, 5) or col > 5:
+                if col in (3, 4, 5) or col > 5:
                     cell.number_format = "0.0"
             row_idx += 1
         return row_idx
