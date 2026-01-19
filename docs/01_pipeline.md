@@ -29,7 +29,7 @@
 - **性能評価・ビューア**
   - [30_build_performance.py](./30_build_performance.md): ルート沿いの速度・通過性能を KPI として構築。
   - [31_crossroad_trip_performance.py](./31_crossroad_trip_performance.md): 交差点通過性能（流入/流出/滞留）を算出。
-  - [32_crossroad_viewer.py](./32_crossroad_viewer.md): 31 の出力を GUI で確認し、画像・Excel へエクスポート。
+  - [32_crossroad_report.py](./32_crossroad_report.md): 31 の出力を GUI で確認し、Excel レポートを出力。
 - **OD 系**
   - [40_trip_od_screening.py](./40_trip_od_screening.md): 様式1-2 から様式1-3参照 OD リストを生成（第2スクリーニングの後段）。
   - [41_od_heatmap_viewer.py](./41_od_heatmap_viewer.md): OD リストを Origin/Destination のヒートマップに可視化。
