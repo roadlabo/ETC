@@ -94,9 +94,10 @@ DELAY_BINS = [
     (20, 30),
     (30, 60),
     (60, 120),
-    (120, None),
+    (120, 180),
+    (180, None),
 ]
-DELAY_LABELS = ["0-5", "5-10", "10-20", "20-30", "30-60", "60-120", "120+"]
+DELAY_LABELS = ["0-5", "5-10", "10-20", "20-30", "30-60", "60-120", "120-180", "180+"]
 TIME_BINS = [(0, 3), (3, 6), (6, 9), (9, 12), (12, 15), (15, 18), (18, 21), (21, 24)]
 TIME_LABELS = ["0-3", "3-6", "6-9", "9-12", "12-15", "15-18", "18-21", "21-24"]
 
@@ -524,8 +525,8 @@ class CrossroadReport(QMainWindow):
         delays = subset[subset["time_valid"] == 1]["delay_s"].dropna().astype(float).tolist()
         avg_delay = subset[subset["time_valid"] == 1]["delay_s"].mean()
         total_days = len(self.unique_dates)
-        labels = ["0-5", "5-10", "10-20", "20-30", "30-60", "60-120", "120+"]
-        counts = [0] * 7
+        labels = DELAY_LABELS
+        counts = [0] * len(DELAY_LABELS)
         for v in delays:
             if v < 5:
                 counts[0] += 1
@@ -539,9 +540,11 @@ class CrossroadReport(QMainWindow):
                 counts[4] += 1
             elif v < 120:
                 counts[5] += 1
-            else:
+            elif v < 180:
                 counts[6] += 1
-        per_day = [c / total_days for c in counts] if total_days else [0.0] * 7
+            else:
+                counts[7] += 1
+        per_day = [c / total_days for c in counts] if total_days else [0.0] * len(DELAY_LABELS)
 
         ax_speed.set_title("遅れ時間ヒストグラム（台/日）")
         if delays:
@@ -754,6 +757,7 @@ class CrossroadReport(QMainWindow):
         ws.page_margins.header = 0.3
         ws.page_margins.footer = 0.3
         ws.print_options.horizontalCentered = True
+        ws.print_title_rows = "1:1"
         ws.column_dimensions["A"].width = 4.88
         ws.column_dimensions["B"].width = 4.88
         for col in ["C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M"]:
@@ -890,22 +894,17 @@ class CrossroadReport(QMainWindow):
         if image_obj:
             ws.add_image(image_obj, "A10")
 
-        delay_title_row = 32
-        delay_header_row = 33
-        self._write_section_title(ws, delay_title_row, "遅れ時間ヒストグラム（台/日）")
-        delay_table_last_row = self._write_delay_table(ws, combos, delay_header_row)
+        time_title_row = 26
+        time_header_row = 27
+        time_data_row = 28
+        self._write_time_table_pdf_style(ws, combos, time_title_row, time_header_row, time_data_row)
 
-        blank_row = delay_table_last_row + 1
-        time_title_row = delay_table_last_row + 2
-        time_header_row = delay_table_last_row + 3
-        ws.cell(row=blank_row, column=1, value="")
-        self._write_section_title(ws, time_title_row, "時間帯ヒストグラム（台/日）")
-        self._write_time_table(ws, combos, time_header_row)
+        ws.cell(row=37, column=1, value="")
 
-    def _write_section_title(self, ws, row: int, title: str) -> None:
-        title_cell = ws.cell(row=row, column=1, value=title)
-        title_cell.font = Font(size=12, bold=True)
-        title_cell.alignment = Alignment(horizontal="left")
+        delay_title_row = 38
+        delay_header_row = 39
+        delay_data_row = 40
+        self._write_delay_table_pdf_style(ws, combos, delay_title_row, delay_header_row, delay_data_row)
 
     def _write_summary_block(self, ws, start_row: int) -> int:
         start_date, end_date = (None, None)
@@ -926,7 +925,11 @@ class CrossroadReport(QMainWindow):
         info_pairs = [
             ("交差点定義ファイル", self.crossroad_path.name, None),
             ("パフォーマンスCSV", self.performance_path.name, None),
-            ("総日数", f"{len(self.unique_dates)}日", self._format_date_range(start_date, end_date)),
+            (
+                "総日数",
+                f"{len(self.unique_dates)}日 {self._format_date_range(start_date, end_date)}".strip(),
+                None,
+            ),
             ("対象曜日", weekdays, None),
             ("総レコード数（通過）（台）", total_records, None),
             ("所要時間算出 OK/NG（台）", f"{ok_records} / {ng_records}", None),
@@ -939,9 +942,6 @@ class CrossroadReport(QMainWindow):
             label_cell.alignment = Alignment(wrap_text=False)
             value_cell = ws.cell(row=row_idx, column=4, value=value)
             value_cell.alignment = Alignment(wrap_text=False)
-            if extra is not None:
-                extra_cell = ws.cell(row=row_idx, column=5, value=extra)
-                extra_cell.alignment = Alignment(wrap_text=False)
 
         return start_row + len(info_pairs)
 
@@ -953,75 +953,113 @@ class CrossroadReport(QMainWindow):
         end_text = f"{end_date.year}年{end_date.month}月{end_date.day}日"
         return f"({start_text}～{end_text})"
 
-    def _write_delay_table(self, ws, combos: list[dict], start_row: int) -> int:
+    def _write_time_table_pdf_style(
+        self, ws, combos: list[dict], title_row: int, header_row: int, data_row: int
+    ) -> int:
+        max_col = 11
+        ws.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=max_col)
+        title_cell = ws.cell(row=title_row, column=1, value="時間帯ヒストグラム（台/日）")
+        title_cell.font = Font(bold=True)
+        title_cell.alignment = Alignment(horizontal="center", vertical="center")
+
         headers = [
-            "方向（流入→流出）",
-            "総台数（台）",
-            "日あたり台数（台/日）",
-            "平均遅れ（秒）",
-            "1日あたり総遅れ時間（秒/日）",
-        ] + [f"{label}秒（台/日）" for label in DELAY_LABELS]
-        header_row = start_row
+            "方向\n（流入→流出）",
+            "日あたり\n台数\n（台/日）",
+            "総台\n数\n（台）",
+            "0-3時",
+            "3-6時",
+            "6-9時",
+            "9-12\n時",
+            "12-15\n時",
+            "15-18\n時",
+            "18-21\n時",
+            "21-24\n時",
+        ]
         for col, text in enumerate(headers, start=1):
             cell = ws.cell(row=header_row, column=col, value=text)
             cell.font = Font(bold=True)
-            cell.alignment = Alignment(horizontal="center")
-            cell.border = Border(bottom=Side(style="thin"))
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.row_dimensions[header_row].height = 42
 
-        row_idx = header_row + 1
+        row_idx = data_row
         for combo in combos:
             direction = f"{combo['in_b']}→{combo['out_b']}"
             values = [
                 direction,
+                round(combo["daily_count"], 1),
                 combo["count_total"],
-                combo["daily_count"],
-                combo["avg_delay"],
-                combo["daily_total_delay"],
-                *[round(v, 1) for v in combo["delay_per_day"]],
-            ]
-            for col, val in enumerate(values, start=1):
-                cell = ws.cell(row=row_idx, column=col, value=val)
-                align = Alignment(horizontal="center") if col == 1 else Alignment(horizontal="right")
-                cell.alignment = align
-                if col in (3, 4, 5) or col > 5:
-                    cell.number_format = "0.0"
-            row_idx += 1
-        return row_idx - 1
-
-    def _write_time_table(self, ws, combos: list[dict], start_row: int) -> int:
-        headers = [
-            "方向（流入→流出）",
-            "総台数（台）",
-            "日あたり台数（台/日）",
-            "平均遅れ（秒）",
-            "1日あたり総遅れ時間（秒/日）",
-        ] + [f"{label}時（台/日）" for label in TIME_LABELS]
-        header_row = start_row
-        for col, text in enumerate(headers, start=1):
-            cell = ws.cell(row=header_row, column=col, value=text)
-            cell.font = Font(bold=True)
-            cell.alignment = Alignment(horizontal="center")
-            cell.border = Border(bottom=Side(style="thin"))
-
-        row_idx = header_row + 1
-        for combo in combos:
-            direction = f"{combo['in_b']}→{combo['out_b']}"
-            values = [
-                direction,
-                combo["count_total"],
-                combo["daily_count"],
-                combo["avg_delay"],
-                combo["daily_total_delay"],
                 *[round(v, 1) for v in combo["time_per_day"]],
             ]
             for col, val in enumerate(values, start=1):
                 cell = ws.cell(row=row_idx, column=col, value=val)
-                align = Alignment(horizontal="center") if col == 1 else Alignment(horizontal="right")
-                cell.alignment = align
-                if col in (3, 4, 5) or col > 5:
+                cell.alignment = Alignment(horizontal="center" if col == 1 else "right", vertical="center")
+                if col == 2 or col >= 4:
                     cell.number_format = "0.0"
             row_idx += 1
-        return row_idx
+
+        self._apply_table_borders(ws, title_row, 1, row_idx - 1, max_col)
+        return row_idx - 1
+
+    def _write_delay_table_pdf_style(
+        self, ws, combos: list[dict], title_row: int, header_row: int, data_row: int
+    ) -> int:
+        max_col = 11
+        ws.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=max_col)
+        title_cell = ws.cell(row=title_row, column=1, value="遅れ時間ヒストグラム（台/日）")
+        title_cell.font = Font(bold=True)
+        title_cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        headers = [
+            "方向\n（流入→流出）",
+            "総遅れ時\n間\n（秒/日）",
+            "平均\n遅れ\n（秒）",
+            "0-5秒",
+            "5-10\n秒",
+            "10-20\n秒",
+            "20-30\n秒",
+            "30-60\n秒",
+            "60-\n120秒",
+            "120～\n180秒",
+            "180秒\n～",
+        ]
+        for col, text in enumerate(headers, start=1):
+            cell = ws.cell(row=header_row, column=col, value=text)
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.row_dimensions[header_row].height = 42
+
+        row_idx = data_row
+        for combo in combos:
+            direction = f"{combo['in_b']}→{combo['out_b']}"
+            values = [
+                direction,
+                round(combo["daily_total_delay"], 1),
+                round(combo["avg_delay"], 1),
+                *[round(v, 1) for v in combo["delay_per_day"]],
+            ]
+            for col, val in enumerate(values, start=1):
+                cell = ws.cell(row=row_idx, column=col, value=val)
+                cell.alignment = Alignment(horizontal="center" if col == 1 else "right", vertical="center")
+                if col >= 2:
+                    cell.number_format = "0.0"
+            row_idx += 1
+
+        self._apply_table_borders(ws, title_row, 1, row_idx - 1, max_col)
+        return row_idx - 1
+
+    @staticmethod
+    def _apply_table_borders(ws, min_row: int, min_col: int, max_row: int, max_col: int) -> None:
+        thin = Side(style="thin")
+        medium = Side(style="medium")
+        for row in range(min_row, max_row + 1):
+            for col in range(min_col, max_col + 1):
+                left = medium if col == min_col else thin
+                right = medium if col == max_col else thin
+                top = medium if row == min_row else thin
+                bottom = medium if row == max_row else thin
+                ws.cell(row=row, column=col).border = Border(
+                    left=left, right=right, top=top, bottom=bottom
+                )
 
     def _create_resized_image(self) -> XLImage | None:
         if not self.image_path.exists():
