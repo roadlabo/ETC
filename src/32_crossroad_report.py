@@ -772,7 +772,8 @@ class CrossroadReport(QMainWindow):
             ok_subset = subset[subset["time_valid"] == 1]
             avg_delay = ok_subset["delay_s"].mean() if not ok_subset.empty else 0
             total_delay = ok_subset["delay_s"].sum() if not ok_subset.empty else 0
-            daily_total_delay = total_delay / total_days if total_days else 0
+            daily_total_delay_s = total_delay / total_days if total_days else 0
+            daily_total_delay_min = daily_total_delay_s / 60 if total_days else 0
             delay_per_day = self._calc_delay_per_day_counts(ok_subset["delay_s"], total_days)
             time_per_day, time_parse_ng_count, time_bin_total = self._calc_time_per_day_counts(
                 subset["time"], total_days
@@ -788,7 +789,8 @@ class CrossroadReport(QMainWindow):
                 f"sum_time_bins_per_day={time_bins_total_per_day:.6f} "
                 f"ok_per_day={ok_per_day:.6f} "
                 f"sum_delay_bins_per_day={delay_bins_total_per_day:.6f} "
-                f"daily_total_delay={daily_total_delay:.6f} "
+                f"daily_total_delay_s={daily_total_delay_s:.6f} "
+                f"daily_total_delay_min={daily_total_delay_min:.6f} "
                 f"avg_delay={avg_delay:.6f} "
                 f"time_parse_ng_count={time_parse_ng_count} "
                 f"time_bin_total={time_bin_total}"
@@ -802,7 +804,7 @@ class CrossroadReport(QMainWindow):
                     "daily_count": daily_count,
                     "avg_delay": avg_delay,
                     "total_delay": total_delay,
-                    "daily_total_delay": daily_total_delay,
+                    "daily_total_delay": daily_total_delay_s,
                     "delay_per_day": delay_per_day,
                     "time_per_day": time_per_day,
                 }
@@ -1040,7 +1042,7 @@ class CrossroadReport(QMainWindow):
 
         headers = [
             "方向\n（流入→流出）",
-            "総遅れ時間\n（秒/日）",
+            "日あたり\n総遅れ時間\n（分・台/日）",
             "平均\n遅れ\n（秒）",
             "0-5秒",
             "5-10\n秒",
@@ -1055,14 +1057,14 @@ class CrossroadReport(QMainWindow):
             cell = ws.cell(row=header_row, column=col, value=text)
             cell.font = Font(bold=True)
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        ws.row_dimensions[header_row].height = 42
+        ws.row_dimensions[header_row].height = 54
 
         row_idx = data_row
         for combo in combos:
             direction = f"{combo['in_b']}→{combo['out_b']}"
             values = [
                 direction,
-                round(combo["daily_total_delay"], 1),
+                round(combo["daily_total_delay"] / 60.0, 1),
                 round(combo["avg_delay"], 1),
                 *[round(v, 1) for v in combo["delay_per_day"]],
             ]
