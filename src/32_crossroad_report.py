@@ -757,7 +757,7 @@ class CrossroadReport(QMainWindow):
         ws.page_margins.footer = 0.3
         ws.print_options.horizontalCentered = True
         ws.print_title_rows = "1:1"
-        ws.column_dimensions["A"].width = 15.14
+        ws.column_dimensions["A"].width = 14.29
         ws.column_dimensions["B"].width = 11.86
         for col in ["C", "D", "E", "F", "G", "H", "I", "J", "K"]:
             ws.column_dimensions[col].width = 7.0
@@ -918,14 +918,15 @@ class CrossroadReport(QMainWindow):
         if image_obj:
             ws.add_image(image_obj, "A11")
 
-        time_title_row = 30
-        time_header_row = 31
-        time_data_row = 32
-        time_end_row = self._write_time_table_pdf_style(
+        time_title_row = 31
+        time_header_row = 32
+        time_data_row = 33
+        time_last_row = time_data_row + len(combos) - 1
+        self._write_time_table_pdf_style(
             ws, combos, time_title_row, time_header_row, time_data_row
         )
 
-        delay_title_row = time_end_row + 2
+        delay_title_row = time_last_row + 2
         delay_header_row = delay_title_row + 1
         delay_data_row = delay_title_row + 2
         self._write_delay_table_pdf_style(ws, combos, delay_title_row, delay_header_row, delay_data_row)
