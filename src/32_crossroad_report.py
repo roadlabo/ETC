@@ -38,6 +38,7 @@ from matplotlib.figure import Figure
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Font, Side, Border
+from openpyxl.worksheet.page import PageMargins
 
 preferred_fonts = ["Meiryo", "Yu Gothic", "MS Gothic"]
 installed_fonts = {f.name for f in font_manager.fontManager.ttflist}
@@ -751,10 +752,16 @@ class CrossroadReport(QMainWindow):
         ws.page_setup.fitToHeight = 0
         ws.page_margins.left = 0.7
         ws.page_margins.right = 0.7
-        ws.page_margins.top = 0.75
-        ws.page_margins.bottom = 0.75
         ws.page_margins.header = 0.3
         ws.page_margins.footer = 0.3
+        ws.page_margins = PageMargins(
+            left=ws.page_margins.left,
+            right=ws.page_margins.right,
+            top=1.0,
+            bottom=1.0,
+            header=ws.page_margins.header,
+            footer=ws.page_margins.footer,
+        )
         ws.print_options.horizontalCentered = True
         ws.print_title_rows = "1:1"
         ws.column_dimensions["A"].width = 14.29
@@ -913,23 +920,28 @@ class CrossroadReport(QMainWindow):
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=11)
         title_cell.alignment = Alignment(horizontal="center")
 
-        self._write_summary_block(ws, 4)
+        self._write_summary_block(ws, 2)
         image_obj = self._create_resized_image()
         if image_obj:
             ws.add_image(image_obj, "A11")
 
+        combos_for_report = [c for c in combos if int(c["in_b"]) != int(c["out_b"])]
+        combos_for_report.sort(key=lambda x: (-x["count_total"], int(x["in_b"]), int(x["out_b"])))
+
         time_title_row = 31
         time_header_row = 32
         time_data_row = 33
-        time_last_row = time_data_row + len(combos) - 1
+        time_last_row = time_data_row + len(combos_for_report) - 1
         self._write_time_table_pdf_style(
-            ws, combos, time_title_row, time_header_row, time_data_row
+            ws, combos_for_report, time_title_row, time_header_row, time_data_row
         )
 
         delay_title_row = time_last_row + 2
         delay_header_row = delay_title_row + 1
         delay_data_row = delay_title_row + 2
-        self._write_delay_table_pdf_style(ws, combos, delay_title_row, delay_header_row, delay_data_row)
+        self._write_delay_table_pdf_style(
+            ws, combos_for_report, delay_title_row, delay_header_row, delay_data_row
+        )
 
     def _write_summary_block(self, ws, start_row: int) -> int:
         start_date, end_date = (None, None)
