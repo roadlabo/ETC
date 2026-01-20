@@ -99,8 +99,7 @@ DELAY_BINS = [
     (180, None),
 ]
 DELAY_LABELS = ["0-5", "5-10", "10-20", "20-30", "30-60", "60-120", "120-180", "180+"]
-TIME_BINS = [(0, 3), (3, 6), (6, 9), (9, 12), (12, 15), (15, 18), (18, 21), (21, 24)]
-TIME_LABELS = ["0-3", "3-6", "6-9", "9-12", "12-15", "15-18", "18-21", "21-24"]
+TIME_LABELS = ["1-4時", "4-7時", "7-10時", "10-13時", "13-16時", "16-19時", "19-22時", "22-1時"]
 MAP_SCALE = 0.26
 MAP_ANCHOR_CELL = "B11"
 
@@ -162,6 +161,13 @@ def parse_center_datetime(val) -> datetime | None:
         except ValueError:
             continue
     return None
+
+
+def hour_to_time_bin(hour: int) -> int:
+    if hour in (22, 23, 0):
+        return 7
+    idx = (hour - 1) // 3
+    return max(0, min(idx, 6))
 
 
 class CrossroadReport(QMainWindow):
@@ -560,33 +566,19 @@ class CrossroadReport(QMainWindow):
             ax_speed.axis("off")
             ax_speed.text(0.5, 0.5, "遅れデータなし", ha="center", va="center")
 
-        time_labels = ["0-3", "3-6", "6-9", "9-12", "12-15", "15-18", "18-21", "21-24"]
-        time_counts = [0] * 8
+        time_labels = TIME_LABELS
+        time_counts = [0] * len(TIME_LABELS)
         for raw_time in subset["time"].tolist():
             dt = parse_center_datetime(raw_time)
             if dt is None:
                 hour = 0
             else:
                 hour = dt.hour
-            if hour < 3:
-                time_counts[0] += 1
-            elif hour < 6:
-                time_counts[1] += 1
-            elif hour < 9:
-                time_counts[2] += 1
-            elif hour < 12:
-                time_counts[3] += 1
-            elif hour < 15:
-                time_counts[4] += 1
-            elif hour < 18:
-                time_counts[5] += 1
-            elif hour < 21:
-                time_counts[6] += 1
-            elif hour < 24:
-                time_counts[7] += 1
+            bin_idx = hour_to_time_bin(hour)
+            time_counts[bin_idx] += 1
 
         ax_time.set_title("時間帯ヒストグラム（台/日）")
-        time_per_day = [c / total_days for c in time_counts] if total_days else [0.0] * 8
+        time_per_day = [c / total_days for c in time_counts] if total_days else [0.0] * len(TIME_LABELS)
         ax_time.bar(time_labels, time_per_day, color="blue")
         ax_time.set_ylim(0, max(time_per_day) * 1.2 if max(time_per_day) > 0 else 1)
         ax_time.set_ylabel("台/日")
@@ -765,7 +757,8 @@ class CrossroadReport(QMainWindow):
         ws.print_title_rows = "1:1"
         ws.column_dimensions["A"].width = 14.29
         ws.column_dimensions["B"].width = 11.86
-        for col in ["C", "D", "E", "F", "G", "H", "I", "J", "K"]:
+        ws.column_dimensions["C"].width = 9.5
+        for col in ["D", "E", "F", "G", "H", "I", "J", "K"]:
             ws.column_dimensions[col].width = 7.0
 
     def _collect_combination_data(self) -> list[dict]:
@@ -836,7 +829,7 @@ class CrossroadReport(QMainWindow):
         return [c / total_days for c in counts]
 
     def _calc_time_per_day_counts(self, time_series: pd.Series, total_days: int) -> tuple[list[float], int, int]:
-        counts = [0 for _ in TIME_BINS]
+        counts = [0 for _ in TIME_LABELS]
         time_parse_ng_count = 0
         for value in time_series.tolist():
             dt = parse_center_datetime(value)
@@ -845,12 +838,10 @@ class CrossroadReport(QMainWindow):
                 hour = 0
             else:
                 hour = dt.hour
-            for idx, (low, high) in enumerate(TIME_BINS):
-                if low <= hour < high:
-                    counts[idx] += 1
-                    break
+            bin_idx = hour_to_time_bin(hour)
+            counts[bin_idx] += 1
         if total_days == 0:
-            return [0.0 for _ in TIME_BINS], time_parse_ng_count, sum(counts)
+            return [0.0 for _ in TIME_LABELS], time_parse_ng_count, sum(counts)
         return [c / total_days for c in counts], time_parse_ng_count, sum(counts)
 
     def _populate_delay_data_sheet(self, ws, combos: list[dict]) -> None:
@@ -858,7 +849,7 @@ class CrossroadReport(QMainWindow):
             "方向（流入→流出）",
             "総台数（台）",
             "日あたり台数（台/日）",
-            "平均遅れ（秒）",
+            "平均遅れ時間（秒）",
             "1日あたり総遅れ時間（秒/日）",
             "階級（秒）",
             "台数（台/日）",
@@ -888,7 +879,7 @@ class CrossroadReport(QMainWindow):
             "方向（流入→流出）",
             "総台数（台）",
             "日あたり台数（台/日）",
-            "平均遅れ（秒）",
+            "平均遅れ時間（秒）",
             "1日あたり総遅れ時間（秒/日）",
             "階級（時）",
             "台数（台/日）",
@@ -931,8 +922,7 @@ class CrossroadReport(QMainWindow):
         time_title_row = 27
         time_header_row = time_title_row + 1
         time_data_row = time_title_row + 2
-        time_last_row = time_data_row + len(combos_for_report) - 1
-        self._write_time_table_pdf_style(
+        time_last_row = self._write_time_table_pdf_style(
             ws, combos_for_report, time_title_row, time_header_row, time_data_row
         )
 
@@ -1005,41 +995,70 @@ class CrossroadReport(QMainWindow):
         headers = [
             "方向\n（流入→流出）",
             "日あたり\n台数\n（台/日）",
-            "総台\n数\n（台）",
-            "0-3時",
-            "3-6時",
-            "6-9時",
-            "9-12\n時",
-            "12-15\n時",
-            "15-18\n時",
-            "18-21\n時",
-            "21-24\n時",
+            "24h/7-19\n（昼夜率）",
+            "1-4時",
+            "4-7時",
+            "7-10時",
+            "10-13\n時",
+            "13-16\n時",
+            "16-19\n時",
+            "19-22\n時",
+            "22-1\n時",
         ]
         for col, text in enumerate(headers, start=1):
             cell = ws.cell(row=header_row, column=col, value=text)
             cell.font = Font(bold=True)
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        ws.row_dimensions[header_row].height = 42
+        ws.row_dimensions[header_row].height = 45
 
         row_idx = data_row
         for combo in combos:
             direction = f"{combo['in_b']}→{combo['out_b']}"
+            daytime_total = sum(combo["time_per_day"][2:6])
+            day_night_ratio = (
+                combo["daily_count"] / daytime_total if daytime_total else None
+            )
             values = [
                 direction,
                 round(combo["daily_count"], 1),
-                combo["count_total"],
+                round(day_night_ratio, 2) if day_night_ratio is not None else None,
                 *[round(v, 1) for v in combo["time_per_day"]],
             ]
             for col, val in enumerate(values, start=1):
                 cell = ws.cell(row=row_idx, column=col, value=val)
                 cell.alignment = Alignment(horizontal="center" if col == 1 else "right", vertical="center")
+                if col == 3:
+                    cell.number_format = "0.00"
                 if col == 2 or col >= 4:
                     cell.number_format = "0.0"
             row_idx += 1
 
-        self._apply_table_borders(ws, title_row, 4, title_row, max_col)
-        self._apply_table_borders(ws, header_row, 1, row_idx - 1, max_col)
-        return row_idx - 1
+        total_row = row_idx
+        total_daily = sum(combo["daily_count"] for combo in combos)
+        total_time_bins = [
+            sum(combo["time_per_day"][idx] for combo in combos) for idx in range(len(TIME_LABELS))
+        ]
+        total_daytime = sum(total_time_bins[2:6])
+        total_ratio = total_daily / total_daytime if total_daytime else None
+        total_values = [
+            "合計",
+            round(total_daily, 1),
+            round(total_ratio, 2) if total_ratio is not None else None,
+            *[round(v, 1) for v in total_time_bins],
+        ]
+        for col, val in enumerate(total_values, start=1):
+            cell = ws.cell(row=total_row, column=col, value=val)
+            cell.alignment = Alignment(horizontal="center" if col == 1 else "right", vertical="center")
+            if col == 3:
+                cell.number_format = "0.00"
+            if col == 2 or col >= 4:
+                cell.number_format = "0.0"
+        ws.row_dimensions[total_row].height = 18
+
+        self.apply_table_borders(ws, title_row, 1, total_row, max_col)
+        self._apply_row_bottom_border(ws, header_row, 1, max_col)
+        self._apply_row_bottom_border(ws, total_row, 1, max_col)
+        return total_row
 
     def _write_delay_table_pdf_style(
         self, ws, combos: list[dict], title_row: int, header_row: int, data_row: int
@@ -1056,7 +1075,7 @@ class CrossroadReport(QMainWindow):
         headers = [
             "方向\n（流入→流出）",
             "日あたり\n総遅れ時間\n（分・台/日）",
-            "平均\n遅れ\n（秒）",
+            "平均\n遅れ時間\n（秒）",
             "0-5秒",
             "5-10\n秒",
             "10-20\n秒",
@@ -1070,7 +1089,7 @@ class CrossroadReport(QMainWindow):
             cell = ws.cell(row=header_row, column=col, value=text)
             cell.font = Font(bold=True)
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        ws.row_dimensions[header_row].height = 54
+        ws.row_dimensions[header_row].height = 45
 
         row_idx = data_row
         for combo in combos:
@@ -1088,12 +1107,13 @@ class CrossroadReport(QMainWindow):
                     cell.number_format = "0.0"
             row_idx += 1
 
-        self._apply_table_borders(ws, title_row, 4, title_row, max_col)
-        self._apply_table_borders(ws, header_row, 1, row_idx - 1, max_col)
+        last_row = row_idx - 1
+        self.apply_table_borders(ws, title_row, 1, last_row, max_col)
+        self._apply_row_bottom_border(ws, header_row, 1, max_col)
         return row_idx - 1
 
     @staticmethod
-    def _apply_table_borders(ws, min_row: int, min_col: int, max_row: int, max_col: int) -> None:
+    def apply_table_borders(ws, min_row: int, min_col: int, max_row: int, max_col: int) -> None:
         thin = Side(style="thin")
         medium = Side(style="medium")
         for row in range(min_row, max_row + 1):
@@ -1105,6 +1125,19 @@ class CrossroadReport(QMainWindow):
                 ws.cell(row=row, column=col).border = Border(
                     left=left, right=right, top=top, bottom=bottom
                 )
+
+    @staticmethod
+    def _apply_row_bottom_border(ws, row: int, min_col: int, max_col: int) -> None:
+        medium = Side(style="medium")
+        for col in range(min_col, max_col + 1):
+            cell = ws.cell(row=row, column=col)
+            existing = cell.border
+            cell.border = Border(
+                left=existing.left,
+                right=existing.right,
+                top=existing.top,
+                bottom=medium,
+            )
 
     def _create_resized_image(self) -> XLImage | None:
         if not self.image_path.exists():
