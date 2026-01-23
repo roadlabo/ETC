@@ -13,6 +13,8 @@ from typing import Dict, Iterable, Optional, Set, Tuple
 
 import folium
 import numpy as np
+import tkinter as tk
+from tkinter import filedialog, messagebox
 
 # 解析範囲（中心からの距離）
 # 2km四方 = 半径1km
@@ -1002,6 +1004,60 @@ def _parse_targets_filter(targets_raw: Optional[str]) -> Optional[Set[str]]:
     return {name.strip() for name in targets_raw.split(",") if name.strip()}
 
 
+def select_project_dir_with_dialog(initial_dir: Path | None = None) -> Path | None:
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        try:
+            root.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        selected = filedialog.askdirectory(initialdir=str(initial_dir) if initial_dir else None)
+    finally:
+        root.destroy()
+
+    if not selected:
+        return None
+    return Path(selected)
+
+
+def validate_project_dir(project_dir: Path) -> tuple[bool, list[str]]:
+    required_dirs = [
+        "11_交差点(Point)データ",
+        "20_第2スクリーニング",
+    ]
+    missing = [name for name in required_dirs if not (project_dir / name).exists()]
+    return (len(missing) == 0, missing)
+
+
+def prompt_project_dir_loop(initial_dir: Path | None = None) -> Path | None:
+    while True:
+        selected = select_project_dir_with_dialog(initial_dir)
+        if selected is None:
+            return None
+        ok, missing = validate_project_dir(selected)
+        if ok:
+            return selected
+
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            try:
+                root.attributes("-topmost", True)
+            except tk.TclError:
+                pass
+            missing_lines = "\n".join(f"- {item}" for item in missing)
+            messagebox.showwarning(
+                "プロジェクトフォルダの確認",
+                "これはプロジェクトフォルダではありません。\n\n"
+                "必須フォルダが見つかりません：\n"
+                f"{missing_lines}\n\n"
+                "正しいプロジェクトフォルダを選択してください。",
+            )
+        finally:
+            root.destroy()
+
+
 def _ensure_project_dirs(project_dir: Path) -> tuple[Path, Path, Path]:
     points_dir = project_dir / "11_交差点(Point)データ"
     screen_dir = project_dir / "20_第2スクリーニング"
@@ -1093,13 +1149,20 @@ def run_batch(project_dir: Path, targets_raw: Optional[str], dry_run: bool) -> N
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="50_Path_Analysis batch runner")
-    parser.add_argument("--project_dir", type=Path, required=True, help="プロジェクトフォルダ")
+    parser.add_argument("--project_dir", type=Path, help="プロジェクトフォルダ（未指定ならダイアログで選択）")
     parser.add_argument("--targets", type=str, help="交差点名（カンマ区切り）")
     parser.add_argument("--dry_run", action="store_true", help="走査のみで終了")
 
     args = parser.parse_args()
 
-    run_batch(args.project_dir, args.targets, args.dry_run)
+    project_dir = args.project_dir
+    if project_dir is None:
+        project_dir = prompt_project_dir_loop()
+    if project_dir is None:
+        print("[50_PathAnalysis] cancelled")
+        return
+
+    run_batch(project_dir, args.targets, args.dry_run)
 
 
 if __name__ == "__main__":
