@@ -1,11 +1,13 @@
 # 33_branch_check.py マニュアル
 
 ## 目的
-`03higashiitinomiya_performance.csv`（枝判定済みの交差点通過パフォーマンス）を読み込み、
-各トリップの「流入枝番／流出枝番」が妥当かを地図上の動きとラベルで目視確認します。
+`*_performance.csv`（交差点パフォーマンスCSV）を読み込み、
+枝判定（流入枝番/流出枝番）の妥当性を地図の軌跡と数値で目視確認します。
+評価指標の主軸は遅れ時間(s)です。
 
 ## 入力CSV
-- 対象: `03higashiitinomiya_performance.csv`
+- 対象: `*_performance.csv`（交差点パフォーマンスCSV）
+- 想定例: `01nomura_performance.csv` / `03higashiitinomiya_performance.csv` / `12minamisaka_performance.csv`
 - 起動時にファイルダイアログで選択可能
 - 文字コードは `cp932 → shift_jis → utf-8` の順に試行
 
@@ -16,7 +18,7 @@ python src/33_branch_check.py
 
 または
 ```bash
-python src/33_branch_check.py --csv /path/to/03higashiitinomiya_performance.csv
+python src/33_branch_check.py --csv /path/to/xxx_performance.csv
 ```
 
 ## 操作方法
@@ -40,14 +42,18 @@ python src/33_branch_check.py --csv /path/to/03higashiitinomiya_performance.csv
 - 曜日
 - 自動車の種別
 - 用途
+- 所要時間(s)
+- 閑散時所要時間(s)
+- 遅れ時間(s)
+- 所要時間算出可否/不可理由
 - 流入枝番
 - 流出枝番
 - 流入角度差(deg)
 - 流出角度差(deg)
 - 角度算出方式
 - 計測距離(m)
-- 所要時間(s)
-- 交差点通過速度(km/h)
+- 交差点通過速度(km/h)（参考/任意）
 
 ## 注意
 - OSMタイル取得にネットワーク接続が必要です。オフライン環境では地図表示ができません。
+- 本ツールは分析結果確定ではなく品質確認（検証）用です。
