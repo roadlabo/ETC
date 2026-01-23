@@ -524,11 +524,11 @@ class BranchCheckWindow(QMainWindow):
 
         center_lat = first_numeric_value(
             self.point_df,
-            ["中心_緯度", "中心緯度", "lat", "緯度", "交差点中心_緯度"],
+            ["中心_緯度", "中心緯度", "lat", "緯度", "交差点中心_緯度", "center_lat"],
         )
         center_lon = first_numeric_value(
             self.point_df,
-            ["中心_経度", "中心経度", "lon", "経度", "交差点中心_経度"],
+            ["中心_経度", "中心経度", "lon", "経度", "交差点中心_経度", "center_lon"],
         )
         if center_lat is not None and center_lon is not None:
             self.center_lat = center_lat
@@ -547,7 +547,10 @@ class BranchCheckWindow(QMainWindow):
             return []
 
         branch_col = find_column(self.point_df, ["枝番", "branch", "branch_no", "No", "番号"])
-        angle_col = find_column(self.point_df, ["角度", "方位角", "bearing", "azimuth", "F列", "angle_deg"])
+        angle_col = find_column(
+            self.point_df,
+            ["角度", "方位角", "bearing", "azimuth", "F列", "angle_deg", "dir_deg"],
+        )
 
         dx_col = find_column(self.point_df, ["dx", "東西(m)", "東西", "x", "X"])
         dy_col = find_column(self.point_df, ["dy", "南北(m)", "南北", "y", "Y"])
@@ -570,7 +573,10 @@ class BranchCheckWindow(QMainWindow):
                 if pd.isna(ang_val):
                     continue
                 angle_deg = float(ang_val)
-                if not self._angle_zero_east_ccw:
+                bearing_like = angle_col in ["dir_deg", "bearing", "azimuth", "方位角"]
+                if bearing_like:
+                    angle_deg = (90.0 - angle_deg) % 360.0
+                elif not self._angle_zero_east_ccw:
                     angle_deg = (90.0 - angle_deg) % 360.0
                 rad = math.radians(angle_deg)
                 dx = math.cos(rad) * 120.0
