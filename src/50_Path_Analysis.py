@@ -28,7 +28,7 @@ OUTPUT_DIR = Path(r"X:\path\to\output_folder")
 HALF_SIDE_M = 1000.0
 
 # メッシュ・距離などのパラメータ
-CELL_SIZE_M = 10.0         # 10m メッシュ
+CELL_SIZE_M = 25.0         # 25m メッシュ
 SAMPLE_STEP_M = 10.0       # 線分サンプリング間隔（10m）
 CROSS_THRESHOLD_M = 50.0   # 単路ポイント通過判定の距離閾値
 
@@ -37,26 +37,25 @@ CROSS_THRESHOLD_M = 50.0   # 単路ポイント通過判定の距離閾値
 DIR_MATCH_MIN_COS = 0.80
 
 # =========================
-# Heatmap display settings (見やすさ調整)
+# Heatmap display settings (palette 10 steps)
 # =========================
-# ヒートマップは「値→色」「値→透明度」を別々に制御して、少ない所を薄く・多い所を赤く強調する。
 
 # vmax を「最大値」ではなく「上位パーセンタイル」で決める（外れ値があるときの白飛び防止）
-HEATMAP_VMAX_PERCENTILE = 99.0   # 例: 99 → 上位1%を飽和として扱う（強調が出やすい）
+HEATMAP_VMAX_PERCENTILE = 99.0
 
-# 濃淡の強調（小さい値をより薄く、大きい値をより目立たせる）
-HEATMAP_GAMMA = 0.55             # 小さめ(0.4～0.8)にすると“赤いところ”が強調されやすい
-
-# 透明度（薄い所をより薄くする）
-HEATMAP_MIN_OPACITY = 0.06       # 0に近いほど薄く（0.02～0.08推奨）
-HEATMAP_MAX_OPACITY = 0.92       # 最大の濃さ（0.7～0.95推奨）
-
-# 色（低→高）: 薄い青 → 濃い赤（背景に埋もれにくい）
-HEATMAP_COLOR_STOPS = [
-    (0.00, (170, 210, 255)),  # low: light blue
-    (0.55, (255, 255, 255)),  # mid: near white（地図との分離）
-    (1.00, (180,   0,   0)),  # high: dark red
+# 10段階パレット（低→高）
+# 見やすさ重視：青→緑→黄→橙→赤（10色）
+HEATMAP_PALETTE_10 = [
+    "#2c7bb6", "#00a6ca", "#00ccbc", "#90eb9d", "#ffff8c",
+    "#f9d057", "#f29e2e", "#e76818", "#d7191c", "#8c0d0d",
 ]
+
+# ガンマ（値の分布を上側に寄せたい時に効かせる。0.8～1.2推奨）
+HEATMAP_GAMMA = 1.0
+
+# 透過（背景地図を見せたいので控えめ）
+HEATMAP_MIN_OPACITY = 0.18
+HEATMAP_MAX_OPACITY = 0.55
 
 # =========================
 # Arrow UI
@@ -117,24 +116,6 @@ def xy_to_lonlat(x: float | np.ndarray, y: float | np.ndarray, lon0: float, lat0
     return lon, lat
 
 
-def _interp_color_stops(t: float) -> tuple[int, int, int]:
-    """0..1 を HEATMAP_COLOR_STOPS で RGB 補間して返す。"""
-    t = max(0.0, min(1.0, t))
-    stops = HEATMAP_COLOR_STOPS
-    for i in range(len(stops) - 1):
-        t0, c0 = stops[i]
-        t1, c1 = stops[i + 1]
-        if t0 <= t <= t1:
-            if t1 == t0:
-                return c1
-            u = (t - t0) / (t1 - t0)
-            r = int(c0[0] + (c1[0] - c0[0]) * u)
-            g = int(c0[1] + (c1[1] - c0[1]) * u)
-            b = int(c0[2] + (c1[2] - c0[2]) * u)
-            return r, g, b
-    return stops[-1][1]
-
-
 def _compute_vmax(matrix: np.ndarray) -> int:
     """上位パーセンタイルで vmax を決める（外れ値対策）。"""
     vals = matrix[matrix > 0]
@@ -146,22 +127,69 @@ def _compute_vmax(matrix: np.ndarray) -> int:
 
 def value_to_style(value: int, vmax: int) -> tuple[str, float] | None:
     """
-    value(>0) を (fill_color, fill_opacity) に変換。
-    - 少ない所は薄く（低opacity）
-    - 多い所は赤く（色もopacityも増える）
+    value(>0) を (fill_color, fill_opacity) に変換（10段階パレット）。
+    - 濃淡（明暗）ではなく色相の段階で見せる
+    - 透過は背景地図が見える程度に抑える
     """
     if vmax <= 0 or value <= 0:
         return None
 
     x = min(1.0, float(value) / float(vmax))
-    # gammaで強調（小さい値はより薄く、上位はより目立つ）
-    t = x ** HEATMAP_GAMMA
+    t = x ** HEATMAP_GAMMA  # 分布補正
 
-    r, g, b = _interp_color_stops(t)
-    color = f"#{r:02x}{g:02x}{b:02x}"
+    # 10段階（0..9）
+    n = len(HEATMAP_PALETTE_10)
+    idx = int(min(n - 1, max(0, math.floor(t * n))))
+    color = HEATMAP_PALETTE_10[idx]
 
-    opacity = HEATMAP_MIN_OPACITY + t * (HEATMAP_MAX_OPACITY - HEATMAP_MIN_OPACITY)
+    # 透過も段階に応じて少しだけ変える（見やすさ）
+    # 低い所も存在が分かる程度に、ただし背景は見える
+    opacity = HEATMAP_MIN_OPACITY + (idx / (n - 1)) * (HEATMAP_MAX_OPACITY - HEATMAP_MIN_OPACITY)
     return color, float(opacity)
+
+
+def _add_palette_legend(m: folium.Map, vmax: int, title: str = "凡例（割合%）") -> None:
+    if vmax <= 0:
+        return
+
+    n = len(HEATMAP_PALETTE_10)
+    # 0..vmax を 10区間に分割（整数に丸め）
+    edges = [int(round(vmax * i / n)) for i in range(n + 1)]
+
+    rows = []
+    for i in range(n):
+        c = HEATMAP_PALETTE_10[i]
+        a = edges[i]
+        b = edges[i + 1]
+        # 表示は 1～vmax を想定。0%が混じる場合でも問題なし
+        rows.append(
+            f"<div style='display:flex;align-items:center;margin:2px 0;'>"
+            f"<div style='width:18px;height:12px;background:{c};opacity:0.95;"
+            "margin-right:8px;border:1px solid #666;'></div>"
+            f"<div style='font-size:12px;line-height:12px;'>{a}–{b}%</div>"
+            "</div>"
+        )
+
+    html = f"""
+<div style="
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 9999;
+  background: rgba(255,255,255,0.92);
+  padding: 10px 12px;
+  border: 1px solid #999;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+  ">
+  <div style="font-weight:bold;font-size:13px;margin-bottom:6px;">{title}</div>
+  {''.join(rows)}
+  <div style="font-size:11px;color:#333;margin-top:6px;">
+    ※上限はvmax={vmax}%（上位{HEATMAP_VMAX_PERCENTILE:.0f}パーセンタイル）
+  </div>
+</div>
+"""
+    m.get_root().html.add_child(folium.Element(html))
 
 
 def add_direction_arrow(
@@ -237,11 +265,12 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
                     dirA_deg: float, dirB_deg: float,
                     show_A: bool = True, show_B: bool = True) -> None:
     """
-    GRID_SIZE×GRID_SIZE のマトリクスを 10m メッシュの矩形として描画し、
+    GRID_SIZE×GRID_SIZE のマトリクスを 25m メッシュの矩形として描画し、
     中心黒丸と A/B 方向矢印を最前面に重ねる。
     """
     m = folium.Map(location=[lat0, lon0], zoom_start=16, tiles="OpenStreetMap")
     vmax = _compute_vmax(matrix)
+    _add_palette_legend(m, vmax, title="凡例（メッシュ内の割合%）")
 
     # メッシュ矩形
     for iy in range(GRID_SIZE):
