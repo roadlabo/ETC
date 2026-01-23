@@ -68,30 +68,35 @@ def ensure_columns(df: pd.DataFrame, cols: List[str]) -> None:
 
 def find_point_csv(perf_csv_path: str) -> Optional[Path]:
     perf_path = Path(perf_csv_path)
-    proj_dir = perf_path.parent
+    perf_dir = perf_path.parent
+    proj_dir = perf_dir.parent
     cross_name = perf_path.stem
     if cross_name.endswith("_performance"):
         cross_name = cross_name[: -len("_performance")]
 
-    point_dir = proj_dir / "11_交差点(Point)データ"
-    if not point_dir.exists():
-        return None
-
-    candidates = [
-        point_dir / f"{cross_name}.csv",
-        point_dir / f"{cross_name}.CSV",
+    point_dirs = [
+        proj_dir / "11_交差点(Point)データ",
+        perf_dir / "11_交差点(Point)データ",
     ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
 
-    lowered = cross_name.lower()
-    for candidate in point_dir.glob("*.csv"):
-        if lowered in candidate.stem.lower():
-            return candidate
-    for candidate in point_dir.glob("*.CSV"):
-        if lowered in candidate.stem.lower():
-            return candidate
+    for point_dir in point_dirs:
+        if not point_dir.exists():
+            continue
+        candidates = [
+            point_dir / f"{cross_name}.csv",
+            point_dir / f"{cross_name}.CSV",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+
+        lowered = cross_name.lower()
+        for candidate in point_dir.glob("*.csv"):
+            if lowered in candidate.stem.lower():
+                return candidate
+        for candidate in point_dir.glob("*.CSV"):
+            if lowered in candidate.stem.lower():
+                return candidate
     return None
 
 
