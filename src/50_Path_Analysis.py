@@ -8,22 +8,11 @@ from datetime import datetime
 import math
 from math import cos, hypot, radians, sin
 from pathlib import Path
-import re
 import time
 from typing import Dict, Iterable, Optional, Set, Tuple
 
 import folium
 import numpy as np
-
-# =========================
-# User-editable constants
-# =========================
-# Input
-INPUT_DIR = Path(r"X:\path\to\youshiki1_2_folder")  # 第2スクリーニング後様式1-2 CSV群フォルダ
-POINT_FILE = Path(r"X:\path\to\11_crossroad_sampler_output.csv")  # 単路ポイント指定ファイル
-
-# Output
-OUTPUT_DIR = Path(r"X:\path\to\output_folder")
 
 # 解析範囲（中心からの距離）
 # 2km四方 = 半径1km
@@ -100,18 +89,18 @@ class TargetCrossroad:
 
 @dataclass(frozen=True)
 class SkipCrossroad:
-    name_screen: str
+    name: str
     missing_reasons: list[str]
-    expected_csv: Optional[Path]
-    expected_jpg: Optional[str]
-    screen_dir: Path
+    expected_point_dir: Path
+    expected_screen_dir: Path
 
 
 @dataclass(frozen=True)
 class ScanStats:
     screen_count: int
-    csv_count: int
-    jpg_count: int
+    point_count: int
+    target_count: int
+    skip_count: int
 
 
 def write_log(log_path: Path, lines: list[str]) -> None:
@@ -540,83 +529,81 @@ def _compute_matrix(count_array: np.ndarray, denom: int) -> np.ndarray:
     return np.rint(ratio * 100.0).astype(int)
 
 
-def normalize(name: str) -> str:
-    """
-    交差点名の正規化。
-    - 先頭の番号プレフィックス (e.g. "1_", "2-") を除去
-    - 前後空白除去
-    """
-    cleaned = re.sub(r"^\d+[_\- ]*", "", name)
-    return cleaned.strip()
-
-
-def collect_targets(project_dir: Path, targets_filter: Optional[Set[str]] = None
-                    ) -> tuple[list[TargetCrossroad], list[SkipCrossroad], ScanStats]:
+def collect_targets(
+    project_dir: Path,
+    targets_filter: Optional[Set[str]] = None,
+) -> tuple[list[TargetCrossroad], list[SkipCrossroad], ScanStats]:
     points_dir = project_dir / "11_交差点(Point)データ"
     screen_dir = project_dir / "20_第2スクリーニング"
     out_root = project_dir / "50_経路分析"
 
-    screen_paths = sorted([p for p in screen_dir.iterdir() if p.is_dir()], key=lambda p: p.name)
-    point_csv_paths = sorted(points_dir.glob("*.csv"))
-    point_jpg_paths = sorted(list(points_dir.glob("*.jpg")) + list(points_dir.glob("*.jpeg")))
+    screen_paths = {p.name: p for p in screen_dir.iterdir() if p.is_dir()}
+    point_paths = {p.name: p for p in points_dir.iterdir() if p.is_dir()}
 
-    csv_map: dict[str, Path] = {}
-    for path in point_csv_paths:
-        key = normalize(path.stem)
-        csv_map.setdefault(key, path)
+    screen_set = set(screen_paths.keys())
+    point_set = set(point_paths.keys())
 
-    jpg_map: dict[str, Path] = {}
-    for path in point_jpg_paths:
-        key = normalize(path.stem)
-        jpg_map.setdefault(key, path)
+    candidates = sorted(targets_filter if targets_filter is not None else screen_set | point_set)
 
     targets: list[TargetCrossroad] = []
     skips: list[SkipCrossroad] = []
 
-    for screen_path in screen_paths:
-        name_screen = screen_path.name
-        name_key = normalize(name_screen)
-        if targets_filter is not None and name_key not in targets_filter:
-            continue
-
-        point_csv = csv_map.get(name_key)
-        point_jpg = jpg_map.get(name_key)
-
+    for name in candidates:
+        screen_path = screen_paths.get(name)
+        point_dir = point_paths.get(name)
         missing: list[str] = []
-        if point_csv is None:
+        if screen_path is None:
+            missing.append("missing_screen_folder")
+        if point_dir is None:
+            missing.append("missing_point_folder")
             missing.append("missing_point_csv")
-        if point_jpg is None:
-            missing.append("missing_point_jpg")
+            missing.append("missing_point_image")
+
+        point_csv: Optional[Path] = None
+        point_jpg: Optional[Path] = None
+        if point_dir is not None:
+            point_csvs = sorted(point_dir.glob("*.csv"))
+            point_jpgs = sorted(list(point_dir.glob("*.jpg")) + list(point_dir.glob("*.jpeg")))
+            if point_csvs:
+                point_csv = point_csvs[0]
+            if point_jpgs:
+                point_jpg = point_jpgs[0]
+
+        if point_dir is not None and point_csv is None:
+            missing.append("missing_point_csv")
+        if point_dir is not None and point_jpg is None:
+            missing.append("missing_point_image")
 
         if missing:
-            expected_csv = points_dir / f"{name_key}.csv"
-            expected_jpg = f"{points_dir / name_key}.jpg|.jpeg"
             skips.append(
                 SkipCrossroad(
-                    name_screen=name_screen,
+                    name=name,
                     missing_reasons=missing,
-                    expected_csv=expected_csv,
-                    expected_jpg=expected_jpg,
-                    screen_dir=screen_path,
+                    expected_point_dir=points_dir / name,
+                    expected_screen_dir=screen_dir / name,
                 )
             )
             continue
 
+        if screen_path is None or point_csv is None or point_jpg is None:
+            continue
+
         targets.append(
             TargetCrossroad(
-                name_screen=name_screen,
-                name_key=name_key,
+                name_screen=name,
+                name_key=name,
                 screen_path=screen_path,
                 point_csv_path=point_csv,
                 point_jpg_path=point_jpg,
-                out_dir=out_root / name_screen,
+                out_dir=out_root / name,
             )
         )
 
     stats = ScanStats(
-        screen_count=len(screen_paths),
-        csv_count=len(point_csv_paths),
-        jpg_count=len(point_jpg_paths),
+        screen_count=len(screen_set),
+        point_count=len(point_set),
+        target_count=len(targets),
+        skip_count=len(skips),
     )
     return targets, skips, stats
 
@@ -697,7 +684,7 @@ def classify_out_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
 def run_single_crossroad(
     screen_path: Path,
     point_csv_path: Path,
-    point_jpg_path: Optional[Path],
+    point_jpg_path: Path,
     out_dir: Path,
 ) -> list[Path]:
     started_dt = datetime.now()
@@ -986,49 +973,33 @@ def run_single_crossroad(
         out_dir / f"{stem}_heatmap_B方向交通.html",
         out_dir / "LOG.txt",
     ]
-    if point_jpg_path is not None:
-        outputs.append(point_jpg_path)
     return outputs
 
 
 def _print_scan_summary(
-    project_dir: Path,
-    points_dir: Path,
-    screen_dir: Path,
-    out_root: Path,
     stats: ScanStats,
-    targets: list[TargetCrossroad],
-    skips: list[SkipCrossroad],
 ) -> None:
-    print("[50_PathAnalysis] Project summary")
-    print(f"  project_dir = {project_dir}")
-    print(f"  points_dir  = {points_dir}")
-    print(f"  screen_dir  = {screen_dir}")
-    print(f"  out_root    = {out_root}")
-    print("[50_PathAnalysis] Scan stats")
-    print(f"  screen_folders = {stats.screen_count}")
-    print(f"  point_csvs     = {stats.csv_count}")
-    print(f"  point_jpgs     = {stats.jpg_count}")
-    print(f"  ready_targets  = {len(targets)}")
-    print(f"  skipped        = {len(skips)}")
+    print(f"[scan] screen folders : {stats.screen_count}")
+    print(f"[scan] point folders  : {stats.point_count}")
+    print(f"[target] ready        : {stats.target_count}")
+    print(f"[skip]   skipped      : {stats.skip_count}")
+    print("--------------------------------")
 
 
 def _print_skip_details(skips: list[SkipCrossroad]) -> None:
     if not skips:
         return
-    print("[50_PathAnalysis] Skipped crossroads")
     for skip in skips:
         reasons = ",".join(skip.missing_reasons)
-        print(f"[skip] 交差点={skip.name_screen} 理由={reasons}")
-        print(f"       expected_csv={skip.expected_csv}")
-        print(f"       expected_jpg={skip.expected_jpg}")
-        print(f"       screen_dir  ={skip.screen_dir}")
+        print(f"[SKIP] 交差点={skip.name} reason={reasons}")
+        print(f"       expected_point_dir={skip.expected_point_dir}")
+        print(f"       expected_screen_dir={skip.expected_screen_dir}")
 
 
 def _parse_targets_filter(targets_raw: Optional[str]) -> Optional[Set[str]]:
     if not targets_raw:
         return None
-    return {normalize(name) for name in targets_raw.split(",") if name.strip()}
+    return {name.strip() for name in targets_raw.split(",") if name.strip()}
 
 
 def _ensure_project_dirs(project_dir: Path) -> tuple[Path, Path, Path]:
@@ -1047,21 +1018,20 @@ def _ensure_project_dirs(project_dir: Path) -> tuple[Path, Path, Path]:
             print(f"  {item}")
         raise SystemExit(1)
 
+    out_root.mkdir(parents=True, exist_ok=True)
     return points_dir, screen_dir, out_root
 
 
 def run_batch(project_dir: Path, targets_raw: Optional[str], dry_run: bool) -> None:
-    points_dir, screen_dir, out_root = _ensure_project_dirs(project_dir)
+    _points_dir, _screen_dir, _out_root = _ensure_project_dirs(project_dir)
     targets_filter = _parse_targets_filter(targets_raw)
 
     targets, skips, stats = collect_targets(project_dir, targets_filter)
-    _print_scan_summary(project_dir, points_dir, screen_dir, out_root, stats, targets, skips)
+    _print_scan_summary(stats)
     _print_skip_details(skips)
 
     if dry_run:
-        print("[50_PathAnalysis] Dry run: targets")
-        for target in targets:
-            print(f"  - {target.name_screen} ({target.point_csv_path.name})")
+        print("[50_PathAnalysis] Dry run: scan only (no analysis)")
         return
 
     total = len(targets)
@@ -1087,56 +1057,49 @@ def run_batch(project_dir: Path, targets_raw: Optional[str], dry_run: bool) -> N
             )
             elapsed = time.time() - t0
             success.append(target.name_screen)
+            ok_count = len(success)
+            ng_count = len(failed)
             print(
                 f"[{idx}/{total}] ({progress:5.1f}%) 交差点={target.name_screen} "
-                f"done  elapsed={elapsed:.1f}s  outputs={len(outputs)}"
+                f"done  elapsed={elapsed:.1f}s (ok={ok_count} ng={ng_count} skip={len(skips)})"
             )
         except Exception as exc:
             elapsed = time.time() - t0
             failed.append((target.name_screen, exc))
+            ok_count = len(success)
+            ng_count = len(failed)
             print(
                 f"[{idx}/{total}] ({progress:5.1f}%) 交差点={target.name_screen} "
-                f"ERROR elapsed={elapsed:.1f}s"
+                f"ERROR elapsed={elapsed:.1f}s (ok={ok_count} ng={ng_count} skip={len(skips)})"
             )
             print(f"  error: {exc.__class__.__name__}: {str(exc).splitlines()[0] if str(exc) else ''}")
 
     total_elapsed = time.time() - batch_start
     print("[50_PathAnalysis] Batch summary")
-    print(f"  total_targets = {total}")
-    print(f"  success       = {len(success)}")
-    print(f"  failed        = {len(failed)}")
-    print(f"  skipped       = {len(skips)}")
-    print(f"  total_elapsed = {total_elapsed:.1f}s")
+    print(f"  success = {len(success)}")
+    print(f"  failed  = {len(failed)}")
+    print(f"  skipped = {len(skips)}")
+    print(f"  elapsed = {total_elapsed:.1f}s")
     if failed:
         print("[50_PathAnalysis] Failed list")
         for name, exc in failed:
             print(f"  - {name}: {exc.__class__.__name__}: {str(exc).splitlines()[0] if str(exc) else ''}")
+    if skips:
+        print("[50_PathAnalysis] Skipped list")
+        for skip in skips:
+            reasons = ",".join(skip.missing_reasons)
+            print(f"  - {skip.name}: {reasons}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="50_Path_Analysis batch runner")
-    parser.add_argument("--project_dir", type=Path, help="プロジェクトフォルダ")
+    parser.add_argument("--project_dir", type=Path, required=True, help="プロジェクトフォルダ")
     parser.add_argument("--targets", type=str, help="交差点名（カンマ区切り）")
     parser.add_argument("--dry_run", action="store_true", help="走査のみで終了")
-    parser.add_argument("--input_dir", type=Path, default=INPUT_DIR, help="単体入力フォルダ")
-    parser.add_argument("--point_file", type=Path, default=POINT_FILE, help="単体交差点CSV")
-    parser.add_argument("--output_dir", type=Path, default=OUTPUT_DIR, help="単体出力フォルダ")
 
     args = parser.parse_args()
 
-    if args.project_dir:
-        run_batch(args.project_dir, args.targets, args.dry_run)
-        return
-
-    if args.dry_run:
-        print("[50_PathAnalysis] dry_run is ignored without --project_dir")
-
-    run_single_crossroad(
-        screen_path=args.input_dir,
-        point_csv_path=args.point_file,
-        point_jpg_path=None,
-        out_dir=args.output_dir,
-    )
+    run_batch(args.project_dir, args.targets, args.dry_run)
 
 
 if __name__ == "__main__":
