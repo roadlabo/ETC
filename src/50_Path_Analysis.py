@@ -536,7 +536,7 @@ def collect_targets(
     targets_filter: Optional[Set[str]] = None,
 ) -> tuple[list[TargetCrossroad], list[SkipCrossroad], ScanStats]:
     points_dir = project_dir / "11_交差点(Point)データ"
-    screen_dir = project_dir / "20_第2スクリーニング"
+    screen_dir = project_dir / "20_第２スクリーニング"
     out_root = project_dir / "50_経路分析"
 
     screen_paths = {p.name: p for p in screen_dir.iterdir() if p.is_dir()}
@@ -1024,7 +1024,7 @@ def select_project_dir_with_dialog(initial_dir: Path | None = None) -> Path | No
 def validate_project_dir(project_dir: Path) -> tuple[bool, list[str]]:
     required_dirs = [
         "11_交差点(Point)データ",
-        "20_第2スクリーニング",
+        "20_第２スクリーニング",
     ]
     missing = [name for name in required_dirs if not (project_dir / name).exists()]
     return (len(missing) == 0, missing)
@@ -1060,7 +1060,7 @@ def prompt_project_dir_loop(initial_dir: Path | None = None) -> Path | None:
 
 def _ensure_project_dirs(project_dir: Path) -> tuple[Path, Path, Path]:
     points_dir = project_dir / "11_交差点(Point)データ"
-    screen_dir = project_dir / "20_第2スクリーニング"
+    screen_dir = project_dir / "20_第２スクリーニング"
     out_root = project_dir / "50_経路分析"
 
     missing = []
