@@ -93,14 +93,16 @@ class TargetCrossroad:
 class SkipCrossroad:
     name: str
     missing_reasons: list[str]
-    expected_point_dir: Path
+    expected_point_csv: Path
+    expected_point_image: Path
     expected_screen_dir: Path
 
 
 @dataclass(frozen=True)
 class ScanStats:
     screen_count: int
-    point_count: int
+    point_csv_count: int
+    point_image_count: int
     target_count: int
     skip_count: int
 
@@ -540,40 +542,29 @@ def collect_targets(
     out_root = project_dir / "50_経路分析"
 
     screen_paths = {p.name: p for p in screen_dir.iterdir() if p.is_dir()}
-    point_paths = {p.name: p for p in points_dir.iterdir() if p.is_dir()}
+    point_csv_map = {p.stem: p for p in points_dir.glob("*.csv")}
+    point_img_map: dict[str, Path] = {}
+    for p in sorted(points_dir.glob("*.jpg")):
+        point_img_map[p.stem] = p
+    for p in sorted(points_dir.glob("*.jpeg")):
+        point_img_map.setdefault(p.stem, p)
 
-    screen_set = set(screen_paths.keys())
-    point_set = set(point_paths.keys())
-
-    candidates = sorted(targets_filter if targets_filter is not None else screen_set | point_set)
+    screen_names = set(screen_paths.keys())
+    candidates = sorted(targets_filter if targets_filter is not None else screen_names)
 
     targets: list[TargetCrossroad] = []
     skips: list[SkipCrossroad] = []
 
     for name in candidates:
         screen_path = screen_paths.get(name)
-        point_dir = point_paths.get(name)
+        point_csv = point_csv_map.get(name)
+        point_jpg = point_img_map.get(name)
         missing: list[str] = []
         if screen_path is None:
             missing.append("missing_screen_folder")
-        if point_dir is None:
-            missing.append("missing_point_folder")
+        if point_csv is None:
             missing.append("missing_point_csv")
-            missing.append("missing_point_image")
-
-        point_csv: Optional[Path] = None
-        point_jpg: Optional[Path] = None
-        if point_dir is not None:
-            point_csvs = sorted(point_dir.glob("*.csv"))
-            point_jpgs = sorted(list(point_dir.glob("*.jpg")) + list(point_dir.glob("*.jpeg")))
-            if point_csvs:
-                point_csv = point_csvs[0]
-            if point_jpgs:
-                point_jpg = point_jpgs[0]
-
-        if point_dir is not None and point_csv is None:
-            missing.append("missing_point_csv")
-        if point_dir is not None and point_jpg is None:
+        if point_jpg is None:
             missing.append("missing_point_image")
 
         if missing:
@@ -581,7 +572,8 @@ def collect_targets(
                 SkipCrossroad(
                     name=name,
                     missing_reasons=missing,
-                    expected_point_dir=points_dir / name,
+                    expected_point_csv=points_dir / f"{name}.csv",
+                    expected_point_image=points_dir / f"{name}.jpg",
                     expected_screen_dir=screen_dir / name,
                 )
             )
@@ -602,8 +594,9 @@ def collect_targets(
         )
 
     stats = ScanStats(
-        screen_count=len(screen_set),
-        point_count=len(point_set),
+        screen_count=len(screen_names),
+        point_csv_count=len(point_csv_map),
+        point_image_count=len(point_img_map),
         target_count=len(targets),
         skip_count=len(skips),
     )
@@ -982,7 +975,8 @@ def _print_scan_summary(
     stats: ScanStats,
 ) -> None:
     print(f"[scan] screen folders : {stats.screen_count}")
-    print(f"[scan] point folders  : {stats.point_count}")
+    print(f"[scan] point csv      : {stats.point_csv_count}")
+    print(f"[scan] point image    : {stats.point_image_count}")
     print(f"[target] ready        : {stats.target_count}")
     print(f"[skip]   skipped      : {stats.skip_count}")
     print("--------------------------------")
@@ -994,7 +988,8 @@ def _print_skip_details(skips: list[SkipCrossroad]) -> None:
     for skip in skips:
         reasons = ",".join(skip.missing_reasons)
         print(f"[SKIP] 交差点={skip.name} reason={reasons}")
-        print(f"       expected_point_dir={skip.expected_point_dir}")
+        print(f"       expected_csv={skip.expected_point_csv}")
+        print(f"       expected_img={skip.expected_point_image}")
         print(f"       expected_screen_dir={skip.expected_screen_dir}")
 
 
@@ -1027,6 +1022,16 @@ def validate_project_dir(project_dir: Path) -> tuple[bool, list[str]]:
         "20_第２スクリーニング",
     ]
     missing = [name for name in required_dirs if not (project_dir / name).exists()]
+    points_dir = project_dir / "11_交差点(Point)データ"
+    screen_dir = project_dir / "20_第２スクリーニング"
+    if points_dir.exists():
+        if not list(points_dir.glob("*.csv")):
+            missing.append("11_交差点(Point)データ: *.csv not found")
+        if not list(points_dir.glob("*.jpg")) and not list(points_dir.glob("*.jpeg")):
+            missing.append("11_交差点(Point)データ: *.jpg/*.jpeg not found")
+    if screen_dir.exists():
+        if not any(p.is_dir() for p in screen_dir.iterdir()):
+            missing.append("20_第２スクリーニング: folder not found")
     return (len(missing) == 0, missing)
 
 
