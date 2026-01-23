@@ -43,8 +43,9 @@ HEATMAP_PALETTE_10 = [
     "#f9d057", "#f29e2e", "#e76818", "#d7191c", "#8c0d0d",
 ]
 
-# 透過（背景地図を見せたいので一律）
-HEATMAP_OPACITY = 0.8
+# 透過（背景地図を見せたいので緩やかに変化）
+HEATMAP_OPACITY_MIN = 0.4
+HEATMAP_OPACITY_MAX = 0.8
 
 # =========================
 # Arrow UI
@@ -154,21 +155,30 @@ def _grid_bounds(grid_x0: float, grid_y0: float) -> tuple[float, float, float, f
     return x_min, x_max, y_min, y_max
 
 
-def value_to_style(value: int, vmax: int) -> tuple[str, float] | None:
+def value_to_style(value: int, vmax: int) -> dict[str, float | str] | None:
     """
-    value(>0) を (fill_color, fill_opacity) に変換（10段階パレット）。
-    - 濃淡（明暗）ではなく色相の段階で見せる
-    - 透過は背景地図が見える程度に抑える
+    value(>0) をスタイルに変換（10段階パレット）。
+    - 色は 10段階の固定パレット
+    - 透過は 0.4〜0.8 を値に応じて線形補間
     """
     if vmax <= 0 or value <= 0:
         return None
 
     n = len(HEATMAP_PALETTE_10)
-    idx = int(min(n - 1, max(0, int(value // 10))))
-    if value >= 100:
+    value_percent = max(0.0, min(float(value), float(vmax)))
+    idx = int(min(n - 1, max(0, int(value_percent // 10))))
+    if value_percent >= 100:
         idx = n - 1
     color = HEATMAP_PALETTE_10[idx]
-    return color, float(HEATMAP_OPACITY)
+    ratio = value_percent / 100.0
+    opacity = HEATMAP_OPACITY_MIN + (HEATMAP_OPACITY_MAX - HEATMAP_OPACITY_MIN) * ratio
+    return {
+        "fillColor": color,
+        "color": color,
+        "weight": 0,
+        "fillOpacity": opacity,
+        "opacity": opacity,
+    }
 
 
 def _add_palette_legend(m: folium.Map, title: str = "凡例（割合%）") -> None:
@@ -305,14 +315,15 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
             style = value_to_style(val, vmax)
             if style is None:
                 continue
-            color, opacity = style
 
             folium.Rectangle(
                 bounds=[[lat_min, lon_min], [lat_max, lon_max]],
                 fill=True,
-                fill_color=color,
-                fill_opacity=opacity,
-                weight=0,
+                fill_color=style["fillColor"],
+                fill_opacity=style["fillOpacity"],
+                color=style["color"],
+                opacity=style["opacity"],
+                weight=style["weight"],
             ).add_to(m)
 
     # A/B 方向矢印（必要なものだけ表示）
