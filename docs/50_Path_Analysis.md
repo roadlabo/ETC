@@ -6,14 +6,10 @@
 - 第2スクリーニング後の様式1-2（トリップ点列）を対象とし、単路ポイント近傍の流入・流出の空間分布を把握する。
 ## 入力と前提（3点セット・A/B解釈）
 ### 3点セット照合（バッチ対象は「揃った交差点のみ」）
-プロジェクトフォルダ（PROJECT_ID）配下で、以下の **3点セット** が揃った交差点だけを処理する。
-- `project_dir/11_交差点(Point)データ/` に交差点定義（CSV）と背景画像（JPG/JPEG）がある
+プロジェクトフォルダ（`--project_dir`）配下で、以下の **3点セット** が揃った交差点だけを処理する。
+- `project_dir/11_交差点(Point)データ/<交差点名>/` に交差点定義（CSV）と背景画像（JPG/JPEG）がある
 - `project_dir/20_第2スクリーニング/<交差点名>/` に第2スクリーニング済みトリップ（様式1-2 CSV）がある
-- 上記が揃った交差点のみがバッチ対象
-
-### 交差点名の定義（照合キー）
-- 照合キーは **交差点名の正規化**で統一する。
-- 例: `1鶴山通り` と `鶴山通り.csv` は同一とみなす（先頭の番号プレフィックスや記号を無視）。
+- 上記が揃った交差点のみがバッチ対象（交差点名はフォルダ名で一致させる）
 
 ### A/B判定の解釈（最優先で確認）
 - A/B判定は「交通の進行方向」ではなく **「交差点中心にどちら側から到達したか（流入側）」** で行う。
@@ -23,39 +19,40 @@
 
 ### 列前提（様式1-2）
 - 経度=14列、緯度=15列（0始まりの usecols 指定）
-## 実行方法（バッチモード優先）
-### バッチ実行（基本）
+## 実行方法（project_dir 一本運用）
+### バッチ実行（必須）
 ```
-python 50_Path_Analysis.py --project_dir "<PROJECT_IDフルパス>"
+python 50_Path_Analysis.py --project_dir "...\20260106_0930_2nd_point_中活経路分析_R6_10"
 ```
 ### 対象交差点を絞る（任意）
 ```
-python 50_Path_Analysis.py --project_dir "<...>" --targets "1鶴山通り,2奏天"
+python 50_Path_Analysis.py --project_dir "...\20260106_0930_2nd_point_中活経路分析_R6_10" --targets "鶴山通り,奏天"
 ```
-### ドライラン（一覧確認のみ）
+### ドライラン（走査のみ）
 ```
-python 50_Path_Analysis.py --project_dir "<...>" --dry_run
+python 50_Path_Analysis.py --project_dir "...\20260106_0930_2nd_point_中活経路分析_R6_10" --dry_run
 ```
+### フォルダ構成（固定名）
+- `11_交差点(Point)データ/<交差点名>/` に CSV と JPG/JPEG がある
+- `20_第2スクリーニング/<交差点名>/` がある
+- 出力は `50_経路分析/<交差点名>/` に自動格納される
 ### 実行時の表示
-- 開始時にサマリが表示される（例）
+- 開始直後にサマリが表示される（例）
   ```
-  [50_PathAnalysis] Project summary
-    project_dir = ...
-    points_dir  = ...
-    screen_dir  = ...
-    out_root    = ...
-  [50_PathAnalysis] Scan stats
-    screen_folders = 12
-    point_csvs     = 12
-    point_jpgs     = 12
-    ready_targets  = 10
-    skipped        = 2
+  [scan] screen folders : 12
+  [scan] point folders  : 12
+  [target] ready        : 10
+  [skip]   skipped      : 2
+  --------------------------------
   ```
 - 進捗表示は `[i/total] (xx.x%) ...` の形式で出る
   ```
   [3/10] ( 30.0%) 交差点=鶴山通り start
-  ...
-  [3/10] ( 30.0%) 交差点=鶴山通り done  elapsed=12.3s  outputs=11
+    screen : ...
+    point  : ...csv
+    image  : ...jpg
+    out    : ...
+  [3/10] ( 30.0%) 交差点=鶴山通り done  elapsed=12.3s (ok=2 ng=0 skip=2)
   ```
 ## 出力（必ずここに出る）
 出力ルートは固定：  
@@ -85,32 +82,31 @@ python 50_Path_Analysis.py --project_dir "<...>" --dry_run
 
 `missing_*` の意味:
 - `missing_screen_folder`: `20_第2スクリーニング/<交差点名>/` が見つからない
-- `missing_point_csv`: `11_交差点(Point)データ/` に交差点CSVが無い
-- `missing_point_jpg`: `11_交差点(Point)データ/` に交差点JPG/JPEGが無い
+- `missing_point_folder`: `11_交差点(Point)データ/<交差点名>/` が見つからない
+- `missing_point_csv`: `11_交差点(Point)データ/<交差点名>/` に交差点CSVが無い
+- `missing_point_image`: `11_交差点(Point)データ/<交差点名>/` に交差点JPG/JPEGが無い
 
-ログには期待されるパス（`expected_*`）も出るので、そこを直せば一発で解決できる。
+ログには期待されるパス（`expected_point_dir` / `expected_screen_dir`）も出るので、そこを直せば一発で解決できる。
 
 ### エラーの扱い
 処理中の例外は **交差点単位で握りつぶさず**、失敗一覧として最後に出る（処理自体は継続）。
 
 #### サンプルログ（短縮）
 ```
-[50_PathAnalysis] Project summary
-  project_dir = X:\Project\001
-[50_PathAnalysis] Scan stats
-  screen_folders = 5
-  ready_targets  = 4
-  skipped        = 1
-[50_PathAnalysis] Skipped crossroads
-[skip] 交差点=2奏天 理由=missing_point_jpg
-       expected_csv=X:\Project\001\11_交差点(Point)データ\奏天.csv
-       expected_jpg=X:\Project\001\11_交差点(Point)データ\奏天.jpg|.jpeg
-       screen_dir  =X:\Project\001\20_第2スクリーニング\2奏天
+[scan] screen folders : 5
+[scan] point folders  : 5
+[target] ready        : 4
+[skip]   skipped      : 1
+--------------------------------
+[SKIP] 交差点=奏天 reason=missing_point_image
+       expected_point_dir=X:\Project\001\11_交差点(Point)データ\奏天
+       expected_screen_dir=X:\Project\001\20_第2スクリーニング\奏天
 [1/4] ( 25.0%) 交差点=1鶴山通り start
-[1/4] ( 25.0%) 交差点=1鶴山通り done  elapsed=8.4s  outputs=11
+[1/4] ( 25.0%) 交差点=1鶴山通り done  elapsed=8.4s (ok=1 ng=0 skip=1)
 [50_PathAnalysis] Batch summary
-  success       = 4
-  failed        = 0
+  success = 4
+  failed  = 0
+  skipped = 1
 ```
 ## 主要パラメータ（25m・10段階パレット・透過など）
 ### 解析範囲・メッシュ
@@ -141,15 +137,12 @@ A/B の矢印が潰れて見づらい場合に、線の長さ・太さ・ラベ�
 - 行列は方向別HIT数で正規化し、整数%で保存・描画する。
 ## よくあるミス
 - A/B を「進行方向」と解釈してしまい、交差点ファイルの dir_deg を outside→center で用意しない
-- 3点セットが揃っていない（交差点CSV/JPG/第2スクリーニングフォルダのどれかが欠けている）
-- 交差点名の番号プレフィックス差で照合が外れる（例: `1鶴山通り` vs `鶴山通り.csv`）
+- 3点セットが揃っていない（交差点フォルダ/CSV/JPG/第2スクリーニングフォルダのどれかが欠けている）
+- 交差点名のフォルダ名が一致していない
 - 経度緯度列が想定と違い、読み込みで空扱いになる
 - `CROSS_THRESHOLD_M` が小さすぎて通過点検出が失敗（empty扱いが増える）
-## 旧方式（互換）
-原則は `--project_dir` によるバッチ運用を推奨。  
-どうしても単体実行したい場合のみ、`INPUT_DIR` / `POINT_FILE` / `OUTPUT_DIR` を指定して `python 50_Path_Analysis.py` を実行する。
 ## 変更履歴
 - 2026-01-07: 71_Path_Analysis.py を 50_Path_Analysis.py に改名（参照・文書も追従）
-- 2026-01-xx: --project_dir によるバッチ処理対応（3点セット照合、スキップ理由表示、進捗表示）
+- 2026-01-xx: --project_dir による一本運用に統一（固定フォルダ名、スキップ理由表示、進捗表示）
 - 2026-01-xx: ヒートマップを10段階カラーパレット＋透過に変更
 - 2026-01-xx: メッシュサイズ既定を 10m → 25m に変更
