@@ -1,17 +1,19 @@
 """Path analysis script for inflow-side (A/B) mesh counting and in/out heatmaps toward a center point."""
 from __future__ import annotations
 
+import argparse
+import csv
+from dataclasses import dataclass
+from datetime import datetime
 import math
 from math import cos, hypot, radians, sin
 from pathlib import Path
+import re
+import time
 from typing import Dict, Iterable, Optional, Set, Tuple
 
-from datetime import datetime
-import time
-
-import csv
-import numpy as np
 import folium
+import numpy as np
 
 # =========================
 # User-editable constants
@@ -84,6 +86,32 @@ CENTER_MARKER_BORDER_WEIGHT = 3
 GRID_SIZE = int((2 * HALF_SIDE_M) / CELL_SIZE_M)
 
 # =========================
+
+
+@dataclass(frozen=True)
+class TargetCrossroad:
+    name_screen: str
+    name_key: str
+    screen_path: Path
+    point_csv_path: Path
+    point_jpg_path: Path
+    out_dir: Path
+
+
+@dataclass(frozen=True)
+class SkipCrossroad:
+    name_screen: str
+    missing_reasons: list[str]
+    expected_csv: Optional[Path]
+    expected_jpg: Optional[str]
+    screen_dir: Path
+
+
+@dataclass(frozen=True)
+class ScanStats:
+    screen_count: int
+    csv_count: int
+    jpg_count: int
 
 
 def write_log(log_path: Path, lines: list[str]) -> None:
@@ -263,6 +291,7 @@ def add_direction_arrow(
 def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
                     filename: str, title: str,
                     dirA_deg: float, dirB_deg: float,
+                    output_dir: Path,
                     show_A: bool = True, show_B: bool = True) -> None:
     """
     GRID_SIZE×GRID_SIZE のマトリクスを 25m メッシュの矩形として描画し、
@@ -351,7 +380,7 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
 """
     m.get_root().html.add_child(folium.Element(zoom_scale_js))
 
-    m.save(str(OUTPUT_DIR / filename))
+    m.save(str(output_dir / filename))
 
 
 def load_single_trip(csv_path: Path, lon0: float, lat0: float) -> np.ndarray:
@@ -511,6 +540,87 @@ def _compute_matrix(count_array: np.ndarray, denom: int) -> np.ndarray:
     return np.rint(ratio * 100.0).astype(int)
 
 
+def normalize(name: str) -> str:
+    """
+    交差点名の正規化。
+    - 先頭の番号プレフィックス (e.g. "1_", "2-") を除去
+    - 前後空白除去
+    """
+    cleaned = re.sub(r"^\d+[_\- ]*", "", name)
+    return cleaned.strip()
+
+
+def collect_targets(project_dir: Path, targets_filter: Optional[Set[str]] = None
+                    ) -> tuple[list[TargetCrossroad], list[SkipCrossroad], ScanStats]:
+    points_dir = project_dir / "11_交差点(Point)データ"
+    screen_dir = project_dir / "20_第2スクリーニング"
+    out_root = project_dir / "50_経路分析"
+
+    screen_paths = sorted([p for p in screen_dir.iterdir() if p.is_dir()], key=lambda p: p.name)
+    point_csv_paths = sorted(points_dir.glob("*.csv"))
+    point_jpg_paths = sorted(list(points_dir.glob("*.jpg")) + list(points_dir.glob("*.jpeg")))
+
+    csv_map: dict[str, Path] = {}
+    for path in point_csv_paths:
+        key = normalize(path.stem)
+        csv_map.setdefault(key, path)
+
+    jpg_map: dict[str, Path] = {}
+    for path in point_jpg_paths:
+        key = normalize(path.stem)
+        jpg_map.setdefault(key, path)
+
+    targets: list[TargetCrossroad] = []
+    skips: list[SkipCrossroad] = []
+
+    for screen_path in screen_paths:
+        name_screen = screen_path.name
+        name_key = normalize(name_screen)
+        if targets_filter is not None and name_key not in targets_filter:
+            continue
+
+        point_csv = csv_map.get(name_key)
+        point_jpg = jpg_map.get(name_key)
+
+        missing: list[str] = []
+        if point_csv is None:
+            missing.append("missing_point_csv")
+        if point_jpg is None:
+            missing.append("missing_point_jpg")
+
+        if missing:
+            expected_csv = points_dir / f"{name_key}.csv"
+            expected_jpg = f"{points_dir / name_key}.jpg|.jpeg"
+            skips.append(
+                SkipCrossroad(
+                    name_screen=name_screen,
+                    missing_reasons=missing,
+                    expected_csv=expected_csv,
+                    expected_jpg=expected_jpg,
+                    screen_dir=screen_path,
+                )
+            )
+            continue
+
+        targets.append(
+            TargetCrossroad(
+                name_screen=name_screen,
+                name_key=name_key,
+                screen_path=screen_path,
+                point_csv_path=point_csv,
+                point_jpg_path=point_jpg,
+                out_dir=out_root / name_screen,
+            )
+        )
+
+    stats = ScanStats(
+        screen_count=len(screen_paths),
+        csv_count=len(point_csv_paths),
+        jpg_count=len(point_jpg_paths),
+    )
+    return targets, skips, stats
+
+
 def classify_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
                        v_dir_A: np.ndarray, v_dir_B: np.ndarray) -> str:
     """
@@ -584,12 +694,17 @@ def classify_out_direction(points_xy: np.ndarray, cross_info: Dict[str, float],
     return "A" if cosA >= cosB else "B"
 
 
-def main():
+def run_single_crossroad(
+    screen_path: Path,
+    point_csv_path: Path,
+    point_jpg_path: Optional[Path],
+    out_dir: Path,
+) -> list[Path]:
     started_dt = datetime.now()
     t0 = time.time()
 
-    lon0, lat0, dirA_deg, dirB_deg = _read_point_file(POINT_FILE)
-    stem = POINT_FILE.stem
+    lon0, lat0, dirA_deg, dirB_deg = _read_point_file(point_csv_path)
+    stem = point_csv_path.stem
 
     # A方向 / B方向の基準ベクトル（outside→center の方位角。北=0度, 東=90度）
     # ※交差点ファイルの dir_deg は「中心が終点（外側→中心）」の向きとして扱う
@@ -598,10 +713,10 @@ def main():
     v_dir_A = np.array([sin(dirA_rad), cos(dirA_rad)])
     v_dir_B = np.array([sin(dirB_rad), cos(dirB_rad)])
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     # 解析対象ファイルを列挙
-    target_files = sorted(INPUT_DIR.glob("*.csv"))
+    target_files = sorted(screen_path.glob("*.csv"))
     total_files = len(target_files)
 
     count_arrays = {
@@ -726,7 +841,7 @@ def main():
     def _save_matrix_csv(name: str, matrix: np.ndarray):
         # 北が上になるように上下反転（iy大きい=北 → 1行目）
         flipped = np.flipud(matrix)
-        np.savetxt(OUTPUT_DIR / name, flipped, delimiter=",", fmt="%d")
+        np.savetxt(out_dir / name, flipped, delimiter=",", fmt="%d")
 
     _save_matrix_csv("50_path_matrix_A_in.csv",  matrices["A_in"])
     _save_matrix_csv("50_path_matrix_A_out.csv", matrices["A_out"])
@@ -739,10 +854,54 @@ def main():
     b_in_html = f"{stem}_heatmap_B（流入）.html"
     b_out_html = f"{stem}_heatmap_B（流出）.html"
 
-    create_mesh_map(matrices["A_in"],  lon0, lat0, a_in_html,  "A方向交通（流入経路）", dirA_deg, dirB_deg, show_A=True,  show_B=False)
-    create_mesh_map(matrices["A_out"], lon0, lat0, a_out_html, "A方向交通（流出経路）", dirA_deg, dirB_deg, show_A=True,  show_B=False)
-    create_mesh_map(matrices["B_in"],  lon0, lat0, b_in_html,  "B方向交通（流入経路）", dirA_deg, dirB_deg, show_A=False, show_B=True)
-    create_mesh_map(matrices["B_out"], lon0, lat0, b_out_html, "B方向交通（流出経路）", dirA_deg, dirB_deg, show_A=False, show_B=True)
+    create_mesh_map(
+        matrices["A_in"],
+        lon0,
+        lat0,
+        a_in_html,
+        "A方向交通（流入経路）",
+        dirA_deg,
+        dirB_deg,
+        out_dir,
+        show_A=True,
+        show_B=False,
+    )
+    create_mesh_map(
+        matrices["A_out"],
+        lon0,
+        lat0,
+        a_out_html,
+        "A方向交通（流出経路）",
+        dirA_deg,
+        dirB_deg,
+        out_dir,
+        show_A=True,
+        show_B=False,
+    )
+    create_mesh_map(
+        matrices["B_in"],
+        lon0,
+        lat0,
+        b_in_html,
+        "B方向交通（流入経路）",
+        dirA_deg,
+        dirB_deg,
+        out_dir,
+        show_A=False,
+        show_B=True,
+    )
+    create_mesh_map(
+        matrices["B_out"],
+        lon0,
+        lat0,
+        b_out_html,
+        "B方向交通（流出経路）",
+        dirA_deg,
+        dirB_deg,
+        out_dir,
+        show_A=False,
+        show_B=True,
+    )
 
     # ---- A/B の in/out を左右に並べた HTML（方向別） ----
     a_pair = f"""
@@ -758,7 +917,7 @@ def main():
 </body>
 </html>
 """
-    (OUTPUT_DIR / f"{stem}_heatmap_A方向交通.html").write_text(a_pair, encoding="utf-8")
+    (out_dir / f"{stem}_heatmap_A方向交通.html").write_text(a_pair, encoding="utf-8")
 
     b_pair = f"""
 <!DOCTYPE html>
@@ -773,7 +932,7 @@ def main():
 </body>
 </html>
 """
-    (OUTPUT_DIR / f"{stem}_heatmap_B方向交通.html").write_text(b_pair, encoding="utf-8")
+    (out_dir / f"{stem}_heatmap_B方向交通.html").write_text(b_pair, encoding="utf-8")
 
     print("[50_PathAnalysis] 判定定義: A/B=中心へどちら側から来たか（流入側）, dir_deg=outside→center")
     print("[50_PathAnalysis] 表記: in=流入経路, out=流出経路")
@@ -786,9 +945,9 @@ def main():
     log_lines.append(f"所要時間: {elapsed_sec:.1f} 秒")
     log_lines.append("")
     log_lines.append("－－－入力概要－－－")
-    log_lines.append(f"入力フォルダ: {INPUT_DIR}")
+    log_lines.append(f"入力フォルダ: {screen_path}")
     log_lines.append(f"対象CSV数: {total_files}")
-    log_lines.append(f"交差点ファイル: {POINT_FILE}")
+    log_lines.append(f"交差点ファイル: {point_csv_path}")
     log_lines.append(f"解析範囲: 2km四方（±{HALF_SIDE_M:.0f}m）")
     log_lines.append("")
     log_lines.append("－－－トリップ集計－－－")
@@ -811,8 +970,173 @@ def main():
     log_lines.append("ヒートマップのA_out/B_outは流入側で束ねる（inA起点の流出はA_out）。")
     log_lines.append("矢印は外側→中心の向きで描画し、ラベルは矢印中央に置く。")
 
-    write_log(OUTPUT_DIR / "LOG.txt", log_lines)
+    write_log(out_dir / "LOG.txt", log_lines)
     print("\n".join(log_lines[-12:]))  # 末尾の要約だけ標準出力に出す（冗長防止）
+
+    outputs = [
+        out_dir / "50_path_matrix_A_in.csv",
+        out_dir / "50_path_matrix_A_out.csv",
+        out_dir / "50_path_matrix_B_in.csv",
+        out_dir / "50_path_matrix_B_out.csv",
+        out_dir / a_in_html,
+        out_dir / a_out_html,
+        out_dir / b_in_html,
+        out_dir / b_out_html,
+        out_dir / f"{stem}_heatmap_A方向交通.html",
+        out_dir / f"{stem}_heatmap_B方向交通.html",
+        out_dir / "LOG.txt",
+    ]
+    if point_jpg_path is not None:
+        outputs.append(point_jpg_path)
+    return outputs
+
+
+def _print_scan_summary(
+    project_dir: Path,
+    points_dir: Path,
+    screen_dir: Path,
+    out_root: Path,
+    stats: ScanStats,
+    targets: list[TargetCrossroad],
+    skips: list[SkipCrossroad],
+) -> None:
+    print("[50_PathAnalysis] Project summary")
+    print(f"  project_dir = {project_dir}")
+    print(f"  points_dir  = {points_dir}")
+    print(f"  screen_dir  = {screen_dir}")
+    print(f"  out_root    = {out_root}")
+    print("[50_PathAnalysis] Scan stats")
+    print(f"  screen_folders = {stats.screen_count}")
+    print(f"  point_csvs     = {stats.csv_count}")
+    print(f"  point_jpgs     = {stats.jpg_count}")
+    print(f"  ready_targets  = {len(targets)}")
+    print(f"  skipped        = {len(skips)}")
+
+
+def _print_skip_details(skips: list[SkipCrossroad]) -> None:
+    if not skips:
+        return
+    print("[50_PathAnalysis] Skipped crossroads")
+    for skip in skips:
+        reasons = ",".join(skip.missing_reasons)
+        print(f"[skip] 交差点={skip.name_screen} 理由={reasons}")
+        print(f"       expected_csv={skip.expected_csv}")
+        print(f"       expected_jpg={skip.expected_jpg}")
+        print(f"       screen_dir  ={skip.screen_dir}")
+
+
+def _parse_targets_filter(targets_raw: Optional[str]) -> Optional[Set[str]]:
+    if not targets_raw:
+        return None
+    return {normalize(name) for name in targets_raw.split(",") if name.strip()}
+
+
+def _ensure_project_dirs(project_dir: Path) -> tuple[Path, Path, Path]:
+    points_dir = project_dir / "11_交差点(Point)データ"
+    screen_dir = project_dir / "20_第2スクリーニング"
+    out_root = project_dir / "50_経路分析"
+
+    missing = []
+    if not points_dir.exists():
+        missing.append(f"points_dir not found: {points_dir}")
+    if not screen_dir.exists():
+        missing.append(f"screen_dir not found: {screen_dir}")
+    if missing:
+        print("[50_PathAnalysis] ERROR: required project folders are missing")
+        for item in missing:
+            print(f"  {item}")
+        raise SystemExit(1)
+
+    return points_dir, screen_dir, out_root
+
+
+def run_batch(project_dir: Path, targets_raw: Optional[str], dry_run: bool) -> None:
+    points_dir, screen_dir, out_root = _ensure_project_dirs(project_dir)
+    targets_filter = _parse_targets_filter(targets_raw)
+
+    targets, skips, stats = collect_targets(project_dir, targets_filter)
+    _print_scan_summary(project_dir, points_dir, screen_dir, out_root, stats, targets, skips)
+    _print_skip_details(skips)
+
+    if dry_run:
+        print("[50_PathAnalysis] Dry run: targets")
+        for target in targets:
+            print(f"  - {target.name_screen} ({target.point_csv_path.name})")
+        return
+
+    total = len(targets)
+    success: list[str] = []
+    failed: list[tuple[str, Exception]] = []
+
+    batch_start = time.time()
+    for idx, target in enumerate(targets, start=1):
+        progress = idx / total * 100 if total else 100.0
+        print(f"[{idx}/{total}] ({progress:5.1f}%) 交差点={target.name_screen} start")
+        print(f"  screen: {target.screen_path}")
+        print(f"  point : {target.point_csv_path}")
+        print(f"  image : {target.point_jpg_path}")
+        print(f"  out   : {target.out_dir}")
+
+        t0 = time.time()
+        try:
+            outputs = run_single_crossroad(
+                target.screen_path,
+                target.point_csv_path,
+                target.point_jpg_path,
+                target.out_dir,
+            )
+            elapsed = time.time() - t0
+            success.append(target.name_screen)
+            print(
+                f"[{idx}/{total}] ({progress:5.1f}%) 交差点={target.name_screen} "
+                f"done  elapsed={elapsed:.1f}s  outputs={len(outputs)}"
+            )
+        except Exception as exc:
+            elapsed = time.time() - t0
+            failed.append((target.name_screen, exc))
+            print(
+                f"[{idx}/{total}] ({progress:5.1f}%) 交差点={target.name_screen} "
+                f"ERROR elapsed={elapsed:.1f}s"
+            )
+            print(f"  error: {exc.__class__.__name__}: {str(exc).splitlines()[0] if str(exc) else ''}")
+
+    total_elapsed = time.time() - batch_start
+    print("[50_PathAnalysis] Batch summary")
+    print(f"  total_targets = {total}")
+    print(f"  success       = {len(success)}")
+    print(f"  failed        = {len(failed)}")
+    print(f"  skipped       = {len(skips)}")
+    print(f"  total_elapsed = {total_elapsed:.1f}s")
+    if failed:
+        print("[50_PathAnalysis] Failed list")
+        for name, exc in failed:
+            print(f"  - {name}: {exc.__class__.__name__}: {str(exc).splitlines()[0] if str(exc) else ''}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="50_Path_Analysis batch runner")
+    parser.add_argument("--project_dir", type=Path, help="プロジェクトフォルダ")
+    parser.add_argument("--targets", type=str, help="交差点名（カンマ区切り）")
+    parser.add_argument("--dry_run", action="store_true", help="走査のみで終了")
+    parser.add_argument("--input_dir", type=Path, default=INPUT_DIR, help="単体入力フォルダ")
+    parser.add_argument("--point_file", type=Path, default=POINT_FILE, help="単体交差点CSV")
+    parser.add_argument("--output_dir", type=Path, default=OUTPUT_DIR, help="単体出力フォルダ")
+
+    args = parser.parse_args()
+
+    if args.project_dir:
+        run_batch(args.project_dir, args.targets, args.dry_run)
+        return
+
+    if args.dry_run:
+        print("[50_PathAnalysis] dry_run is ignored without --project_dir")
+
+    run_single_crossroad(
+        screen_path=args.input_dir,
+        point_csv_path=args.point_file,
+        point_jpg_path=None,
+        out_dir=args.output_dir,
+    )
 
 
 if __name__ == "__main__":
