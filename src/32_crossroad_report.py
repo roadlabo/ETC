@@ -995,10 +995,10 @@ class CrossroadReport(QMainWindow):
         headers = [
             "方向\n（流入→流出）",
             "日あたり\n台数\n（台/日）",
-            "24h/7-19\n（昼夜率）",
-            "1-4時",
-            "4-7時",
-            "7-10時",
+            "24h/\n7-19時\n（昼夜率）",
+            "1-4\n時",
+            "4-7\n時",
+            "7-10\n時",
             "10-13\n時",
             "13-16\n時",
             "16-19\n時",
@@ -1009,7 +1009,7 @@ class CrossroadReport(QMainWindow):
             cell = ws.cell(row=header_row, column=col, value=text)
             cell.font = Font(bold=True)
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        ws.row_dimensions[header_row].height = 45
+        ws.row_dimensions[header_row].height = 50
 
         row_idx = data_row
         for combo in combos:
