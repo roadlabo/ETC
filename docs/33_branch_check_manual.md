@@ -10,6 +10,9 @@
 - 想定例: `01nomura_performance.csv` / `03higashiitinomiya_performance.csv` / `12minamisaka_performance.csv`
 - 起動時にファイルダイアログで選択可能
 - 文字コードは `cp932 → shift_jis → utf-8` の順に試行
+- 同階層の `11_交差点(Point)データ/交差点名.csv` を自動で探して読み込みます
+  - 交差点名は `*_performance.csv` の末尾 `_performance.csv` を除いた部分です
+  - 例: `03higashiitinomiya_performance.csv` → `11_交差点(Point)データ/03higashiitinomiya.csv`
 
 ## 起動方法
 ```bash
@@ -28,13 +31,13 @@ python src/33_branch_check.py --csv /path/to/xxx_performance.csv
 
 ## 表示内容
 ### 地図
-- 交差点中心（指定中心）を基準に、半径200mの円を表示し、その範囲に自動ズーム
 - 指定中心点（交差点定義CSVで指定）を赤で表示
 - 算出中心点（トリップ軌跡のうち指定中心に最も近い線分上最近接点）をマーカーで表示
 - 計測開始点 → 算出中心点 → 計測終了点 の2本の線分（折れ）で表示
 - 開始/終了マーカーとラベル（IN/OUT枝番・角度差）
 - 2区間（開始→算出中心→終了）を順に動くアニメーションマーカー
-- 参考表示: 流入枝番ごとの代表方向レイ（中心→120m）
+- 基準枝（枝番号ラベル付きレイ）と選択トリップを同一地図に表示
+- 自動fitで枝全体とトリップがバランスよく収まるように表示
 
 ### 詳細パネル
 - 交差点ファイル名
@@ -55,5 +58,6 @@ python src/33_branch_check.py --csv /path/to/xxx_performance.csv
 - 交差点通過速度(km/h)（参考/任意）
 
 ## 注意
+- Point CSV が見つからない場合は警告を表示し、基準枝なしモードで起動します
 - OSMタイル取得にネットワーク接続が必要です。オフライン環境では地図表示ができません。
 - 本ツールは分析結果確定ではなく品質確認（検証）用です。

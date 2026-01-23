@@ -1,6 +1,7 @@
 import sys
 import json
 import math
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
 import numpy as np
@@ -65,6 +66,52 @@ def ensure_columns(df: pd.DataFrame, cols: List[str]) -> None:
         raise ValueError("\n".join(message_lines))
 
 
+def find_point_csv(perf_csv_path: str) -> Optional[Path]:
+    perf_path = Path(perf_csv_path)
+    proj_dir = perf_path.parent
+    cross_name = perf_path.stem
+    if cross_name.endswith("_performance"):
+        cross_name = cross_name[: -len("_performance")]
+
+    point_dir = proj_dir / "11_交差点(Point)データ"
+    if not point_dir.exists():
+        return None
+
+    candidates = [
+        point_dir / f"{cross_name}.csv",
+        point_dir / f"{cross_name}.CSV",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    lowered = cross_name.lower()
+    for candidate in point_dir.glob("*.csv"):
+        if lowered in candidate.stem.lower():
+            return candidate
+    for candidate in point_dir.glob("*.CSV"):
+        if lowered in candidate.stem.lower():
+            return candidate
+    return None
+
+
+def first_numeric_value(df: pd.DataFrame, candidates: List[str]) -> Optional[float]:
+    for col in candidates:
+        if col in df.columns:
+            series = pd.to_numeric(df[col], errors="coerce")
+            val = series.dropna()
+            if not val.empty:
+                return float(val.iloc[0])
+    return None
+
+
+def find_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
+    for col in candidates:
+        if col in df.columns:
+            return col
+    return None
+
+
 # -----------------------------
 # Leaflet HTML (embedded)
 # -----------------------------
@@ -85,7 +132,7 @@ LEAFLET_HTML = r"""
       border: 1px solid rgba(0,0,0,0.25);
       border-radius: 10px;
       padding: 2px 6px;
-      font-size: 12px;
+      font-size: 14px;
       font-family: sans-serif;
       white-space: nowrap;
     }
@@ -107,11 +154,11 @@ LEAFLET_HTML = r"""
   let base = null;
 
   let centerMarker = null;
-  let centerCircle = null;
   let calcMarker = null;
 
   let branchLayer = L.layerGroup();
   let tripLayer = L.layerGroup();
+  let branchPoints = [];
 
   let animTimer = null;
   let animMarker = null;
@@ -132,7 +179,6 @@ LEAFLET_HTML = r"""
     centerMarker = L.circleMarker([centerLat, centerLon], {
       radius: 7, color: 'red', fillColor: 'red', fillOpacity: 1.0
     }).addTo(map);
-    centerCircle = L.circle([centerLat, centerLon], {radius: 200}).addTo(map);
   }
 
   function clearLayer(layer){
@@ -142,13 +188,16 @@ LEAFLET_HTML = r"""
   function setBranchRays(rays){
     // rays: [{label, lat1, lon1, lat2, lon2}, ...]
     clearLayer(branchLayer);
+    branchPoints = [];
     if (!map) return;
 
     rays.forEach(r => {
+      branchPoints.push([r.lat1, r.lon1]);
+      branchPoints.push([r.lat2, r.lon2]);
       const line = L.polyline([[r.lat1, r.lon1], [r.lat2, r.lon2]], {dashArray: '6 6'}).addTo(branchLayer);
-      const midLat = (r.lat1 + r.lat2)/2.0;
-      const midLon = (r.lon1 + r.lon2)/2.0;
-      L.marker([midLat, midLon], {
+      const labelLat = r.lat1 + (r.lat2 - r.lat1) * 0.75;
+      const labelLon = r.lon1 + (r.lon2 - r.lon1) * 0.75;
+      L.marker([labelLat, labelLon], {
         icon: L.divIcon({className: 'branch-label', html: `枝${r.label}`})
       }).addTo(branchLayer);
     });
@@ -169,26 +218,15 @@ LEAFLET_HTML = r"""
     // tr: {center_spec:{lat,lon}, center_calc:{lat,lon}, start:{lat,lon}, end:{lat,lon}, ...}
     if (!map) initMap(tr.center_spec.lat, tr.center_spec.lon, 19);
 
-    // 200mに寄せる
-    const dlat = 200.0 / 111320.0;
-    const dlon = 200.0 / (111320.0 * Math.cos(tr.center_spec.lat * Math.PI/180.0));
-    const b = L.latLngBounds(
-      [tr.center_spec.lat - dlat, tr.center_spec.lon - dlon],
-      [tr.center_spec.lat + dlat, tr.center_spec.lon + dlon]
-    );
-    map.fitBounds(b, {padding:[20,20]});
-
     clearLayer(tripLayer);
     stopAnim();
 
     // center circle & marker refresh
     if (centerMarker) map.removeLayer(centerMarker);
-    if (centerCircle) map.removeLayer(centerCircle);
     if (calcMarker) map.removeLayer(calcMarker);
     centerMarker = L.circleMarker([tr.center_spec.lat, tr.center_spec.lon], {
       radius: 7, color: 'red', fillColor: 'red', fillOpacity: 1.0
     }).addTo(map);
-    centerCircle = L.circle([tr.center_spec.lat, tr.center_spec.lon], {radius: 200}).addTo(map);
     calcMarker = L.circleMarker([tr.center_calc.lat, tr.center_calc.lon], {radius: 6}).addTo(map);
 
     // 2-segment line: start -> center_calc -> end
@@ -249,6 +287,22 @@ LEAFLET_HTML = r"""
       }
       animMarker.setLatLng([lat, lon]);
     }, 40);
+
+    const points = [
+      ...branchPoints,
+      [tr.start.lat, tr.start.lon],
+      [tr.center_calc.lat, tr.center_calc.lon],
+      [tr.end.lat, tr.end.lon],
+    ];
+    if (points.length >= 2){
+      const bounds = L.latLngBounds(points);
+      map.fitBounds(bounds, {padding:[30,30]});
+      map.once('zoomend', () => {
+        if (map.getZoom() > 19) map.setZoom(19);
+      });
+    } else if (points.length === 1) {
+      map.setView(points[0], 19);
+    }
   }
 
   // expose
@@ -333,6 +387,7 @@ class BranchCheckWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("33_branch_check - 枝判定 目視チェッカー")
         self.resize(1400, 900)
+        self._angle_zero_east_ccw = True
 
         self.csv_path = csv_path
         self.df = read_csv_safely(csv_path)
@@ -370,12 +425,22 @@ class BranchCheckWindow(QMainWindow):
             "交差点中心_経度", "交差点中心_緯度", "算出中心_経度", "算出中心_緯度",
         ]).reset_index(drop=True)
 
-        # 交差点中心（交差点データで指定された中心点を使用）
-        self.center_lon = float(np.nanmedian(self.df["交差点中心_経度"].to_numpy()))
-        self.center_lat = float(np.nanmedian(self.df["交差点中心_緯度"].to_numpy()))
+        # 交差点中心（パフォーマンスCSV側）
+        self.performance_center_lon = float(np.nanmedian(self.df["交差点中心_経度"].to_numpy()))
+        self.performance_center_lat = float(np.nanmedian(self.df["交差点中心_緯度"].to_numpy()))
 
-        # 枝レイ推定（流入枝番ごと：中心→開始点 代表方向）
-        self.branch_rays = self._compute_branch_rays()
+        self.center_lon = self.performance_center_lon
+        self.center_lat = self.performance_center_lat
+
+        self.point_df: Optional[pd.DataFrame] = None
+        self.point_csv_path: Optional[Path] = None
+        self.branch_rays: List[Dict[str, Any]] = []
+
+        self._load_point_data()
+
+        if not self.branch_rays and self.point_df is None:
+            # 枝レイ推定（流入枝番ごと：中心→開始点 代表方向）
+            self.branch_rays = self._compute_branch_rays()
 
         # UI
         self._build_ui()
@@ -427,6 +492,106 @@ class BranchCheckWindow(QMainWindow):
                 "lon1": lon0,
                 "lat2": lat0 + dlat_deg,
                 "lon2": lon0 + dlon_deg,
+            })
+        return rays
+
+    def _load_point_data(self) -> None:
+        point_path = find_point_csv(self.csv_path)
+        if not point_path:
+            QMessageBox.warning(
+                self,
+                "基準枝なし",
+                "Point CSV が見つかりません。基準枝なしモードで起動します。",
+            )
+            return
+
+        self.point_csv_path = point_path
+        try:
+            self.point_df = read_csv_safely(str(point_path))
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Point CSV 読み込み失敗",
+                f"Point CSV の読み込みに失敗しました。\n{point_path}\n{exc}\n基準枝なしモードで起動します。",
+            )
+            self.point_df = None
+            return
+
+        center_lat = first_numeric_value(
+            self.point_df,
+            ["中心_緯度", "中心緯度", "lat", "緯度", "交差点中心_緯度"],
+        )
+        center_lon = first_numeric_value(
+            self.point_df,
+            ["中心_経度", "中心経度", "lon", "経度", "交差点中心_経度"],
+        )
+        if center_lat is not None and center_lon is not None:
+            self.center_lat = center_lat
+            self.center_lon = center_lon
+
+        self.branch_rays = self._compute_branch_rays_from_point()
+        if not self.branch_rays:
+            QMessageBox.warning(
+                self,
+                "基準枝なし",
+                "Point CSV から枝方向が取得できませんでした。基準枝なしモードで起動します。",
+            )
+
+    def _compute_branch_rays_from_point(self) -> List[Dict[str, Any]]:
+        if self.point_df is None:
+            return []
+
+        branch_col = find_column(self.point_df, ["枝番", "branch", "branch_no", "No", "番号"])
+        angle_col = find_column(self.point_df, ["角度", "方位角", "bearing", "azimuth", "F列", "angle_deg"])
+
+        dx_col = find_column(self.point_df, ["dx", "東西(m)", "東西", "x", "X"])
+        dy_col = find_column(self.point_df, ["dy", "南北(m)", "南北", "y", "Y"])
+
+        if angle_col is None and (dx_col is None or dy_col is None):
+            return []
+
+        rays = []
+        for idx, row in self.point_df.iterrows():
+            if branch_col:
+                label_val = row.get(branch_col, "")
+                label = str(label_val) if not pd.isna(label_val) else str(idx + 1)
+            else:
+                label = str(idx + 1)
+
+            dx = None
+            dy = None
+            if angle_col:
+                ang_val = pd.to_numeric(row.get(angle_col), errors="coerce")
+                if pd.isna(ang_val):
+                    continue
+                angle_deg = float(ang_val)
+                if not self._angle_zero_east_ccw:
+                    angle_deg = (90.0 - angle_deg) % 360.0
+                rad = math.radians(angle_deg)
+                dx = math.cos(rad) * 120.0
+                dy = math.sin(rad) * 120.0
+            else:
+                dx_val = pd.to_numeric(row.get(dx_col), errors="coerce")
+                dy_val = pd.to_numeric(row.get(dy_col), errors="coerce")
+                if pd.isna(dx_val) or pd.isna(dy_val):
+                    continue
+                norm = math.hypot(float(dx_val), float(dy_val))
+                if norm == 0:
+                    continue
+                dx = float(dx_val) / norm * 120.0
+                dy = float(dy_val) / norm * 120.0
+
+            if dx is None or dy is None:
+                continue
+
+            dlat_deg, dlon_deg = meters_to_deg(self.center_lat, dx, dy)
+            rays.append({
+                "label": label,
+                "lat1": self.center_lat,
+                "lon1": self.center_lon,
+                "lat2": self.center_lat + dlat_deg,
+                "lon2": self.center_lon + dlon_deg,
+                "source": "point",
             })
         return rays
 
