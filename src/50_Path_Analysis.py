@@ -33,8 +33,8 @@ DIR_MATCH_MIN_COS = 0.80
 # Heatmap display settings (palette 10 steps)
 # =========================
 
-# vmax を「最大値」ではなく「上位パーセンタイル」で決める（外れ値があるときの白飛び防止）
-HEATMAP_VMAX_PERCENTILE = 99.0
+# vmax は常に 100% 固定
+HEATMAP_VMAX = 100
 
 # 10段階パレット（低→高）
 # 見やすさ重視：青→緑→黄→橙→赤（10色）
@@ -43,12 +43,8 @@ HEATMAP_PALETTE_10 = [
     "#f9d057", "#f29e2e", "#e76818", "#d7191c", "#8c0d0d",
 ]
 
-# ガンマ（値の分布を上側に寄せたい時に効かせる。0.8～1.2推奨）
-HEATMAP_GAMMA = 1.0
-
-# 透過（背景地図を見せたいので控えめ）
-HEATMAP_MIN_OPACITY = 0.18
-HEATMAP_MAX_OPACITY = 0.55
+# 透過（背景地図を見せたいので一律）
+HEATMAP_OPACITY = 0.8
 
 # =========================
 # Arrow UI
@@ -59,10 +55,8 @@ ARROW_LINE_WEIGHT = 6
 ARROW_HEAD_RADIUS_PX = 18
 ARROW_HEAD_BACKOFF_M = 10.0
 
-# ラベルは矢印の中央
-ARROW_LABEL_ALONG_RATIO = 0.50
-ARROW_LABEL_SIZE_PX = 44
-ARROW_LABEL_BORDER_PX = 3
+# ラベルは矢印から少し離して表示
+ARROW_LABEL_OFFSET_M = 18.0
 ARROW_LABEL_FONT_REM = 2.6
 
 # 中心点の強調
@@ -137,13 +131,27 @@ def xy_to_lonlat(x: float | np.ndarray, y: float | np.ndarray, lon0: float, lat0
     return lon, lat
 
 
-def _compute_vmax(matrix: np.ndarray) -> int:
-    """上位パーセンタイルで vmax を決める（外れ値対策）。"""
-    vals = matrix[matrix > 0]
-    if vals.size == 0:
-        return 0
-    vmax = int(np.percentile(vals, HEATMAP_VMAX_PERCENTILE))
-    return max(1, vmax)
+def _compute_vmax(_matrix: np.ndarray) -> int:
+    """vmax は常に固定（100%）とする。"""
+    return HEATMAP_VMAX
+
+
+def _compute_grid_origin(center_m: float, half_side_m: float) -> float:
+    """
+    交差点中心がセル中心になるように、グリッド原点を平行移動して返す。
+    戻り値は「解析範囲の左下」に近い値（half_side基準でセル単位に調整）。
+    """
+    base = center_m - CELL_SIZE_M / 2.0 - round((center_m - CELL_SIZE_M / 2.0) / CELL_SIZE_M) * CELL_SIZE_M
+    shift_cells = math.floor((-half_side_m - base) / CELL_SIZE_M)
+    return base + shift_cells * CELL_SIZE_M
+
+
+def _grid_bounds(grid_x0: float, grid_y0: float) -> tuple[float, float, float, float]:
+    x_min = grid_x0
+    x_max = grid_x0 + GRID_SIZE * CELL_SIZE_M
+    y_min = grid_y0
+    y_max = grid_y0 + GRID_SIZE * CELL_SIZE_M
+    return x_min, x_max, y_min, y_max
 
 
 def value_to_style(value: int, vmax: int) -> tuple[str, float] | None:
@@ -155,34 +163,21 @@ def value_to_style(value: int, vmax: int) -> tuple[str, float] | None:
     if vmax <= 0 or value <= 0:
         return None
 
-    x = min(1.0, float(value) / float(vmax))
-    t = x ** HEATMAP_GAMMA  # 分布補正
-
-    # 10段階（0..9）
     n = len(HEATMAP_PALETTE_10)
-    idx = int(min(n - 1, max(0, math.floor(t * n))))
+    idx = int(min(n - 1, max(0, int(value // 10))))
+    if value >= 100:
+        idx = n - 1
     color = HEATMAP_PALETTE_10[idx]
-
-    # 透過も段階に応じて少しだけ変える（見やすさ）
-    # 低い所も存在が分かる程度に、ただし背景は見える
-    opacity = HEATMAP_MIN_OPACITY + (idx / (n - 1)) * (HEATMAP_MAX_OPACITY - HEATMAP_MIN_OPACITY)
-    return color, float(opacity)
+    return color, float(HEATMAP_OPACITY)
 
 
-def _add_palette_legend(m: folium.Map, vmax: int, title: str = "凡例（割合%）") -> None:
-    if vmax <= 0:
-        return
-
+def _add_palette_legend(m: folium.Map, title: str = "凡例（割合%）") -> None:
     n = len(HEATMAP_PALETTE_10)
-    # 0..vmax を 10区間に分割（整数に丸め）
-    edges = [int(round(vmax * i / n)) for i in range(n + 1)]
-
     rows = []
     for i in range(n):
         c = HEATMAP_PALETTE_10[i]
-        a = edges[i]
-        b = edges[i + 1]
-        # 表示は 1～vmax を想定。0%が混じる場合でも問題なし
+        a = i * 10
+        b = (i + 1) * 10
         rows.append(
             f"<div style='display:flex;align-items:center;margin:2px 0;'>"
             f"<div style='width:18px;height:12px;background:{c};opacity:0.95;"
@@ -205,9 +200,6 @@ def _add_palette_legend(m: folium.Map, vmax: int, title: str = "凡例（割合%
   ">
   <div style="font-weight:bold;font-size:13px;margin-bottom:6px;">{title}</div>
   {''.join(rows)}
-  <div style="font-size:11px;color:#333;margin-top:6px;">
-    ※上限はvmax={vmax}%（上位{HEATMAP_VMAX_PERCENTILE:.0f}パーセンタイル）
-  </div>
 </div>
 """
     m.get_root().html.add_child(folium.Element(html))
@@ -256,18 +248,17 @@ def add_direction_arrow(
         weight=1,
     ).add_to(m)
 
-    # ラベル＝矢印の中央（start↔end の中点）
+    # ラベル＝矢印から少し離す（法線方向へオフセット）
     mx = (sx + ex) * 0.5
     my = (sy + ey) * 0.5
-    lon_mid, lat_mid = xy_to_lonlat(mx, my, lon0, lat0)
+    nx, ny = -uy, ux
+    lx = mx + ARROW_LABEL_OFFSET_M * nx
+    ly = my + ARROW_LABEL_OFFSET_M * ny
+    lon_mid, lat_mid = xy_to_lonlat(lx, ly, lon0, lat0)
 
     label_html = (
-        f"<div class='dir-label dir-label-{label}' style='"
-        "display:flex;align-items:center;justify-content:center;"
-        f"width:{ARROW_LABEL_SIZE_PX}px;height:{ARROW_LABEL_SIZE_PX}px;"
-        "border-radius:50%;"
-        f"border:{ARROW_LABEL_BORDER_PX}px solid {color};"
-        "background-color:white;"
+        "<div class='dir-label' style='"
+        "background:transparent;border:none;padding:0;margin:0;"
         "font-weight:bold;"
         f"color:{color};"
         f"font-size:{ARROW_LABEL_FONT_REM}rem;"
@@ -285,6 +276,8 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
                     filename: str, title: str,
                     dirA_deg: float, dirB_deg: float,
                     output_dir: Path,
+                    grid_x0: float, grid_y0: float,
+                    label_text: str,
                     show_A: bool = True, show_B: bool = True) -> None:
     """
     GRID_SIZE×GRID_SIZE のマトリクスを 25m メッシュの矩形として描画し、
@@ -292,7 +285,7 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
     """
     m = folium.Map(location=[lat0, lon0], zoom_start=16, tiles="OpenStreetMap")
     vmax = _compute_vmax(matrix)
-    _add_palette_legend(m, vmax, title="凡例（メッシュ内の割合%）")
+    _add_palette_legend(m, title="凡例（メッシュ内の割合%）")
 
     # メッシュ矩形
     for iy in range(GRID_SIZE):
@@ -301,10 +294,10 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
             if val <= 0:
                 continue
 
-            x_min = ix * CELL_SIZE_M - HALF_SIDE_M
-            x_max = (ix + 1) * CELL_SIZE_M - HALF_SIDE_M
-            y_min = iy * CELL_SIZE_M - HALF_SIDE_M
-            y_max = (iy + 1) * CELL_SIZE_M - HALF_SIDE_M
+            x_min = grid_x0 + ix * CELL_SIZE_M
+            x_max = x_min + CELL_SIZE_M
+            y_min = grid_y0 + iy * CELL_SIZE_M
+            y_max = y_min + CELL_SIZE_M
 
             lon_min, lat_min = xy_to_lonlat(x_min, y_min, lon0, lat0)
             lon_max, lat_max = xy_to_lonlat(x_max, y_max, lon0, lat0)
@@ -324,9 +317,9 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
 
     # A/B 方向矢印（必要なものだけ表示）
     if show_A:
-        add_direction_arrow(m, lon0, lat0, dirA_deg, "red", "A")
+        add_direction_arrow(m, lon0, lat0, dirA_deg, "red", label_text)
     if show_B:
-        add_direction_arrow(m, lon0, lat0, dirB_deg, "blue", "B")
+        add_direction_arrow(m, lon0, lat0, dirB_deg, "blue", label_text)
 
     # 中心点の強調（矢印の最後に重ねる）
     if show_A and not show_B:
@@ -434,23 +427,26 @@ def _sample_segment(p1: np.ndarray, p2: np.ndarray, step: float) -> Iterable[np.
     return (p1 + t * (p2 - p1) for t in ts)
 
 
-def _record_samples(points: np.ndarray, visited: Set[Tuple[int, int]]):
+def _record_samples(points: np.ndarray, visited: Set[Tuple[int, int]],
+                    grid_x0: float, grid_y0: float):
+    x_min, x_max, y_min, y_max = _grid_bounds(grid_x0, grid_y0)
     for i in range(len(points) - 1):
         p1 = points[i]
         p2 = points[i + 1]
         for sample in _sample_segment(p1, p2, SAMPLE_STEP_M):
             x, y = float(sample[0]), float(sample[1])
-            if not (-HALF_SIDE_M <= x <= HALF_SIDE_M and -HALF_SIDE_M <= y <= HALF_SIDE_M):
+            if not (x_min <= x < x_max and y_min <= y < y_max):
                 continue
-            ix = int((x + HALF_SIDE_M) // CELL_SIZE_M)
-            iy = int((y + HALF_SIDE_M) // CELL_SIZE_M)
+            ix = int(math.floor((x - grid_x0) / CELL_SIZE_M))
+            iy = int(math.floor((y - grid_y0) / CELL_SIZE_M))
             if 0 <= ix < GRID_SIZE and 0 <= iy < GRID_SIZE:
                 visited.add((ix, iy))
 
 
 def accumulate_mesh(points_xy: np.ndarray, cross_info: Dict[str, float],
                     group_direction: str,
-                    count_arrays: Dict[str, np.ndarray]):
+                    count_arrays: Dict[str, np.ndarray],
+                    grid_x0: float, grid_y0: float):
     idx = int(cross_info["index"])
     cross_x, cross_y = cross_info["point"]
     cross_point = np.array([[cross_x, cross_y]], dtype=float)
@@ -476,9 +472,9 @@ def accumulate_mesh(points_xy: np.ndarray, cross_info: Dict[str, float],
         out_points = np.vstack([cross_point, out_tail])
 
     if len(in_points) >= 2:
-        _record_samples(in_points, visited_in)
+        _record_samples(in_points, visited_in, grid_x0, grid_y0)
     if len(out_points) >= 2:
-        _record_samples(out_points, visited_out)
+        _record_samples(out_points, visited_out, grid_x0, grid_y0)
 
     if group_direction == "A":
         target_in = count_arrays["A_in"]
@@ -687,6 +683,8 @@ def run_single_crossroad(
 
     lon0, lat0, dirA_deg, dirB_deg = _read_point_file(point_csv_path)
     stem = point_csv_path.stem
+    grid_x0 = _compute_grid_origin(0.0, HALF_SIDE_M)
+    grid_y0 = _compute_grid_origin(0.0, HALF_SIDE_M)
 
     # A方向 / B方向の基準ベクトル（outside→center の方位角。北=0度, 東=90度）
     # ※交差点ファイルの dir_deg は「中心が終点（外側→中心）」の向きとして扱う
@@ -785,7 +783,7 @@ def run_single_crossroad(
         else:
             inB_to_outB += 1
 
-        accumulate_mesh(points_xy, cross_info, in_direction, count_arrays)
+        accumulate_mesh(points_xy, cross_info, in_direction, count_arrays, grid_x0, grid_y0)
 
         progress = idx / total_files * 100 if total_files else 100.0
         msg = (
@@ -845,6 +843,9 @@ def run_single_crossroad(
         dirA_deg,
         dirB_deg,
         out_dir,
+        grid_x0,
+        grid_y0,
+        "流入",
         show_A=True,
         show_B=False,
     )
@@ -857,6 +858,9 @@ def run_single_crossroad(
         dirA_deg,
         dirB_deg,
         out_dir,
+        grid_x0,
+        grid_y0,
+        "流出",
         show_A=True,
         show_B=False,
     )
@@ -869,6 +873,9 @@ def run_single_crossroad(
         dirA_deg,
         dirB_deg,
         out_dir,
+        grid_x0,
+        grid_y0,
+        "流入",
         show_A=False,
         show_B=True,
     )
@@ -881,6 +888,9 @@ def run_single_crossroad(
         dirA_deg,
         dirB_deg,
         out_dir,
+        grid_x0,
+        grid_y0,
+        "流出",
         show_A=False,
         show_B=True,
     )
@@ -950,7 +960,7 @@ def run_single_crossroad(
     log_lines.append("A/B判定は『中心にどちら側から到達したか（流入側）』で行う。")
     log_lines.append("in=中心へ向かう経路（流入）、out=中心を通過した後の経路（流出）。")
     log_lines.append("ヒートマップのA_out/B_outは流入側で束ねる（inA起点の流出はA_out）。")
-    log_lines.append("矢印は外側→中心の向きで描画し、ラベルは矢印中央に置く。")
+    log_lines.append("矢印は外側→中心の向きで描画し、ラベルは矢印から少し離す。")
 
     write_log(out_dir / "LOG.txt", log_lines)
     print("\n".join(log_lines[-12:]))  # 末尾の要約だけ標準出力に出す（冗長防止）
@@ -1007,6 +1017,7 @@ def select_project_dir_with_dialog(initial_dir: Path | None = None) -> Path | No
             root.attributes("-topmost", True)
         except tk.TclError:
             pass
+        messagebox.showinfo("プロジェクトフォルダの選択", "プロジェクトフォルダを指定してください。")
         selected = filedialog.askdirectory(initialdir=str(initial_dir) if initial_dir else None)
     finally:
         root.destroy()
@@ -1055,7 +1066,11 @@ def prompt_project_dir_loop(initial_dir: Path | None = None) -> Path | None:
             messagebox.showwarning(
                 "プロジェクトフォルダの確認",
                 "これはプロジェクトフォルダではありません。\n\n"
-                "必須フォルダが見つかりません：\n"
+                "必須フォルダ:\n"
+                "- 11_交差点(Point)データ\n"
+                "- 20_第２スクリーニング\n"
+                "- 50_経路分析\n\n"
+                "不足・不備:\n"
                 f"{missing_lines}\n\n"
                 "正しいプロジェクトフォルダを選択してください。",
             )
