@@ -141,12 +141,18 @@ LEAFLET_HTML = r"""
       font-family: sans-serif;
       white-space: nowrap;
     }
+    .branch-label.point {
+      border: 2px solid rgba(255,0,0,0.7);
+      color: #b00000;
+      font-weight: 700;
+    }
     .trip-label {
       background: rgba(255,255,255,0.90);
       border: 1px solid rgba(0,0,0,0.25);
       border-radius: 10px;
-      padding: 2px 6px;
-      font-size: 12px;
+      padding: 3px 7px;
+      font-size: 15px;
+      font-weight: 700;
       font-family: sans-serif;
       white-space: nowrap;
     }
@@ -199,11 +205,14 @@ LEAFLET_HTML = r"""
     rays.forEach(r => {
       branchPoints.push([r.lat1, r.lon1]);
       branchPoints.push([r.lat2, r.lon2]);
-      const line = L.polyline([[r.lat1, r.lon1], [r.lat2, r.lon2]], {dashArray: '6 6'}).addTo(branchLayer);
-      const labelLat = r.lat1 + (r.lat2 - r.lat1) * 0.75;
-      const labelLon = r.lon1 + (r.lon2 - r.lon1) * 0.75;
+      const isPoint = (r.source && r.source === 'point');
+      const style = isPoint ? {color: 'red', dashArray: '6 6'} : {dashArray: '6 6'};
+      const line = L.polyline([[r.lat1, r.lon1], [r.lat2, r.lon2]], style).addTo(branchLayer);
+      const t = 1.12;
+      const labelLat = r.lat1 + (r.lat2 - r.lat1) * t;
+      const labelLon = r.lon1 + (r.lon2 - r.lon1) * t;
       L.marker([labelLat, labelLon], {
-        icon: L.divIcon({className: 'branch-label', html: `枝${r.label}`})
+        icon: L.divIcon({className: isPoint ? 'branch-label point' : 'branch-label', html: `枝${r.label}`})
       }).addTo(branchLayer);
     });
   }
@@ -244,11 +253,15 @@ LEAFLET_HTML = r"""
 
     // labels
     L.marker([tr.start.lat, tr.start.lon], {
-      icon: L.divIcon({className: 'trip-label', html: `IN:枝${tr.in_branch} (Δ${tr.in_diff}°)`})
+      icon: L.divIcon({className: 'trip-label', html: `IN:枝${tr.in_branch} (Δ${tr.in_diff}°)`}),
+      riseOnHover: true,
+      zIndexOffset: 1000
     }).addTo(tripLayer);
 
     L.marker([tr.end.lat, tr.end.lon], {
-      icon: L.divIcon({className: 'trip-label', html: `OUT:枝${tr.out_branch} (Δ${tr.out_diff}°)`})
+      icon: L.divIcon({className: 'trip-label', html: `OUT:枝${tr.out_branch} (Δ${tr.out_diff}°)`}),
+      riseOnHover: true,
+      zIndexOffset: 1000
     }).addTo(tripLayer);
 
     // animation: move marker along start->end (simple interpolation)
