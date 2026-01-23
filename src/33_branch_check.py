@@ -450,9 +450,6 @@ class BranchCheckWindow(QMainWindow):
         # UI
         self._build_ui()
 
-        # Map init
-        self._init_map()
-
         # 初期選択
         if len(self.df) > 0:
             self.table.selectRow(0)
@@ -658,6 +655,7 @@ class BranchCheckWindow(QMainWindow):
 
         self.web = QWebEngineView()
         self.web.setHtml(LEAFLET_HTML)
+        self.web.loadFinished.connect(self._on_web_loaded)
         right_layout.addWidget(self.web, 7)
 
         detail = QWidget()
@@ -683,6 +681,12 @@ class BranchCheckWindow(QMainWindow):
         layout.addWidget(splitter)
 
         self._update_count_label()
+
+    def _on_web_loaded(self, ok: bool) -> None:
+        if not ok:
+            QMessageBox.warning(self, "地図の読み込み失敗", "地図の読み込みに失敗しました。")
+            return
+        self._init_map()
 
     def _ensure_speed_column(self) -> None:
         speed_col = "交差点通過速度(km/h)"
@@ -752,6 +756,10 @@ class BranchCheckWindow(QMainWindow):
         idx = self._selected_row_index()
         if idx is None or idx < 0 or idx >= len(self.df):
             return
+
+        self.web.page().runJavaScript(
+            f"window._branchCheck.setBranchRays({json.dumps(self.branch_rays)});"
+        )
 
         row = self.df.iloc[idx]
 
