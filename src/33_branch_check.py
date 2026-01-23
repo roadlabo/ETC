@@ -56,7 +56,13 @@ def meters_to_deg(lat: float, dx_m: float, dy_m: float) -> Tuple[float, float]:
 def ensure_columns(df: pd.DataFrame, cols: List[str]) -> None:
     missing = [c for c in cols if c not in df.columns]
     if missing:
-        raise ValueError(f"必須列が見つかりません: {missing}\nCSV列一覧: {list(df.columns)}")
+        message_lines = [
+            f"必須列が見つかりません: {missing}",
+            f"CSV列一覧: {list(df.columns)}",
+            "入力は *_performance.csv を想定しています。",
+            "第2スクリーニング工程の出力を指定してください。",
+        ]
+        raise ValueError("\n".join(message_lines))
 
 
 # -----------------------------
@@ -273,7 +279,6 @@ REQUIRED_COLS = [
     "角度算出方式",
     "計測距離(m)",
     "所要時間(s)",
-    "交差点通過速度(km/h)",
     "計測開始_経度(補間)",
     "計測開始_緯度(補間)",
     "計測終了_経度(補間)",
@@ -291,6 +296,8 @@ DISPLAY_COLS_IN_TABLE = [
     "トリップID" if True else None,
     "自動車の種別",
     "用途",
+    "所要時間算出可否",
+    "遅れ時間(s)",
     "流入枝番",
     "流出枝番",
     "流入角度差(deg)",
@@ -306,14 +313,18 @@ DETAIL_FIELDS = [
     ("曜日", "曜日"),
     ("自動車の種別", "自動車の種別"),
     ("用途", "用途"),
+    ("所要時間(s)", "所要時間(s)"),
+    ("閑散時所要時間(s)", "閑散時所要時間(s)"),
+    ("遅れ時間(s)", "遅れ時間(s)"),
+    ("所要時間算出可否", "所要時間算出可否"),
+    ("所要時間算出不可理由", "所要時間算出不可理由"),
     ("流入枝番", "流入枝番"),
     ("流出枝番", "流出枝番"),
     ("流入角度差(deg)", "流入角度差(deg)"),
     ("流出角度差(deg)", "流出角度差(deg)"),
     ("角度算出方式", "角度算出方式"),
     ("計測距離(m)", "計測距離(m)"),
-    ("所要時間(s)", "所要時間(s)"),
-    ("交差点通過速度(km/h)", "交差点通過速度(km/h)"),
+    ("交差点通過速度(km/h) [参考]", "交差点通過速度(km/h)"),
 ]
 
 
@@ -329,11 +340,30 @@ class BranchCheckWindow(QMainWindow):
         ensure_columns(self.df, REQUIRED_COLS)
 
         # 数値列をなるべく数値化
-        for c in ["流入角度差(deg)", "流出角度差(deg)", "計測距離(m)", "所要時間(s)", "交差点通過速度(km/h)",
-                  "計測開始_経度(補間)", "計測開始_緯度(補間)", "計測終了_経度(補間)", "計測終了_緯度(補間)",
-                  "交差点中心_経度", "交差点中心_緯度", "算出中心_経度", "算出中心_緯度",
-                  "中心最近接距離(m)"]:
-            self.df[c] = pd.to_numeric(self.df[c], errors="coerce")
+        numeric_cols = [
+            "流入角度差(deg)",
+            "流出角度差(deg)",
+            "計測距離(m)",
+            "所要時間(s)",
+            "交差点通過速度(km/h)",
+            "閑散時所要時間(s)",
+            "遅れ時間(s)",
+            "計測開始_経度(補間)",
+            "計測開始_緯度(補間)",
+            "計測終了_経度(補間)",
+            "計測終了_緯度(補間)",
+            "交差点中心_経度",
+            "交差点中心_緯度",
+            "算出中心_経度",
+            "算出中心_緯度",
+            "中心最近接距離(m)",
+        ]
+        for c in numeric_cols:
+            if c in self.df.columns:
+                self.df[c] = pd.to_numeric(self.df[c], errors="coerce")
+
+        self._ensure_speed_column()
+        self._sort_trips()
 
         self.df = self.df.dropna(subset=[
             "計測開始_経度(補間)", "計測開始_緯度(補間)", "計測終了_経度(補間)", "計測終了_緯度(補間)",
@@ -478,6 +508,48 @@ class BranchCheckWindow(QMainWindow):
 
         self._update_count_label()
 
+    def _ensure_speed_column(self) -> None:
+        speed_col = "交差点通過速度(km/h)"
+        if speed_col in self.df.columns:
+            return
+
+        self.df[speed_col] = np.nan
+
+        if "計測距離(m)" not in self.df.columns or "所要時間(s)" not in self.df.columns:
+            return
+
+        dist = pd.to_numeric(self.df["計測距離(m)"], errors="coerce")
+        duration = pd.to_numeric(self.df["所要時間(s)"], errors="coerce")
+        valid = (dist > 0) & (duration > 0)
+
+        if "所要時間算出可否" in self.df.columns:
+            valid = valid & (self.df["所要時間算出可否"] == "OK")
+
+        speed = dist / duration * 3.6
+        speed = speed.where(valid, np.nan)
+        self.df.loc[:, speed_col] = speed
+
+    def _sort_trips(self) -> None:
+        ok_col = "所要時間算出可否"
+        delay_col = "遅れ時間(s)"
+
+        self.df["_ok_sort"] = 0
+        if ok_col in self.df.columns:
+            self.df["_ok_sort"] = (self.df[ok_col] == "OK").astype(int)
+
+        if delay_col in self.df.columns:
+            delay_vals = pd.to_numeric(self.df[delay_col], errors="coerce")
+            delay_vals = delay_vals.fillna(-np.inf)
+        else:
+            delay_vals = pd.Series([-np.inf] * len(self.df), index=self.df.index)
+        self.df["_delay_sort"] = delay_vals
+
+        self.df = self.df.sort_values(
+            by=["_ok_sort", "_delay_sort", "運行日"],
+            ascending=[False, False, True],
+            kind="mergesort",
+        ).drop(columns=["_ok_sort", "_delay_sort"])
+
     def _update_count_label(self):
         self.lbl_count.setText(f"{len(self.df)} trips")
 
@@ -566,7 +638,7 @@ def main():
     if not csv_path:
         csv_path, _ = QFileDialog.getOpenFileName(
             None,
-            "03higashiitinomiya_performance.csv を選択",
+            "交差点パフォーマンスCSV（*_performance.csv）を選択",
             "",
             "CSV Files (*.csv);;All Files (*)",
         )
