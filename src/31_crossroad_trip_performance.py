@@ -68,11 +68,11 @@ EARTH_RADIUS_M = 6_371_000.0
 # ============================================================
 # 枝判定（流入/流出）角度の安定化設定
 #  - 中心点の前後「2点」から走行方向を作り、枝(dir_deg)へマッチングする
-#  - in:  (center-60m -> center-10m) の走行方向を推定し、180度反転して "center->branch" に合わせる
+#  - in:  (center-30m -> center-5m) の走行方向を推定し、180度反転して "center->branch" に合わせる
 #  - out: (center+10m -> center+60m) の走行方向を推定し、そのまま "center->branch" として使う
 # ============================================================
-DIR_IN_FAR_M = 60.0
-DIR_IN_NEAR_M = 10.0
+DIR_IN_FAR_M = 30.0
+DIR_IN_NEAR_M = 5.0
 DIR_OUT_NEAR_M = 10.0
 DIR_OUT_FAR_M = 60.0
 BRANCH_MAX_ANGLE_DIFF_DEG = 35.0  # これを超えたら枝番は未確定（空欄）
