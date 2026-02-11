@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QUrl
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -127,32 +128,32 @@ LEAFLET_HTML = r"""
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Branch Check</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="leaflet/leaflet.css"/>
+  <script src="leaflet/leaflet.js"></script>
   <style>
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
     .branch-label {
-      background: rgba(255,255,255,0.85);
-      border: 1px solid rgba(0,0,0,0.25);
-      border-radius: 10px;
-      padding: 2px 6px;
-      font-size: 14px;
+      background: #fff;
+      border: 2px solid #d00000;
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 16px;
       font-family: sans-serif;
+      font-weight: 700;
       white-space: nowrap;
     }
     .branch-label.point {
-      border: 2px solid rgba(255,0,0,0.7);
-      color: #b00000;
-      font-weight: 700;
+      color: #a00000;
     }
     .trip-label {
-      background: rgba(255,255,255,0.90);
-      border: 1px solid rgba(0,0,0,0.25);
-      border-radius: 10px;
-      padding: 3px 7px;
-      font-size: 15px;
+      background: #fff;
+      border: 2px solid #d00000;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 16px;
       font-weight: 700;
+      color: #a00000;
       font-family: sans-serif;
       white-space: nowrap;
     }
@@ -208,11 +209,12 @@ LEAFLET_HTML = r"""
       const isPoint = (r.source && r.source === 'point');
       const style = isPoint ? {color: 'red', dashArray: '6 6'} : {dashArray: '6 6'};
       const line = L.polyline([[r.lat1, r.lon1], [r.lat2, r.lon2]], style).addTo(branchLayer);
-      const t = 1.12;
+      const t = 0.25;
       const labelLat = r.lat1 + (r.lat2 - r.lat1) * t;
       const labelLon = r.lon1 + (r.lon2 - r.lon1) * t;
+      const labelText = Number.isFinite(Number(r.label)) ? `${parseInt(r.label, 10)}` : `${r.label}`;
       L.marker([labelLat, labelLon], {
-        icon: L.divIcon({className: isPoint ? 'branch-label point' : 'branch-label', html: `枝${r.label}`})
+        icon: L.divIcon({className: isPoint ? 'branch-label point' : 'branch-label', html: `${labelText}`})
       }).addTo(branchLayer);
     });
   }
@@ -230,7 +232,7 @@ LEAFLET_HTML = r"""
 
   function showTrip(tr){
     // tr: {center_spec:{lat,lon}, center_calc:{lat,lon}, start:{lat,lon}, end:{lat,lon}, ...}
-    if (!map) initMap(tr.center_spec.lat, tr.center_spec.lon, 19);
+    if (!map) initMap(tr.center_spec.lat, tr.center_spec.lon, 18);
 
     clearLayer(tripLayer);
     stopAnim();
@@ -264,18 +266,43 @@ LEAFLET_HTML = r"""
       });
     }
 
-    // labels
-    L.marker([tr.start.lat, tr.start.lon], {
-      icon: L.divIcon({className: 'trip-label', html: `IN:枝${tr.in_branch} (Δ${tr.in_diff}°)`}),
-      riseOnHover: true,
-      zIndexOffset: 1000
-    }).addTo(tripLayer);
+    const hasCenter = tr.center_calc && Number.isFinite(tr.center_calc.lat) && Number.isFinite(tr.center_calc.lon);
+    const destPoint = (origin, bearingDeg, distM) => {
+      const R = 6371000.0;
+      const toRad = (d) => d * Math.PI / 180.0;
+      const toDeg = (r) => r * 180.0 / Math.PI;
+      const br = toRad(bearingDeg);
+      const lat1 = toRad(origin.lat);
+      const lon1 = toRad(origin.lon);
+      const dr = distM / R;
+      const lat2 = Math.asin(Math.sin(lat1) * Math.cos(dr) + Math.cos(lat1) * Math.sin(dr) * Math.cos(br));
+      const lon2 = lon1 + Math.atan2(Math.sin(br) * Math.sin(dr) * Math.cos(lat1), Math.cos(dr) - Math.sin(lat1) * Math.sin(lat2));
+      return {lat: toDeg(lat2), lon: toDeg(lon2)};
+    };
+    const makeRayLabel = (prefix, branch, delta) => {
+      const branchText = (branch ?? '') === '' ? '?' : branch;
+      if (Number.isFinite(delta)) {
+        return `${prefix}:枝${branchText}(Δ${Math.round(delta)}°)`;
+      }
+      return `${prefix}:枝${branchText}`;
+    };
 
-    L.marker([tr.end.lat, tr.end.lon], {
-      icon: L.divIcon({className: 'trip-label', html: `OUT:枝${tr.out_branch} (Δ${tr.out_diff}°)`}),
-      riseOnHover: true,
-      zIndexOffset: 1000
-    }).addTo(tripLayer);
+    if (hasCenter && Number.isFinite(tr.in_angle_deg)) {
+      const pin = destPoint(tr.center_calc, tr.in_angle_deg, 20.0);
+      L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [pin.lat, pin.lon]], {color:'red', weight:4}).addTo(tripLayer);
+      L.marker([pin.lat, pin.lon], {
+        icon: L.divIcon({className: 'trip-label', html: makeRayLabel('IN', tr.in_branch, tr.in_delta_deg)}),
+        zIndexOffset: 1100,
+      }).addTo(tripLayer);
+    }
+    if (hasCenter && Number.isFinite(tr.out_angle_deg)) {
+      const pout = destPoint(tr.center_calc, tr.out_angle_deg, 20.0);
+      L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [pout.lat, pout.lon]], {color:'red', weight:4}).addTo(tripLayer);
+      L.marker([pout.lat, pout.lon], {
+        icon: L.divIcon({className: 'trip-label', html: makeRayLabel('OUT', tr.out_branch, tr.out_delta_deg)}),
+        zIndexOffset: 1100,
+      }).addTo(tripLayer);
+    }
 
     // animation: move marker along start->end (simple interpolation)
     const steps = 80;
@@ -319,23 +346,8 @@ LEAFLET_HTML = r"""
       animMarker.setLatLng([lat, lon]);
     }, 40);
 
-    const points = [
-      ...branchPoints,
-      [tr.start.lat, tr.start.lon],
-      [tr.center_calc.lat, tr.center_calc.lon],
-      [tr.end.lat, tr.end.lon],
-    ];
-    if (tr.raw_points && tr.raw_points.length > 0){
-      tr.raw_points.forEach(p => points.push([p.lat, p.lon]));
-    }
-    if (points.length >= 2){
-      const bounds = L.latLngBounds(points);
-      map.fitBounds(bounds, {padding:[30,30]});
-      map.once('zoomend', () => {
-        if (map.getZoom() > 19) map.setZoom(19);
-      });
-    } else if (points.length === 1) {
-      map.setView(points[0], 19);
+    if (hasCenter){
+      map.setView([tr.center_calc.lat, tr.center_calc.lon], 18);
     }
   }
 
@@ -390,7 +402,6 @@ DISPLAY_COLS_IN_TABLE = [
     "流出枝番",
     "流入角度差(deg)",
     "流出角度差(deg)",
-    "交差点通過速度(km/h)",
 ]
 DISPLAY_COLS_IN_TABLE = [c for c in DISPLAY_COLS_IN_TABLE if c is not None]
 
@@ -412,7 +423,6 @@ DETAIL_FIELDS = [
     ("流出角度差(deg)", "流出角度差(deg)"),
     ("角度算出方式", "角度算出方式"),
     ("計測距離(m)", "計測距離(m)"),
-    ("交差点通過速度(km/h) [参考]", "交差点通過速度(km/h)"),
     ("RAW中央GPS時刻", "【中央】GPS時刻"),
 ]
 
@@ -431,6 +441,8 @@ class BranchCheckWindow(QMainWindow):
 
         # 数値列をなるべく数値化
         numeric_cols = [
+            "流入角度deg",
+            "流出角度deg",
             "流入角度差(deg)",
             "流出角度差(deg)",
             "計測距離(m)",
@@ -684,7 +696,7 @@ class BranchCheckWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
 
         self.web = QWebEngineView()
-        self.web.setHtml(LEAFLET_HTML)
+        self.web.setHtml(LEAFLET_HTML, QUrl.fromLocalFile(str((Path(__file__).resolve().parent)) + "/"))
         self.web.loadFinished.connect(self._on_web_loaded)
         right_layout.addWidget(self.web, 7)
 
@@ -768,13 +780,54 @@ class BranchCheckWindow(QMainWindow):
         payload = {
             "lat": self.center_lat,
             "lon": self.center_lon,
-            "zoom": 19
+            "zoom": 18
         }
         rays = self.branch_rays
         js1 = f"window._branchCheck.initMap({payload['lat']}, {payload['lon']}, {payload['zoom']});"
         js2 = f"window._branchCheck.setBranchRays({json.dumps(rays)});"
-        self.web.page().runJavaScript(js1)
-        self.web.page().runJavaScript(js2)
+        self._run_branch_js(js1)
+        self._run_branch_js(js2)
+
+    def _run_branch_js(self, js_code: str, retry_ms: int = 120) -> None:
+        wrapped = (
+            "(function(){"
+            "if (window._branchCheck) {"
+            f"{js_code}"
+            "return true;"
+            "}"
+            "return false;"
+            "})();"
+        )
+
+        def _callback(ok):
+            if ok:
+                return
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(retry_ms, lambda: self.web.page().runJavaScript(wrapped))
+
+        self.web.page().runJavaScript(wrapped, _callback)
+
+    @staticmethod
+    def _format_branch(value: Any) -> str:
+        num = pd.to_numeric(value, errors="coerce")
+        if pd.isna(num):
+            text = "" if value is None else str(value).strip()
+            return "" if text in {"", "nan", "None"} else text
+        return str(int(num))
+
+    @staticmethod
+    def _format_day(value: Any) -> str:
+        text = "" if value is None else str(value).strip()
+        if len(text) == 8 and text.isdigit():
+            return f"{text[:4]}/{text[4:6]}/{text[6:8]}"
+        return text
+
+    @staticmethod
+    def _format_timestamp14(value: Any) -> str:
+        text = "" if value is None else str(value).strip()
+        if len(text) == 14 and text.isdigit():
+            return f"{text[:4]}/{text[4:6]}/{text[6:8]} {text[8:10]}:{text[10:12]}:{text[12:14]}"
+        return text
 
     def _selected_row_index(self) -> Optional[int]:
         items = self.table.selectedItems()
@@ -787,7 +840,7 @@ class BranchCheckWindow(QMainWindow):
         if idx is None or idx < 0 or idx >= len(self.df):
             return
 
-        self.web.page().runJavaScript(
+        self._run_branch_js(
             f"window._branchCheck.setBranchRays({json.dumps(self.branch_rays)});"
         )
 
@@ -796,7 +849,14 @@ class BranchCheckWindow(QMainWindow):
         # details
         for _, key in DETAIL_FIELDS:
             v = row.get(key, "")
-            self.detail_labels[key].setText("" if pd.isna(v) else str(v))
+            text = "" if pd.isna(v) else str(v)
+            if key == "運行日":
+                text = self._format_day(v)
+            elif key == "【中央】GPS時刻":
+                text = self._format_timestamp14(v)
+            elif key in {"流入枝番", "流出枝番"}:
+                text = self._format_branch(v)
+            self.detail_labels[key].setText(text)
 
         # map payload
         raw_cols = [
@@ -823,6 +883,11 @@ class BranchCheckWindow(QMainWindow):
             except Exception:
                 continue
 
+        in_angle_deg = pd.to_numeric(row.get("流入角度deg"), errors="coerce") if "流入角度deg" in self.df.columns else np.nan
+        out_angle_deg = pd.to_numeric(row.get("流出角度deg"), errors="coerce") if "流出角度deg" in self.df.columns else np.nan
+        in_delta_deg = pd.to_numeric(row.get("流入角度差(deg)"), errors="coerce") if "流入角度差(deg)" in self.df.columns else np.nan
+        out_delta_deg = pd.to_numeric(row.get("流出角度差(deg)"), errors="coerce") if "流出角度差(deg)" in self.df.columns else np.nan
+
         tr = {
             "center_spec": {"lat": self.center_lat, "lon": self.center_lon},
             "center_calc": {
@@ -837,14 +902,16 @@ class BranchCheckWindow(QMainWindow):
                 "lat": float(row["計測終了_緯度(補間)"]),
                 "lon": float(row["計測終了_経度(補間)"]),
             },
-            "in_branch": str(row["流入枝番"]),
-            "out_branch": str(row["流出枝番"]),
-            "in_diff": ("" if pd.isna(row["流入角度差(deg)"]) else f"{float(row['流入角度差(deg)']):.1f}"),
-            "out_diff": ("" if pd.isna(row["流出角度差(deg)"]) else f"{float(row['流出角度差(deg)']):.1f}"),
+            "in_branch": self._format_branch(row.get("流入枝番")),
+            "out_branch": self._format_branch(row.get("流出枝番")),
+            "in_angle_deg": (None if pd.isna(in_angle_deg) else float(in_angle_deg)),
+            "out_angle_deg": (None if pd.isna(out_angle_deg) else float(out_angle_deg)),
+            "in_delta_deg": (None if pd.isna(in_delta_deg) else float(in_delta_deg)),
+            "out_delta_deg": (None if pd.isna(out_delta_deg) else float(out_delta_deg)),
             "raw_points": raw_points,
         }
         js = f"window._branchCheck.showTrip({json.dumps(tr)});"
-        self.web.page().runJavaScript(js)
+        self._run_branch_js(js)
 
         self.statusBar().showMessage(f"Selected: {idx+1}/{len(self.df)}")
 

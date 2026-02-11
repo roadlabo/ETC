@@ -68,13 +68,14 @@ EARTH_RADIUS_M = 6_371_000.0
 # ============================================================
 # 枝判定（流入/流出）角度の安定化設定
 #  - 中心点の前後「2点」から走行方向を作り、枝(dir_deg)へマッチングする
-#  - in:  (center-30m -> center-5m) の走行方向を推定し、180度反転して "center->branch" に合わせる
-#  - out: (center+10m -> center+60m) の走行方向を推定し、そのまま "center->branch" として使う
+#  - in:  (center-20m -> center-5m) の走行方向を推定し、180度反転して "center->branch" に合わせる
+#  - out: (center+5m -> center+20m) の走行方向を推定し、そのまま "center->branch" として使う
+#  ※時間算出区間(-100m〜+20m)とは別物。角度は中心近傍(±20m)で安定化させる。
 # ============================================================
-DIR_IN_FAR_M = 30.0
+DIR_IN_FAR_M = 20.0
 DIR_IN_NEAR_M = 5.0
-DIR_OUT_NEAR_M = 10.0
-DIR_OUT_FAR_M = 60.0
+DIR_OUT_NEAR_M = 5.0
+DIR_OUT_FAR_M = 20.0
 BRANCH_MAX_ANGLE_DIFF_DEG = 35.0  # これを超えたら枝番は未確定（空欄）
 
 
@@ -389,6 +390,8 @@ HEADER = [
     "用途",
     "流入枝番",
     "流出枝番",
+    "流入角度deg",
+    "流出角度deg",
     "流入角度差(deg)",
     "流出角度差(deg)",
     "角度算出方式",
@@ -653,7 +656,7 @@ def main() -> None:
                         # ※ center_pos_val_dir は「指定中心点に対するトリップ最近接点」（線分上）を優先する
                         center_pos_val = center_pos_val_dir
 
-                        # ---- IN（流入）: (center-60m -> center-10m) の走行方向を推定し、180度反転 ----
+                        # ---- IN（流入）: (center-20m -> center-5m) の走行方向を推定し、180度反転 ----
                         if center_pos_val is not None:
                             p_in_far = interpolate_point_at_distance(points, cumdist, center_pos_val - DIR_IN_FAR_M)
                             p_in_near = interpolate_point_at_distance(points, cumdist, center_pos_val - DIR_IN_NEAR_M)
@@ -672,7 +675,7 @@ def main() -> None:
                                                    points[idx_in][0], points[idx_in][1])
                             angle_method.append("IN:fallback_idx-2")
 
-                        # ---- OUT（流出）: (center+10m -> center+60m) の走行方向を推定 ----
+                        # ---- OUT（流出）: (center+5m -> center+20m) の走行方向を推定 ----
                         if center_pos_val is not None:
                             p_out_near = interpolate_point_at_distance(points, cumdist, center_pos_val + DIR_OUT_NEAR_M)
                             p_out_far = interpolate_point_at_distance(points, cumdist, center_pos_val + DIR_OUT_FAR_M)
@@ -809,6 +812,8 @@ def main() -> None:
                             vehicle_use,
                             str(in_branch),
                             str(out_branch),
+                            f"{in_angle:.1f}" if pd.notna(in_angle) else "",
+                            f"{out_angle:.1f}" if pd.notna(out_angle) else "",
                             f"{in_diff:.1f}" if in_diff != float("inf") else "",
                             f"{out_diff:.1f}" if out_diff != float("inf") else "",
                             angle_method_str,
