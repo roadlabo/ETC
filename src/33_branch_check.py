@@ -134,29 +134,26 @@ LEAFLET_HTML = r"""
   <style>
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
-    .branch-label {
+    .branch-label, .trip-label {
       background: #fff;
       border: 2px solid #d00000;
       border-radius: 999px;
-      padding: 3px 10px;
-      font-size: 16px;
+      padding: 3px 8px;
+      font-size: 12px;
       font-family: sans-serif;
       font-weight: 700;
       white-space: nowrap;
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+      pointer-events: none;
     }
     .branch-label.point {
       color: #a00000;
     }
     .trip-label {
-      background: #fff;
-      border: 2px solid #d00000;
-      border-radius: 999px;
-      padding: 4px 10px;
-      font-size: 16px;
-      font-weight: 700;
       color: #a00000;
-      font-family: sans-serif;
-      white-space: nowrap;
     }
   </style>
 </head>
@@ -178,31 +175,50 @@ LEAFLET_HTML = r"""
 
   function tryAddBaseTiles(){
     if (!map) return;
+
+    // 白背景をデフォルトに（タイルが無い場合でも見やすい）
     const container = map.getContainer();
     container.style.background = '#ffffff';
 
+    // 既存の base があれば消す
+    try { if (base) map.removeLayer(base); } catch(e) {}
+    base = null;
+
     const layer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 20,
-      attribution: '&copy; OpenStreetMap contributors'
+      attribution: '&copy; OpenStreetMap contributors',
+      crossOrigin: true,
+      updateWhenIdle: true,
+      keepBuffer: 2,
     });
+
     let okOnce = false;
-    let errCount = 0;
+    let firstOkAt = 0;
+
     layer.on('tileload', () => {
-      okOnce = true;
+      if (!okOnce) {
+        okOnce = true;
+        firstOkAt = Date.now();
+      }
     });
+
+    // tileerror は数えるだけ。成功していれば剥がさない
+    let errCount = 0;
     layer.on('tileerror', () => {
       errCount += 1;
     });
+
     layer.addTo(map);
 
+    // 6秒待っても1枚も成功しなければ、オフライン扱いでタイルを外す
     setTimeout(() => {
-      if (!okOnce || errCount > 0) {
+      if (!okOnce) {
         try { map.removeLayer(layer); } catch(e) {}
         base = null;
       } else {
         base = layer;
       }
-    }, 1200);
+    }, 6000);
   }
 
   function initMap(centerLat, centerLon, zoom){
@@ -244,17 +260,21 @@ LEAFLET_HTML = r"""
     branchPoints = [];
     if (!map) return;
 
-    rays.forEach(r => {
+    rays.forEach((r, idx) => {
       branchPoints.push([r.lat1, r.lon1]);
       branchPoints.push([r.lat2, r.lon2]);
       const isPoint = (r.source && r.source === 'point');
       const style = isPoint ? {color: 'red', dashArray: '6 6'} : {dashArray: '6 6'};
       const line = L.polyline([[r.lat1, r.lon1], [r.lat2, r.lon2]], style).addTo(branchLayer);
-      const t = 0.25;
+      const t = 0.82;
       const labelLat = r.lat1 + (r.lat2 - r.lat1) * t;
       const labelLon = r.lon1 + (r.lon2 - r.lon1) * t;
+      const jig = (idx % 5) - 2;
+      const off = 0.00002 * jig;
+      const labelLat2 = labelLat + off;
+      const labelLon2 = labelLon - off;
       const labelText = Number.isFinite(Number(r.label)) ? `${parseInt(r.label, 10)}` : `${r.label}`;
-      L.marker([labelLat, labelLon], {
+      L.marker([labelLat2, labelLon2], {
         icon: L.divIcon({className: isPoint ? 'branch-label point' : 'branch-label', html: `${labelText}`})
       }).addTo(branchLayer);
     });
@@ -346,17 +366,19 @@ LEAFLET_HTML = r"""
     };
 
     if (hasCenter && Number.isFinite(tr.in_angle_deg)) {
-      const pin = destPoint(tr.center_calc, tr.in_angle_deg, 20.0);
+      const pin = destPoint(tr.center_calc, tr.in_angle_deg, 26.0);
+      const pinLabel = destPoint({lat: pin.lat, lon: pin.lon}, (tr.in_angle_deg + 90.0) % 360.0, 6.0);
       L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [pin.lat, pin.lon]], {color:'red', weight:4}).addTo(tripLayer);
-      L.marker([pin.lat, pin.lon], {
+      L.marker([pinLabel.lat, pinLabel.lon], {
         icon: L.divIcon({className: 'trip-label', html: makeRayLabel('IN', tr.in_branch, tr.in_delta_deg)}),
         zIndexOffset: 1100,
       }).addTo(tripLayer);
     }
     if (hasCenter && Number.isFinite(tr.out_angle_deg)) {
-      const pout = destPoint(tr.center_calc, tr.out_angle_deg, 20.0);
+      const pout = destPoint(tr.center_calc, tr.out_angle_deg, 26.0);
+      const poutLabel = destPoint({lat: pout.lat, lon: pout.lon}, (tr.out_angle_deg + 270.0) % 360.0, 6.0);
       L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [pout.lat, pout.lon]], {color:'red', weight:4}).addTo(tripLayer);
-      L.marker([pout.lat, pout.lon], {
+      L.marker([poutLabel.lat, poutLabel.lon], {
         icon: L.divIcon({className: 'trip-label', html: makeRayLabel('OUT', tr.out_branch, tr.out_delta_deg)}),
         zIndexOffset: 1100,
       }).addTo(tripLayer);
@@ -404,14 +426,29 @@ LEAFLET_HTML = r"""
       animMarker.setLatLng([lat, lon]);
     }, 40);
 
-    if (hasCenter){
-      map.setView([tr.center_calc.lat, tr.center_calc.lon], 18);
+    // view fit: branchPoints + trip points
+    try {
+      const pts = [];
+      if (branchPoints && branchPoints.length) {
+        branchPoints.forEach(p => pts.push(p));
+      }
+      pts.push([tr.start.lat, tr.start.lon]);
+      pts.push([tr.center_calc.lat, tr.center_calc.lon]);
+      pts.push([tr.end.lat, tr.end.lon]);
+      if (tr.raw_points && tr.raw_points.length){
+        tr.raw_points.forEach(p => pts.push([p.lat, p.lon]));
+      }
+      const b = L.latLngBounds(pts);
+      map.fitBounds(b.pad(0.25));
+    } catch(e) {
+      if (hasCenter) map.setView([tr.center_calc.lat, tr.center_calc.lon], 18);
     }
   }
 
   function bootstrap(){
     if (!window.L){
-      document.getElementById('map').innerHTML = 'Leafletを読み込めません（オフライン/未同梱）';
+      document.getElementById('map').innerHTML = 'Leafletの読み込みに失敗しました（JS読込/セキュリティ設定を確認）';
+      window._branchCheck = { initMap: ()=>{}, setBranchRays: ()=>{}, showTrip: ()=>{} };
       return;
     }
 
