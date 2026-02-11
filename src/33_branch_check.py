@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QGridLayout,
+    QHeaderView,
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
@@ -155,6 +156,9 @@ LEAFLET_HTML = r"""
     .branch-label.point {
       color: #a00000;
     }
+    .branch-label.active {
+      background: #ffe66a;
+    }
 
     /* IN/OUTラベル：楕円背景なし（文字だけ） */
     .trip-label {
@@ -196,6 +200,7 @@ LEAFLET_HTML = r"""
 
   let animTimer = null;
   let animMarker = null;
+  let branchLabelMarkers = {};
 
   function tryAddBaseTiles(){
     if (!map) return;
@@ -282,6 +287,7 @@ LEAFLET_HTML = r"""
     // rays: [{label, lat1, lon1, lat2, lon2}, ...]
     clearLayer(branchLayer);
     branchPoints = [];
+    branchLabelMarkers = {};
     if (!map) return;
 
     rays.forEach((r, idx) => {
@@ -298,9 +304,31 @@ LEAFLET_HTML = r"""
       const labelLat2 = labelLat + off;
       const labelLon2 = labelLon - off;
       const labelText = Number.isFinite(Number(r.label)) ? `${parseInt(r.label, 10)}` : `${r.label}`;
-      L.marker([labelLat2, labelLon2], {
-        icon: L.divIcon({className: isPoint ? 'branch-label point' : 'branch-label', html: `${labelText}`})
+      const cls = isPoint ? 'branch-label point' : 'branch-label';
+      const mk = L.marker([labelLat2, labelLon2], {
+        icon: L.divIcon({className: cls, html: `${labelText}`})
       }).addTo(branchLayer);
+      branchLabelMarkers[String(labelText)] = mk;
+    });
+  }
+
+  function highlightBranches(inBranch, outBranch){
+    Object.keys(branchLabelMarkers).forEach((k) => {
+      const m = branchLabelMarkers[k];
+      if (!m) return;
+      const el = m.getElement && m.getElement();
+      if (el) el.classList.remove('active');
+    });
+
+    const targets = [];
+    if (inBranch !== null && inBranch !== undefined && String(inBranch).trim() !== '') targets.push(String(inBranch));
+    if (outBranch !== null && outBranch !== undefined && String(outBranch).trim() !== '') targets.push(String(outBranch));
+
+    targets.forEach((k) => {
+      const m = branchLabelMarkers[k];
+      if (!m) return;
+      const el = m.getElement && m.getElement();
+      if (el) el.classList.add('active');
     });
   }
 
@@ -410,14 +438,47 @@ LEAFLET_HTML = r"""
       }).addTo(tripLayer);
     }
 
-    // animation: cyan bead moves on IN/OUT red segments
+    // ===== animation: cyan bead moves IN -> (center) -> OUT (one-way loop) =====
     stopAnim();
+
     const segs = [];
     if (inSeg) segs.push(inSeg);
     if (outSeg) segs.push(outSeg);
 
     if (segs.length > 0) {
-      animMarker = L.circleMarker([segs[0].a.lat, segs[0].a.lon], {
+      const pathPts = [];
+      if (inSeg && outSeg) {
+        pathPts.push({lat: inSeg.b.lat, lon: inSeg.b.lon});
+        pathPts.push({lat: inSeg.a.lat, lon: inSeg.a.lon});
+        pathPts.push({lat: outSeg.b.lat, lon: outSeg.b.lon});
+      } else if (inSeg) {
+        pathPts.push({lat: inSeg.a.lat, lon: inSeg.a.lon});
+        pathPts.push({lat: inSeg.b.lat, lon: inSeg.b.lon});
+      } else {
+        pathPts.push({lat: outSeg.a.lat, lon: outSeg.a.lon});
+        pathPts.push({lat: outSeg.b.lat, lon: outSeg.b.lon});
+      }
+
+      function havDist(a, b){
+        const R = 6371000.0;
+        const toRad = (x)=>x*Math.PI/180.0;
+        const dLat = toRad(b.lat - a.lat);
+        const dLon = toRad(b.lon - a.lon);
+        const la1 = toRad(a.lat);
+        const la2 = toRad(b.lat);
+        const s = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
+        return 2*R*Math.atan2(Math.sqrt(s), Math.sqrt(1-s));
+      }
+
+      const segLens = [];
+      let total = 0.0;
+      for (let i=0; i<pathPts.length-1; i++){
+        const d = havDist(pathPts[i], pathPts[i+1]);
+        segLens.push(Math.max(1e-6, d));
+        total += Math.max(1e-6, d);
+      }
+
+      animMarker = L.circleMarker([pathPts[0].lat, pathPts[0].lon], {
         radius: 7,
         color: '#00bcd4',
         fillColor: '#00bcd4',
@@ -425,25 +486,35 @@ LEAFLET_HTML = r"""
         weight: 2,
       }).addTo(tripLayer);
 
-      let t = 0.0;
-      let dir = 1.0;
-      let segIndex = 0;
+      let u = 0.0;
+      const du = 0.06;
+      const tickMs = 30;
+
+      function posAt(u01){
+        const target = u01 * total;
+        let acc = 0.0;
+        for (let i=0; i<segLens.length; i++){
+          const d = segLens[i];
+          if (target <= acc + d || i === segLens.length - 1){
+            const t = (target - acc) / d;
+            const a = pathPts[i];
+            const b = pathPts[i+1];
+            return {lat: a.lat + (b.lat - a.lat) * t, lon: a.lon + (b.lon - a.lon) * t};
+          }
+          acc += d;
+        }
+        return {lat: pathPts[pathPts.length-1].lat, lon: pathPts[pathPts.length-1].lon};
+      }
 
       animTimer = setInterval(() => {
-        t += dir * 0.06;
-        if (t >= 1.0) { t = 1.0; dir = -1.0; }
-        if (t <= 0.0) {
-          t = 0.0;
-          dir = 1.0;
-          if (segs.length >= 2) segIndex = (segIndex + 1) % segs.length;
-        }
-
-        const s = segs[segIndex];
-        const lat = s.a.lat + (s.b.lat - s.a.lat) * t;
-        const lon = s.a.lon + (s.b.lon - s.a.lon) * t;
-        animMarker.setLatLng([lat, lon]);
-      }, 40);
+        u += du;
+        if (u >= 1.0) u = 0.0;
+        const p = posAt(u);
+        animMarker.setLatLng([p.lat, p.lon]);
+      }, tickMs);
     }
+
+    try { highlightBranches(tr.in_branch, tr.out_branch); } catch(e) {}
 
     // ===== 固定ビュー：基準中心（center_spec）を中心に 200m 四方 =====
     try {
@@ -465,7 +536,7 @@ LEAFLET_HTML = r"""
   function bootstrap(){
     if (!window.L){
       document.getElementById('map').innerHTML = 'Leafletの読み込みに失敗しました（JS読込/セキュリティ設定を確認）';
-      window._branchCheck = { initMap: ()=>{}, setBranchRays: ()=>{}, showTrip: ()=>{} };
+      window._branchCheck = { initMap: ()=>{}, setBranchRays: ()=>{}, showTrip: ()=>{}, highlightBranches: ()=>{} };
       return;
     }
 
@@ -475,7 +546,8 @@ LEAFLET_HTML = r"""
     window._branchCheck = {
       initMap,
       setBranchRays,
-      showTrip
+      showTrip,
+      highlightBranches
     };
   }
 
@@ -796,6 +868,10 @@ class BranchCheckWindow(QMainWindow):
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
         self.table.setAlternatingRowColors(True)
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hh.setDefaultSectionSize(78)
+        hh.setMinimumSectionSize(60)
 
         for r in range(len(self.df)):
             row = self.df.iloc[r]
@@ -843,7 +919,9 @@ class BranchCheckWindow(QMainWindow):
 
         splitter.addWidget(left)
         splitter.addWidget(right)
-        splitter.setSizes([520, 880])
+        splitter.setSizes([440, 960])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
 
         layout = QVBoxLayout(root)
         layout.addWidget(splitter)
