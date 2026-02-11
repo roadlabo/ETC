@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>サンプルルート作成</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .toolbar {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: #fff;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, .2);
+      width: 320px;
+    }
+    .toolbar input { width: 100%; margin: 4px 0; }
+    .toolbar button { margin: 2px 0; width: 100%; }
+    .hint { font-size: 12px; color: #555; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="toolbar">
+  <div><strong>サンプルルート作成（10_route_sampler）</strong></div>
+  <div class="hint">左クリック=点追加 / 右クリック=直前の点を1つ削除</div>
+  <div class="hint">保存時に20mごと&30°以上の折れ点を保持してリサンプリング</div>
+  <div class="hint">保存はダウンロードフォルダへ（ブラウザ仕様）</div>
+  <input id="filename" type="text" value="sample.csv" placeholder="保存ファイル名（例: sample.csv）">
+  <button id="btnSave">CSVとして保存（ダウンロード）</button>
+  <button id="btnClear">全消去</button>
+</div>
+
+<script>
+  const TYPE_COL = 4;
+  const USE_COL = 5;
+  const TIME_COL = 6;
+  const FLAG_COL = 12;
+  const LON_COL = 14; // O列
+  const LAT_COL = 15; // P列
+  const SPEED_COL = 18;
+  const TOTAL_COLS = Math.max(TYPE_COL, USE_COL, TIME_COL, FLAG_COL, LON_COL, LAT_COL, SPEED_COL) + 1;
+
+  const DEFAULT_TYPE = '2';
+  const DEFAULT_USE = '1';
+  const DEFAULT_FLAG = '2';
+  const DEFAULT_SPEED = '30.0';
+  const STEP_M = 20.0;
+  const ANGLE_THRESHOLD = 30.0;
+  const EPS_M = 0.001;
+  const TIME_STEP_SEC = 10;
+
+  const map = L.map('map').setView([35.069095, 134.004512], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  const points = []; // {lat, lon}
+  const polyline = L.polyline([], { color: 'black', weight: 2, opacity: 1 }).addTo(map);
+  const markerLayer = L.layerGroup().addTo(map);
+
+  function createTextLabel(lat, lon, text, color) {
+    return L.marker([lat, lon], {
+      interactive: false,
+      keyboard: false,
+      icon: L.divIcon({
+        className: '',
+        html: '<div style="color:' + color + ';font-weight:700;">' + text + '</div>'
+      })
+    });
+  }
+
+  function redraw() {
+    polyline.setLatLngs(points.map(function (p) { return [p.lat, p.lon]; }));
+    markerLayer.clearLayers();
+
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      let marker;
+      if (i === 0) {
+        marker = L.circleMarker([p.lat, p.lon], {
+          radius: 8, color: 'red', weight: 2, fill: true, fillColor: 'white', fillOpacity: 1
+        });
+        markerLayer.addLayer(marker);
+        markerLayer.addLayer(createTextLabel(p.lat, p.lon, 'S', 'red'));
+      } else if (i === points.length - 1) {
+        marker = L.circleMarker([p.lat, p.lon], {
+          radius: 8, color: 'blue', weight: 2, fill: true, fillColor: 'white', fillOpacity: 1
+        });
+        markerLayer.addLayer(marker);
+        markerLayer.addLayer(createTextLabel(p.lat, p.lon, 'G', 'blue'));
+      } else {
+        marker = L.circleMarker([p.lat, p.lon], {
+          radius: 4, color: 'black', weight: 1, fill: true, fillColor: 'black', fillOpacity: 1
+        });
+        markerLayer.addLayer(marker);
+      }
+    }
+  }
+
+  function haversineM(p1, p2) {
+    const R = 6371000.0;
+    const dLat = (p2.lat - p1.lat) * Math.PI / 180.0;
+    const dLon = (p2.lon - p1.lon) * Math.PI / 180.0;
+    const lat1 = p1.lat * Math.PI / 180.0;
+    const lat2 = p2.lat * Math.PI / 180.0;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+    const c = 2 * Math.asin(Math.min(1.0, Math.sqrt(a)));
+    return R * c;
+  }
+
+  function bearingDeg(p1, p2) {
+    const lat1 = p1.lat * Math.PI / 180.0;
+    const lon1 = p1.lon * Math.PI / 180.0;
+    const lat2 = p2.lat * Math.PI / 180.0;
+    const lon2 = p2.lon * Math.PI / 180.0;
+    const dLon = lon2 - lon1;
+    const x = Math.sin(dLon) * Math.cos(lat2);
+    const y = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+    return ((Math.atan2(x, y) * 180.0 / Math.PI) + 360.0) % 360.0;
+  }
+
+  function turnAngleDeg(prev, cur, next) {
+    const b1 = bearingDeg(prev, cur);
+    const b2 = bearingDeg(cur, next);
+    return Math.abs(((b2 - b1 + 180.0) % 360.0) - 180.0);
+  }
+
+  function lerpPoint(p1, p2, ratio) {
+    return {
+      lat: p1.lat + (p2.lat - p1.lat) * ratio,
+      lon: p1.lon + (p2.lon - p1.lon) * ratio
+    };
+  }
+
+  function resampleSegment(segmentPoints, stepM) {
+    if (!segmentPoints.length) return [];
+    if (segmentPoints.length === 1) return [segmentPoints[0]];
+
+    const resampled = [segmentPoints[0]];
+    let accumulated = 0.0;
+    let nextTarget = stepM;
+
+    for (let i = 0; i < segmentPoints.length - 1; i++) {
+      const p1 = segmentPoints[i];
+      const p2 = segmentPoints[i + 1];
+      const segLen = haversineM(p1, p2);
+      if (segLen <= 0) continue;
+
+      while (accumulated + segLen >= nextTarget) {
+        const ratio = (nextTarget - accumulated) / segLen;
+        resampled.push(lerpPoint(p1, p2, ratio));
+        nextTarget += stepM;
+      }
+      accumulated += segLen;
+    }
+
+    if (haversineM(resampled[resampled.length - 1], segmentPoints[segmentPoints.length - 1]) > EPS_M) {
+      resampled.push(segmentPoints[segmentPoints.length - 1]);
+    }
+    return resampled;
+  }
+
+  function resamplePolyline(rawPoints, stepM, angleThreshold) {
+    if (rawPoints.length < 2) return rawPoints.slice();
+
+    const breakpoints = new Set([0, rawPoints.length - 1]);
+    for (let i = 1; i < rawPoints.length - 1; i++) {
+      const angle = turnAngleDeg(rawPoints[i - 1], rawPoints[i], rawPoints[i + 1]);
+      if (angle >= angleThreshold) {
+        breakpoints.add(i);
+      }
+    }
+
+    const sorted = Array.from(breakpoints).sort(function (a, b) { return a - b; });
+    const resampled = [];
+
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const startIdx = sorted[i];
+      const endIdx = sorted[i + 1];
+      const seg = rawPoints.slice(startIdx, endIdx + 1);
+      let segResampled = resampleSegment(seg, stepM);
+
+      if (resampled.length && segResampled.length) {
+        if (haversineM(resampled[resampled.length - 1], segResampled[0]) < EPS_M) {
+          segResampled = segResampled.slice(1);
+        }
+      }
+      resampled.push.apply(resampled, segResampled);
+    }
+
+    if (sorted.length) {
+      const lastPoint = rawPoints[sorted[sorted.length - 1]];
+      if (!resampled.length || haversineM(resampled[resampled.length - 1], lastPoint) > EPS_M) {
+        resampled.push(lastPoint);
+      }
+    }
+
+    return resampled;
+  }
+
+  function formatTimestamp(baseDate, secOffset) {
+    const t = new Date(baseDate.getTime() + secOffset * 1000);
+    const yyyy = t.getFullYear();
+    const mm = String(t.getMonth() + 1).padStart(2, '0');
+    const dd = String(t.getDate()).padStart(2, '0');
+    const HH = String(t.getHours()).padStart(2, '0');
+    const MM = String(t.getMinutes()).padStart(2, '0');
+    const SS = String(t.getSeconds()).padStart(2, '0');
+    return '' + yyyy + mm + dd + HH + MM + SS;
+  }
+
+  function buildCsvRows(sampled, startTime) {
+    const rows = [];
+    for (let i = 0; i < sampled.length; i++) {
+      const p = sampled[i];
+      const row = new Array(TOTAL_COLS).fill('0');
+      row[TYPE_COL] = DEFAULT_TYPE;
+      row[USE_COL] = DEFAULT_USE;
+      row[TIME_COL] = formatTimestamp(startTime, i * TIME_STEP_SEC);
+      row[FLAG_COL] = DEFAULT_FLAG;
+      row[LON_COL] = p.lon.toFixed(10);
+      row[LAT_COL] = p.lat.toFixed(10);
+      row[SPEED_COL] = DEFAULT_SPEED;
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function normalizeFilename(name) {
+    let filename = (name || '').trim();
+    if (!filename) filename = 'sample.csv';
+    if (!/\.csv$/i.test(filename)) filename += '.csv';
+    return filename;
+  }
+
+  function downloadCsv(rows, filename) {
+    const bom = '\uFEFF';
+    const body = rows.map(function (row) { return row.join(','); }).join('\r\n') + '\r\n';
+    const blob = new Blob([bom + body], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  map.on('click', function (e) {
+    points.push({ lat: e.latlng.lat, lon: e.latlng.lng });
+    redraw();
+  });
+
+  map.on('contextmenu', function (e) {
+    if (e.originalEvent) {
+      L.DomEvent.preventDefault(e.originalEvent);
+      L.DomEvent.stopPropagation(e.originalEvent);
+    }
+    if (points.length > 0) {
+      points.pop();
+      redraw();
+    }
+  });
+
+  document.getElementById('btnClear').addEventListener('click', function () {
+    points.length = 0;
+    redraw();
+  });
+
+  document.getElementById('btnSave').addEventListener('click', function () {
+    if (points.length < 2) {
+      alert('2点以上を指定してください。');
+      return;
+    }
+
+    const sampled = resamplePolyline(points, STEP_M, ANGLE_THRESHOLD);
+    const rows = buildCsvRows(sampled, new Date());
+    const filename = normalizeFilename(document.getElementById('filename').value);
+    downloadCsv(rows, filename);
+  });
+</script>
+</body>
+</html>
