@@ -9,6 +9,7 @@ import pandas as pd
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QUrl
+from PyQt6.QtWebEngineCore import QWebEngineSettings
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -128,6 +129,8 @@ LEAFLET_HTML = r"""
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Branch Check</title>
+  <link rel="stylesheet" href="leaflet/leaflet.css"/>
+  <script src="leaflet/leaflet.js"></script>
   <style>
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
@@ -173,75 +176,31 @@ LEAFLET_HTML = r"""
   let animTimer = null;
   let animMarker = null;
 
-  function loadStylesheet(href){
-    return new Promise((resolve, reject) => {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = href;
-      link.onload = () => resolve();
-      link.onerror = () => reject(new Error(`failed to load css: ${href}`));
-      document.head.appendChild(link);
-    });
-  }
-
-  function loadScript(src){
-    return new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = src;
-      script.async = false;
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error(`failed to load script: ${src}`));
-      document.head.appendChild(script);
-    });
-  }
-
-  async function loadLeaflet(){
-    try {
-      await loadStylesheet('leaflet/leaflet.css');
-    } catch (_) {
-      try {
-        await loadStylesheet('https://unpkg.com/leaflet@1.9.4/dist/leaflet.css');
-      } catch (_) {
-        // CSSは必須ではないので無視
-      }
-    }
-
-    if (window.L) return true;
-    try {
-      await loadScript('leaflet/leaflet.js');
-    } catch (_) {
-      try {
-        await loadScript('https://unpkg.com/leaflet@1.9.4/dist/leaflet.js');
-      } catch (_) {
-        return false;
-      }
-    }
-    return !!window.L;
-  }
-
   function tryAddBaseTiles(){
     if (!map) return;
-    base = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    const container = map.getContainer();
+    container.style.background = '#ffffff';
+
+    const layer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 20,
       attribution: '&copy; OpenStreetMap contributors'
     });
-    let tileOk = false;
+    let okOnce = false;
     let errCount = 0;
-    base.on('tileload', () => {
-      tileOk = true;
+    layer.on('tileload', () => {
+      okOnce = true;
     });
-    base.on('tileerror', () => {
+    layer.on('tileerror', () => {
       errCount += 1;
     });
-    base.addTo(map);
+    layer.addTo(map);
 
     setTimeout(() => {
-      if (!map) return;
-      if (!tileOk || errCount > 0) {
-        map.getContainer().style.background = '#ffffff';
-        if (base && map.hasLayer(base)) {
-          map.removeLayer(base);
-        }
+      if (!okOnce || errCount > 0) {
+        try { map.removeLayer(layer); } catch(e) {}
+        base = null;
+      } else {
+        base = layer;
       }
     }, 1200);
   }
@@ -253,7 +212,7 @@ LEAFLET_HTML = r"""
     branchLayer.addTo(map);
     tripLayer.addTo(map);
 
-    map.setView([centerLat, centerLon], zoom);
+    map.setView([centerLat, centerLon], zoom || 17);
 
     centerMarker = L.circleMarker([centerLat, centerLon], {
       radius: 7, color: 'red', fillColor: 'red', fillOpacity: 1.0
@@ -420,9 +379,8 @@ LEAFLET_HTML = r"""
     }
   }
 
-  async function bootstrap(){
-    const ok = await loadLeaflet();
-    if (!ok || !window.L){
+  function bootstrap(){
+    if (!window.L){
       document.getElementById('map').innerHTML = 'Leafletを読み込めません（オフライン/未同梱）';
       return;
     }
@@ -778,6 +736,9 @@ class BranchCheckWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
 
         self.web = QWebEngineView()
+        self.web.settings().setAttribute(
+            QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True
+        )
         self.web.setHtml(LEAFLET_HTML, QUrl.fromLocalFile(str((Path(__file__).resolve().parent)) + "/"))
         self.web.loadFinished.connect(self._on_web_loaded)
         right_layout.addWidget(self.web, 7)
