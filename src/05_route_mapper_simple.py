@@ -1,38 +1,44 @@
-"""Simple standalone route mapper using Tkinter and Folium.
-
-This script scans a target directory for CSV files and lets the user
-select one via a Tkinter listbox UI. When a file is selected, its route
-is rendered to a Folium map (OpenStreetMap background) and saved as
-``map.html`` beside this script. The browser tab is opened only once on
-the first render to avoid duplicate tabs.
-
-Usage:
-    python route_mapper_simple.py [pattern]
-
-* A folder selection dialog will prompt for the CSV directory.
-* ``pattern`` defaults to ``*.csv``.
-
-Dependencies: pandas, folium
-"""
-
 from __future__ import annotations
 
 import math
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-import folium
+import numpy as np
 import pandas as pd
-import tkinter as tk
-import webbrowser
-from tkinter import Tk, filedialog, messagebox, ttk
 
-BROWSER_OPENED = False
-AUTO_REFRESH_SECONDS = 0  # disable periodic auto refresh
+from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtWebEngineCore import QWebEngineSettings
+from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+    QListWidget,
+    QListWidgetItem,
+    QLineEdit,
+)
 
-# CSV column indices (0-based)
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+
+
+# ============================================================
+# 05: route mapper (33-like UI)
+#  - embedded Leaflet map (NO browser tabs)
+#  - raw data plot (speed vs time/index)
+# ============================================================
+
+# CSV column indices (0-based)  ※05の既存仕様を維持
 LON_COL = 15    # 16列目（経度）
 LAT_COL = 14    # 15列目（緯度）
 FLAG_COL = 12   # 13列目（フラグ）
@@ -41,26 +47,17 @@ USE_COL = 5     # 用途
 TIME_COL = 6    # GPS時刻
 SPEED_COL = 18  # 速度
 
-# Delimiter for CSV files
 DELIM = ","
 
 # Geographic filter for Japan
 MIN_LON, MAX_LON = 120.0, 150.0
 MIN_LAT, MAX_LAT = 20.0, 50.0
 
-# Marker appearance
-PASS_MARKER = dict(color="black", fill_color="black", fill_opacity=1.0, radius=4, weight=1)
-LINE_STYLE = dict(color="black", weight=2, opacity=1.0)
-
-
-# Mapping tables for info panel
 TYPE_MAP = {0: "軽二輪", 1: "大型", 2: "普通", 3: "小型", 4: "軽自動車"}
 USE_MAP = {0: "未使用", 1: "乗用", 2: "貨物", 3: "特殊", 4: "乗合"}
 
 
 def parse_gps_time(val: object) -> Optional[datetime]:
-    """Parse GPS timestamp strings to :class:`datetime` objects."""
-
     s = str(val).strip()
     if not s or not s.isdigit():
         return None
@@ -77,8 +74,6 @@ def parse_gps_time(val: object) -> Optional[datetime]:
 
 
 def fmt_range(dmin: Optional[datetime], dmax: Optional[datetime]) -> str:
-    """Return formatted range string for two datetimes."""
-
     if not dmin or not dmax:
         return "-"
     return (
@@ -87,9 +82,7 @@ def fmt_range(dmin: Optional[datetime], dmax: Optional[datetime]) -> str:
     )
 
 
-def summarize_set(series: Iterable[object], mapping: dict[int, str]) -> str:
-    """Return comma-separated unique labels mapped from ``series``."""
-
+def summarize_set(series: Sequence[object], mapping: dict[int, str]) -> str:
     labels: set[str] = set()
     for value in series:
         label = "その他"
@@ -100,104 +93,20 @@ def summarize_set(series: Iterable[object], mapping: dict[int, str]) -> str:
         if ivalue in mapping:
             label = mapping[ivalue]
         labels.add(label)
-
-    if not labels:
-        return "-"
-
-    return ", ".join(sorted(labels))
+    return "-" if not labels else ", ".join(sorted(labels))
 
 
-def fmt_tooltip(time_value: object, speed_value: object) -> str:
-    """Return tooltip text for folium markers."""
-
-    dt_obj = parse_gps_time(time_value)
-    if dt_obj:
-        time_text = (
-            f"{dt_obj.year}年{dt_obj.month}月{dt_obj.day}日"
-            f"{dt_obj.hour}時{dt_obj.minute}分"
-        )
-    else:
-        time_text = "-"
-
-    speed_text = "-"
-    try:
-        speed_float = float(speed_value)
-        if math.isnan(speed_float):
-            raise ValueError
-        speed_text = f"{int(round(speed_float))}km/h"
-    except (TypeError, ValueError):
-        pass
-
-    return f"GPS時刻: {time_text}\n速度: {speed_text}"
-
-
-def _add_start_marker(m: folium.Map, lat: float, lon: float, tooltip: str) -> None:
-    """Add start marker with red outlined circle and 'S' label."""
-
-    folium.CircleMarker(
-        location=(lat, lon),
-        radius=8,
-        color="red",
-        weight=2,
-        fill=True,
-        fill_color="white",
-        fill_opacity=1.0,
-        tooltip=tooltip,
-    ).add_to(m)
-    folium.Marker(
-        location=(lat, lon),
-        icon=folium.DivIcon(
-            icon_size=(20, 20),
-            icon_anchor=(10, 10),
-            html=(
-                '<div style="width:20px;height:20px;'
-                "line-height:20px;text-align:center;"
-                "font-weight:700;font-size:12px;"
-                'color:red;">S</div>'
-            ),
-        ),
-    ).add_to(m)
-
-
-def _add_goal_marker(m: folium.Map, lat: float, lon: float, tooltip: str) -> None:
-    """Add goal marker with blue outlined circle and 'G' label."""
-
-    folium.CircleMarker(
-        location=(lat, lon),
-        radius=8,
-        color="blue",
-        weight=2,
-        fill=True,
-        fill_color="white",
-        fill_opacity=1.0,
-        tooltip=tooltip,
-    ).add_to(m)
-    folium.Marker(
-        location=(lat, lon),
-        icon=folium.DivIcon(
-            icon_size=(20, 20),
-            icon_anchor=(10, 10),
-            html=(
-                '<div style="width:20px;height:20px;'
-                "line-height:20px;text-align:center;"
-                "font-weight:700;font-size:12px;"
-                'color:blue;">G</div>'
-            ),
-        ),
-    ).add_to(m)
-
-
-def discover_csv_files(directory: Path, pattern: str) -> List[Path]:
-    """Return a sorted list of CSV files matching ``pattern`` inside ``directory``."""
-
-    if not directory.exists():
-        return []
-    return sorted(path for path in directory.glob(pattern) if path.is_file())
+def _swap_latlon_if_needed(df: pd.DataFrame) -> pd.DataFrame:
+    # 05の既存ロジック維持（lat/lonが入れ替わっている場合の救済）
+    if (
+        df["lon"].between(20, 50).mean() > 0.8
+        and df["lat"].between(120, 150).mean() > 0.8
+    ):
+        df[["lon", "lat"]] = df[["lat", "lon"]]
+    return df
 
 
 def read_route_data(csv_path: Path) -> pd.DataFrame:
-    """Read required columns from the given CSV path."""
-
     usecols = [LON_COL, LAT_COL, FLAG_COL, TYPE_COL, USE_COL, TIME_COL, SPEED_COL]
     df = pd.read_csv(
         csv_path,
@@ -207,7 +116,6 @@ def read_route_data(csv_path: Path) -> pd.DataFrame:
         engine="c",
         sep=DELIM,
     )
-
     df = df[usecols].copy()
     df.columns = ["lon", "lat", "flag", "type", "use", "time", "speed"]
 
@@ -216,291 +124,520 @@ def read_route_data(csv_path: Path) -> pd.DataFrame:
     df["flag"] = pd.to_numeric(df["flag"], errors="coerce")
     df["speed"] = pd.to_numeric(df["speed"], errors="coerce")
 
-    if (
-        df["lon"].between(20, 50).mean() > 0.8
-        and df["lat"].between(120, 150).mean() > 0.8
-    ):
-        df[["lon", "lat"]] = df[["lat", "lon"]]
+    df = _swap_latlon_if_needed(df)
 
     df = df.dropna(subset=["lon", "lat", "flag"])
     df = df[(df["lon"].between(MIN_LON, MAX_LON)) & (df["lat"].between(MIN_LAT, MAX_LAT))]
     df["flag"] = df["flag"].astype(int)
-    return df
+    return df.reset_index(drop=True)
 
 
-def chunk_route_points(points: Iterable[Tuple[float, float, int]]) -> Iterable[List[Tuple[float, float]]]:
-    """Yield contiguous point sequences respecting start/end flag rules."""
-
-    segment: List[Tuple[float, float]] = []
+def split_segments(points: List[Tuple[float, float, int]]) -> List[List[Tuple[float, float]]]:
+    # points: [(lat,lon,flag), ...]
+    segs: List[List[Tuple[float, float]]] = []
+    seg: List[Tuple[float, float]] = []
     prev_flag: Optional[int] = None
 
-    for lon, lat, flag in points:
-        current_point = (lat, lon)
-        if not segment:
-            segment.append(current_point)
+    for lat, lon, flag in points:
+        pt = (lat, lon)
+        if not seg:
+            seg.append(pt)
         else:
+            # 05既存ルール：
+            #  prev_flag==1（終点）または flag==0（始点） で区切る
             if prev_flag == 1 or flag == 0:
-                if len(segment) >= 2:
-                    yield segment
-                segment = [current_point]
+                if len(seg) >= 2:
+                    segs.append(seg)
+                seg = [pt]
             else:
-                segment.append(current_point)
+                seg.append(pt)
         prev_flag = flag
 
-    if len(segment) >= 2:
-        yield segment
+    if len(seg) >= 2:
+        segs.append(seg)
+
+    return segs
 
 
-def ensure_auto_refresh(out_path: Path) -> None:
-    """Deprecated: auto-refresh disabled."""
-    return
+LEAFLET_HTML = r"""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Route Mapper</title>
+  <link rel="stylesheet" href="leaflet/leaflet.css"/>
+  <script src="leaflet/leaflet.js"></script>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100%; width: 100%; }
+    .label {
+      background: #fff;
+      border: 2px solid #111;
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 12px;
+      font-family: sans-serif;
+      font-weight: 800;
+      white-space: nowrap;
+      max-width: none;
+      overflow: visible;
+      text-overflow: clip;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+  let map = null;
+  let base = null;
+  let routeLayer = null;
+
+  function ensureLayer(){
+    if (!routeLayer || typeof routeLayer.addTo !== 'function'){
+      routeLayer = L.layerGroup();
+    }
+    if (map && !map.hasLayer(routeLayer)){
+      routeLayer.addTo(map);
+    }
+  }
+
+  function clearLayer(){
+    ensureLayer();
+    try { routeLayer.clearLayers(); } catch(e) {}
+  }
+
+  function tryAddBaseTiles(){
+    if (!map) return;
+
+    const container = map.getContainer();
+    container.style.background = '#ffffff';
+
+    try { if (base) map.removeLayer(base); } catch(e) {}
+    base = null;
+
+    const layer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 20,
+      attribution: '&copy; OpenStreetMap contributors',
+      crossOrigin: true,
+      updateWhenIdle: true,
+      keepBuffer: 2,
+    });
+
+    let okOnce = false;
+    layer.on('tileload', () => { okOnce = true; });
+
+    layer.addTo(map);
+
+    setTimeout(() => {
+      if (!okOnce) {
+        try { map.removeLayer(layer); } catch(e) {}
+        base = null;
+      } else {
+        base = layer;
+      }
+    }, 6000);
+  }
+
+  function initMap(lat, lon, zoom){
+    if (map) return;
+    map = L.map('map', { zoomControl: true });
+    ensureLayer();
+    map.setView([lat, lon], zoom || 12);
+    tryAddBaseTiles();
+  }
+
+  function _fmtTooltip(t, s){
+    const tt = (t && (''+t).length) ? (''+t) : '-';
+    const ss = (s === null || s === undefined || isNaN(Number(s))) ? '-' : (Math.round(Number(s)) + 'km/h');
+    return 'GPS時刻: ' + tt + '<br/>速度: ' + ss;
+  }
+
+  function showRoute(payload){
+    // payload:
+    // { center:{lat,lon}, points:[{lat,lon,flag,time_text,speed}], segments:[[[lat,lon],...],...], bounds:[[s,w],[n,e]] }
+    ensureLayer();
+    if (!map){
+      initMap(payload.center.lat, payload.center.lon, 12);
+    }
+
+    clearLayer();
+
+    // segments (black line)
+    const lineStyle = {color:'black', weight:2, opacity:1.0};
+    (payload.segments || []).forEach(seg => {
+      if (seg.length >= 2){
+        L.polyline(seg, lineStyle).addTo(routeLayer);
+      }
+    });
+
+    // points (markers)
+    (payload.points || []).forEach(p => {
+      const tip = _fmtTooltip(p.time_text, p.speed);
+
+      if (p.flag === 0){
+        // Start: red circle + S
+        L.circleMarker([p.lat, p.lon], {radius:8, color:'red', weight:2, fill:true, fillColor:'white', fillOpacity:1.0})
+          .bindTooltip(tip).addTo(routeLayer);
+        L.marker([p.lat, p.lon], {
+          icon: L.divIcon({className:'label', html:'S'})
+        }).addTo(routeLayer);
+      } else if (p.flag === 1){
+        // Goal: blue circle + G
+        L.circleMarker([p.lat, p.lon], {radius:8, color:'blue', weight:2, fill:true, fillColor:'white', fillOpacity:1.0})
+          .bindTooltip(tip).addTo(routeLayer);
+        L.marker([p.lat, p.lon], {
+          icon: L.divIcon({className:'label', html:'G'})
+        }).addTo(routeLayer);
+      } else {
+        // Pass point
+        L.circleMarker([p.lat, p.lon], {radius:4, color:'black', weight:1, fill:true, fillColor:'black', fillOpacity:1.0})
+          .bindTooltip(tip).addTo(routeLayer);
+      }
+    });
+
+    // fit bounds
+    try {
+      if (payload.bounds && payload.bounds.length === 2){
+        const b = L.latLngBounds(payload.bounds);
+        map.fitBounds(b, {animate:false, padding:[10,10]});
+      } else {
+        map.setView([payload.center.lat, payload.center.lon], 14);
+      }
+    } catch(e){
+      map.setView([payload.center.lat, payload.center.lon], 14);
+    }
+  }
+
+  function bootstrap(){
+    if (!window.L){
+      document.getElementById('map').innerHTML = 'Leafletの読み込みに失敗しました（leaflet/配置 or セキュリティ設定）';
+      window._routeMapper = { initMap: ()=>{}, showRoute: ()=>{} };
+      return;
+    }
+    window._routeMapper = { initMap, showRoute };
+  }
+
+  bootstrap();
+</script>
+</body>
+</html>
+"""
 
 
-class RouteMapperApp:
-    def __init__(self, directory: Path, pattern: str = "*.csv") -> None:
+class SpeedPlot(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fig = Figure(figsize=(5, 3), dpi=100)
+        self.canvas = FigureCanvas(self.fig)
+        self.ax = self.fig.add_subplot(111)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.canvas)
+
+        self._set_empty("No data")
+
+    def _set_empty(self, msg: str) -> None:
+        self.ax.clear()
+        self.ax.set_title(msg)
+        self.ax.set_xlabel("time / index")
+        self.ax.set_ylabel("speed (km/h)")
+        self.canvas.draw_idle()
+
+    def update_plot(self, df: pd.DataFrame) -> None:
+        if df is None or df.empty:
+            self._set_empty("No data")
+            return
+
+        speed = pd.to_numeric(df["speed"], errors="coerce")
+        if speed.dropna().empty:
+            self._set_empty("No speed column / all NaN")
+            return
+
+        # x: time if parseable else index
+        times = [parse_gps_time(v) for v in df["time"].tolist()]
+        ok = [t is not None for t in times]
+
+        self.ax.clear()
+        self.ax.set_ylabel("speed (km/h)")
+
+        if any(ok):
+            x = [t if t else None for t in times]
+            # matplotlib は None を含むと落ちやすいので、index fallback
+            if sum(ok) >= 2 and all((t is None) or isinstance(t, datetime) for t in x):
+                x2 = [t if t else datetime.fromtimestamp(0) for t in x]
+                self.ax.plot(x2, speed.to_numpy(), linewidth=1)
+                self.ax.set_xlabel("time")
+                self.fig.autofmt_xdate()
+            else:
+                self.ax.plot(np.arange(len(speed)), speed.to_numpy(), linewidth=1)
+                self.ax.set_xlabel("index")
+        else:
+            self.ax.plot(np.arange(len(speed)), speed.to_numpy(), linewidth=1)
+            self.ax.set_xlabel("index")
+
+        self.ax.grid(True)
+        self.canvas.draw_idle()
+
+
+class RouteMapperWindow(QMainWindow):
+    def __init__(self, directory: Path, pattern: str) -> None:
+        super().__init__()
+        self.setWindowTitle("05_route_mapper - ルート可視化（33型UI）")
+        self.resize(1500, 900)
+
         self.directory = directory
         self.pattern = pattern
-        self.root = tk.Tk()
-        self.root.title("CSV選択")
-        self.root.columnconfigure(0, weight=0)
-        self.root.columnconfigure(1, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        self.root.rowconfigure(1, weight=0)
-
-        left = tk.Frame(self.root, padx=6, pady=6)
-        left.grid(row=0, column=0, sticky="nsew")
-        left.columnconfigure(0, weight=1)
-        left.rowconfigure(0, weight=1)
-
-        list_frame = tk.Frame(left)
-        list_frame.grid(row=0, column=0, sticky="nsew")
-        list_frame.columnconfigure(0, weight=1)
-        list_frame.rowconfigure(0, weight=1)
-
-        self.listbox = tk.Listbox(list_frame, width=32, height=20, exportselection=False)
-        self.listbox.grid(row=0, column=0, sticky="nsew")
-        self.listbox.bind("<<ListboxSelect>>", self.on_select)
-
-        scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.listbox.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        self.listbox.configure(yscrollcommand=scrollbar.set)
-
-        right = ttk.Frame(self.root, padding=(6, 6))
-        right.grid(row=0, column=1, sticky="nsew")
-        right.columnconfigure(0, weight=1)
-
-        info_title = ttk.Label(right, text="選択中CSVの情報", font=("Segoe UI", 10, "bold"))
-        info_title.grid(row=0, column=0, sticky="w")
-
-        self.lbl_count = ttk.Label(right, text="点数: -")
-        self.lbl_range = ttk.Label(right, text="GPS時刻: -")
-        self.lbl_type = ttk.Label(right, text="種別: -")
-        self.lbl_use = ttk.Label(right, text="用途: -")
-
-        for idx, widget in enumerate((self.lbl_count, self.lbl_range, self.lbl_type, self.lbl_use), start=1):
-            widget.grid(row=idx, column=0, sticky="w", pady=2)
-
-        right.rowconfigure(len((self.lbl_count, self.lbl_range, self.lbl_type, self.lbl_use)) + 1, weight=1)
-
-        self.status_var = tk.StringVar(value="CSVファイルを選択してください。")
-        status_label = ttk.Label(right, textvariable=self.status_var, anchor="w")
-        status_label.grid(row=6, column=0, sticky="ew", pady=(8, 0))
-
-        btn_frame = tk.Frame(self.root, padx=6, pady=4)
-        btn_frame.grid(row=1, column=0, columnspan=2, sticky="ew")
-        btn_frame.columnconfigure(0, weight=1)
-        btn_frame.columnconfigure(1, weight=1)
-
-        self.up_button = tk.Button(btn_frame, text="▲上へ", command=self.move_up)
-        self.up_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
-
-        self.down_button = tk.Button(btn_frame, text="▼下へ", command=self.move_down)
-        self.down_button.grid(row=0, column=1, sticky="ew")
 
         self.files: List[Path] = []
-        self.refresh_files()
+        self.current_df: Optional[pd.DataFrame] = None
 
-    # ------------------------------------------------------------------
-    # File list management
-    # ------------------------------------------------------------------
-    def refresh_files(self) -> None:
-        self.files = discover_csv_files(self.directory, self.pattern)
-        self.listbox.delete(0, tk.END)
-        for file in self.files:
-            self.listbox.insert(tk.END, file.name)
+        self._build_ui()
+        self._refresh_file_list()
+
+    def _build_ui(self) -> None:
+        root = QWidget()
+        self.setCentralWidget(root)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # ---------------- Left panel: file list ----------------
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+
+        bar = QHBoxLayout()
+        self.ed_pattern = QLineEdit(self.pattern)
+        self.ed_pattern.setPlaceholderText("pattern (e.g. *.csv)")
+        self.btn_pick_dir = QPushButton("フォルダ選択…")
+        self.btn_reload = QPushButton("再読込")
+        bar.addWidget(QLabel("pattern:"))
+        bar.addWidget(self.ed_pattern, 1)
+        bar.addWidget(self.btn_pick_dir)
+        bar.addWidget(self.btn_reload)
+        left_layout.addLayout(bar)
+
+        self.lbl_dir = QLabel(f"DIR: {self.directory}")
+        self.lbl_dir.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        left_layout.addWidget(self.lbl_dir)
+
+        self.list = QListWidget()
+        self.list.itemSelectionChanged.connect(self._on_selection_changed)
+        left_layout.addWidget(self.list, 1)
+
+        info_title = QLabel("選択中CSVの情報")
+        info_title.setStyleSheet("font-weight: bold;")
+        left_layout.addWidget(info_title)
+
+        self.lbl_count = QLabel("点数: -")
+        self.lbl_range = QLabel("GPS時刻: -")
+        self.lbl_type = QLabel("種別: -")
+        self.lbl_use = QLabel("用途: -")
+        for w in (self.lbl_count, self.lbl_range, self.lbl_type, self.lbl_use):
+            w.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            left_layout.addWidget(w)
+
+        self.status = QLabel("CSVファイルを選択してください。")
+        left_layout.addWidget(self.status)
+
+        self.btn_pick_dir.clicked.connect(self._pick_directory)
+        self.btn_reload.clicked.connect(self._refresh_file_list)
+        self.ed_pattern.returnPressed.connect(self._refresh_file_list)
+
+        # ---------------- Right panel: map + plot ----------------
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+
+        self.web = QWebEngineView()
+        self.web.settings().setAttribute(
+            QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True
+        )
+        # baseUrl をスクリプトフォルダにして leaflet/ を解決
+        base = QUrl.fromLocalFile(str(Path(__file__).resolve().parent) + "/")
+        self.web.setHtml(LEAFLET_HTML, base)
+        self.web.loadFinished.connect(self._on_web_loaded)
+
+        self.plot = SpeedPlot()
+
+        v_split = QSplitter(Qt.Orientation.Vertical)
+        v_split.addWidget(self.web)
+        v_split.addWidget(self.plot)
+        v_split.setSizes([650, 250])
+
+        right_layout.addWidget(v_split, 1)
+
+        splitter.addWidget(left)
+        splitter.addWidget(right)
+        splitter.setSizes([520, 980])
+
+        layout = QVBoxLayout(root)
+        layout.addWidget(splitter)
+
+    def _pick_directory(self) -> None:
+        d = QFileDialog.getExistingDirectory(self, "CSVフォルダを選択", str(self.directory))
+        if not d:
+            return
+        self.directory = Path(d)
+        self.lbl_dir.setText(f"DIR: {self.directory}")
+        self._refresh_file_list()
+
+    def _refresh_file_list(self) -> None:
+        self.pattern = self.ed_pattern.text().strip() or "*.csv"
+        if not self.directory.exists():
+            QMessageBox.warning(self, "Directory not found", f"Directory does not exist:\n{self.directory}")
+            return
+
+        self.files = sorted([p for p in self.directory.glob(self.pattern) if p.is_file()])
+        self.list.clear()
+        for p in self.files:
+            self.list.addItem(QListWidgetItem(p.name))
 
         if not self.files:
-            self.status_var.set("No CSV files found.")
-            self.update_info(None)
-        else:
-            self.status_var.set("Select a CSV file.")
-            self.listbox.selection_clear(0, tk.END)
-            self.listbox.activate(0)
-            self.listbox.selection_set(0)
-            self.on_select()
+            self.status.setText("No CSV files found.")
+            self._set_info_defaults()
+            self.plot.update_plot(pd.DataFrame())
+            return
+
+        self.status.setText("Select a CSV file.")
+        self.list.setCurrentRow(0)
 
     def _set_info_defaults(self) -> None:
-        self.lbl_count.config(text="点数: 0")
-        self.lbl_range.config(text="GPS時刻: -")
-        self.lbl_type.config(text="種別: -")
-        self.lbl_use.config(text="用途: -")
+        self.lbl_count.setText("点数: 0")
+        self.lbl_range.setText("GPS時刻: -")
+        self.lbl_type.setText("種別: -")
+        self.lbl_use.setText("用途: -")
 
-    def update_info(self, csv_path: Optional[Path]) -> None:
-        if not csv_path:
-            self._set_info_defaults()
+    def _on_web_loaded(self, ok: bool) -> None:
+        if not ok:
+            QMessageBox.warning(self, "地図の読み込み失敗", "地図の読み込みに失敗しました。leaflet/ の配置を確認してください。")
             return
 
-        try:
-            df = pd.read_csv(
-                csv_path,
-                header=None,
-                sep=DELIM,
-                usecols=[TYPE_COL, USE_COL, TIME_COL],
-                engine="c",
-                dtype=str,
-            )
-        except Exception:
-            self._set_info_defaults()
+        # 何も選ばれていない場合でも map 初期化だけはしておく
+        if self.files:
+            try:
+                df0 = read_route_data(self.files[0])
+                if not df0.empty:
+                    self._init_map(float(df0.iloc[0]["lat"]), float(df0.iloc[0]["lon"]))
+                    self._render_current()
+            except Exception:
+                pass
+
+    def _init_map(self, lat: float, lon: float) -> None:
+        self._run_js(f"window._routeMapper.initMap({lat}, {lon}, 12);")
+
+    def _run_js(self, js: str, retry_ms: int = 120) -> None:
+        wrapped = (
+            "(function(){"
+            "if (window._routeMapper) {"
+            f"{js}"
+            "return true;"
+            "}"
+            "return false;"
+            "})();"
+        )
+
+        def _cb(ok: bool):
+            if ok:
+                return
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(retry_ms, lambda: self.web.page().runJavaScript(wrapped))
+
+        self.web.page().runJavaScript(wrapped, _cb)
+
+    def _on_selection_changed(self) -> None:
+        self._render_current()
+
+    def _render_current(self) -> None:
+        row = self.list.currentRow()
+        if row < 0 or row >= len(self.files):
             return
+        csv_path = self.files[row]
 
-        self.lbl_count.config(text=f"点数: {len(df)}")
-
-        times = [parse_gps_time(value) for value in df.iloc[:, 2].tolist()]
-        times = [t for t in times if t]
-        if times:
-            self.lbl_range.config(text=f"GPS時刻: {fmt_range(min(times), max(times))}")
-        else:
-            self.lbl_range.config(text="GPS時刻: -")
-
-        self.lbl_type.config(text=f"種別: {summarize_set(df.iloc[:, 0], TYPE_MAP)}")
-        self.lbl_use.config(text=f"用途: {summarize_set(df.iloc[:, 1], USE_MAP)}")
-
-    def move_up(self) -> None:
-        selection = self.listbox.curselection()
-        if not selection:
-            return
-        index = selection[0]
-        new_index = max(0, index - 1)
-        self.listbox.selection_clear(0, tk.END)
-        self.listbox.selection_set(new_index)
-        self.listbox.activate(new_index)
-        self.on_select()
-
-    def move_down(self) -> None:
-        selection = self.listbox.curselection()
-        if not selection:
-            return
-        index = selection[0]
-        new_index = min(len(self.files) - 1, index + 1)
-        self.listbox.selection_clear(0, tk.END)
-        self.listbox.selection_set(new_index)
-        self.listbox.activate(new_index)
-        self.on_select()
-
-    # ------------------------------------------------------------------
-    # Map rendering
-    # ------------------------------------------------------------------
-    def on_select(self, _event: Optional[tk.Event] = None) -> None:
-        selection = self.listbox.curselection()
-        if not selection:
-            self.update_info(None)
-            return
-        index = selection[0]
-        csv_path = self.files[index]
-        self.update_info(csv_path)
         try:
             df = read_route_data(csv_path)
-        except Exception as exc:  # GUI feedback only
-            messagebox.showerror("Read error", f"Failed to load CSV:\n{csv_path}\n\n{exc}")
-            self.status_var.set(f"{csv_path.name}: failed to load")
+        except Exception as exc:
+            QMessageBox.critical(self, "Read error", f"Failed to load CSV:\n{csv_path}\n\n{exc}")
+            self.status.setText(f"{csv_path.name}: failed to load")
+            self._set_info_defaults()
+            self.plot.update_plot(pd.DataFrame())
             return
 
         if df.empty:
-            messagebox.showinfo("Info", "No valid points inside Japan were found in this file.")
-            self.status_var.set(f"{csv_path.name}: no valid points")
+            QMessageBox.information(self, "Info", "No valid points inside Japan were found in this file.")
+            self.status.setText(f"{csv_path.name}: no valid points")
+            self._set_info_defaults()
+            self.plot.update_plot(pd.DataFrame())
             return
 
-        self.status_var.set(f"Rendering {csv_path.name} ({len(df)} points)")
-        self.render_map(csv_path, df)
+        # update info (05既存機能維持)
+        self.lbl_count.setText(f"点数: {len(df)}")
 
-    def render_map(self, csv_path: Path, df: pd.DataFrame) -> None:
-        start_location = [df.iloc[0]["lat"], df.iloc[0]["lon"]]
-        fmap = folium.Map(location=start_location, zoom_start=12, tiles="OpenStreetMap")
+        times = [parse_gps_time(v) for v in df["time"].tolist()]
+        times2 = [t for t in times if t]
+        self.lbl_range.setText(f"GPS時刻: {fmt_range(min(times2), max(times2))}" if times2 else "GPS時刻: -")
 
-        for row in df.itertuples(index=False):
-            tooltip = fmt_tooltip(row.time, row.speed)
-            if row.flag == 0:
-                _add_start_marker(fmap, row.lat, row.lon, tooltip)
-            elif row.flag == 1:
-                _add_goal_marker(fmap, row.lat, row.lon, tooltip)
-            else:
-                folium.CircleMarker(
-                    location=(row.lat, row.lon),
-                    tooltip=tooltip,
-                    **PASS_MARKER,
-                ).add_to(fmap)
+        self.lbl_type.setText(f"種別: {summarize_set(df['type'].astype(str).tolist(), TYPE_MAP)}")
+        self.lbl_use.setText(f"用途: {summarize_set(df['use'].astype(str).tolist(), USE_MAP)}")
 
-        for segment in chunk_route_points(
-            df[["lon", "lat", "flag"]].itertuples(index=False, name=None)
-        ):
-            folium.PolyLine(segment, **LINE_STYLE).add_to(fmap)
+        self.status.setText(f"Rendering: {csv_path.name} ({len(df)} points)")
 
-        out_path = Path(__file__).with_name("map.html")
-        fmap.save(out_path.as_posix())
+        # map payload
+        lat0 = float(df.iloc[0]["lat"])
+        lon0 = float(df.iloc[0]["lon"])
 
-        # disable old auto-refresh call
-        # ensure_auto_refresh(out_path)
+        points = []
+        for r in df.itertuples(index=False):
+            dt = parse_gps_time(getattr(r, "time"))
+            time_text = "-"
+            if dt:
+                time_text = f"{dt.year}/{dt.month:02d}/{dt.day:02d} {dt.hour:02d}:{dt.minute:02d}:{dt.second:02d}"
 
-        self.status_var.set(f"Saved map for {csv_path.name} -> {out_path.name}")
+            points.append({
+                "lat": float(getattr(r, "lat")),
+                "lon": float(getattr(r, "lon")),
+                "flag": int(getattr(r, "flag")),
+                "time_text": time_text,
+                "speed": None if (getattr(r, "speed") is None or (isinstance(getattr(r, "speed"), float) and math.isnan(getattr(r, "speed")))) else float(getattr(r, "speed")),
+            })
 
-        # ファイルの更新時刻をURLにクエリとして付与
-        version = int(out_path.stat().st_mtime)
-        url = out_path.as_uri() + f"?v={version}"
+        segs = split_segments([(p["lat"], p["lon"], p["flag"]) for p in points])
+        segs2 = [[[lat, lon] for (lat, lon) in seg] for seg in segs]
 
-        global BROWSER_OPENED
-        try:
-            if not BROWSER_OPENED:
-                # 初回のみ新しいタブで開く
-                webbrowser.open(url, new=1)
-                BROWSER_OPENED = True
-            else:
-                # 以降は同じタブを再読み込み（新しいタブを作らない）
-                webbrowser.open(url, new=0)
-        except Exception:
-            messagebox.showwarning("Browser", "Could not open or refresh map in web browser.")
+        # bounds (全点)
+        lats = [p["lat"] for p in points]
+        lons = [p["lon"] for p in points]
+        bounds = [[min(lats), min(lons)], [max(lats), max(lons)]]
 
-    # ------------------------------------------------------------------
-    # Tk mainloop
-    # ------------------------------------------------------------------
-    def run(self) -> None:
-        self.root.mainloop()
+        payload = {
+            "center": {"lat": lat0, "lon": lon0},
+            "points": points,
+            "segments": segs2,
+            "bounds": bounds,
+        }
+
+        import json
+        self._run_js(f"window._routeMapper.showRoute({json.dumps(payload)});")
+
+        # plot
+        self.plot.update_plot(df)
 
 
 def main(argv: Sequence[str]) -> None:
     pattern = argv[1] if len(argv) > 1 else "*.csv"
 
-    root = Tk()
-    root.withdraw()
-    selected = filedialog.askdirectory(
-        title="CSVフォルダを選択してください",
-        initialdir=r"D:\01仕事\05 ETC2.0分析\生データ",
-    )
-    root.destroy()
+    app = QApplication(sys.argv)
 
-    if not selected:
-        print("キャンセルされました。処理を終了します。")
-        sys.exit()
-
-    directory = Path(selected)
-    print(f"選択されたフォルダ: {directory}")
-    directory = directory.resolve()
-
-    if not directory.exists():
-        messagebox.showerror("Directory not found", f"Directory does not exist:\n{directory}")
+    # 初回：フォルダ選択
+    initial = r"D:\01仕事\05 ETC2.0分析\生データ"
+    d = QFileDialog.getExistingDirectory(None, "CSVフォルダを選択してください", initial)
+    if not d:
         return
 
-    app = RouteMapperApp(directory=directory, pattern=pattern)
-    app.run()
+    w = RouteMapperWindow(directory=Path(d), pattern=pattern)
+    w.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
