@@ -15,6 +15,9 @@ route_mapper_simple.py がそのまま読めるCSV（O列=経度, P列=緯度, M
 依存: Flask (pip install flask)
 起動: python route_sampler.py --outdir "/path/to/save" --filename sample.csv
 省略時は本スクリプトと同じフォルダに保存します。
+
+推奨: 配布・利用は HTML 単体版 `10_route_sampler.html`（ダブルクリックで起動）を使用してください。
+本Python版は後方互換用途として残しています。
 """
 from __future__ import annotations
 
@@ -332,6 +335,7 @@ def _open_browser(url: str) -> None:
 
 
 def main():
+    print("[INFO] 推奨: HTML単体版 src/10_route_sampler.html を利用してください（本スクリプトは後方互換用です）。")
     parser = argparse.ArgumentParser(description="クリックでサンプルルートCSVを生成")
     parser.add_argument("--outdir", type=str, default=str(Path(__file__).parent), help="出力先フォルダ")
     parser.add_argument("--filename", type=str, default="sample.csv", help="初期ファイル名")
