@@ -206,6 +206,7 @@ LEAFLET_HTML = r"""
   }
 
   function initMap(centerLat, centerLon, zoom){
+    ensureLayers();
     if (map) return;
     map = L.map('map', { zoomControl: true });
 
@@ -222,7 +223,19 @@ LEAFLET_HTML = r"""
   }
 
   function clearLayer(layer){
-    layer.clearLayers();
+    if (!layer) return;
+    if (typeof layer.clearLayers === 'function'){
+      layer.clearLayers();
+    }
+  }
+
+  function ensureLayers(){
+    if (!branchLayer || typeof branchLayer.addTo !== 'function') {
+      branchLayer = L.layerGroup();
+    }
+    if (!tripLayer || typeof tripLayer.addTo !== 'function') {
+      tripLayer = L.layerGroup();
+    }
   }
 
   function setBranchRays(rays){
@@ -252,14 +265,31 @@ LEAFLET_HTML = r"""
       clearInterval(animTimer);
       animTimer = null;
     }
-    if (animMarker){
-      tripLayer.removeLayer(animMarker);
-      animMarker = null;
+    if (!animMarker){
+      return;
     }
+
+    // tripLayer が壊れていても落ちないように、まず map から外す
+    try {
+      if (map && typeof map.removeLayer === 'function') {
+        // map.removeLayer は LayerGroup に入っている marker でも外せる
+        map.removeLayer(animMarker);
+      }
+    } catch(e) {}
+
+    // それでも残る環境向けに、tripLayer が正しければ追加で外す（保険）
+    try {
+      if (tripLayer && typeof tripLayer.removeLayer === 'function') {
+        tripLayer.removeLayer(animMarker);
+      }
+    } catch(e) {}
+
+    animMarker = null;
   }
 
   function showTrip(tr){
     // tr: {center_spec:{lat,lon}, center_calc:{lat,lon}, start:{lat,lon}, end:{lat,lon}, ...}
+    ensureLayers();
     if (!map) initMap(tr.center_spec.lat, tr.center_spec.lon, 18);
 
     clearLayer(tripLayer);
@@ -385,8 +415,7 @@ LEAFLET_HTML = r"""
       return;
     }
 
-    branchLayer = L.layerGroup();
-    tripLayer = L.layerGroup();
+    ensureLayers();
 
     // expose
     window._branchCheck = {
