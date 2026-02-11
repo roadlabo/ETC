@@ -134,7 +134,7 @@ LEAFLET_HTML = r"""
   <style>
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
-    .branch-label, .trip-label {
+    .branch-label {
       background: #fff;
       border: 2px solid #d00000;
       border-radius: 999px;
@@ -143,17 +143,41 @@ LEAFLET_HTML = r"""
       font-family: sans-serif;
       font-weight: 700;
       white-space: nowrap;
-      max-width: 180px;
-      overflow: hidden;
-      text-overflow: ellipsis;
+
+      /* 省略禁止（全文表示） */
+      max-width: none;
+      overflow: visible;
+      text-overflow: clip;
+
       box-shadow: 0 1px 2px rgba(0,0,0,0.15);
       pointer-events: none;
     }
     .branch-label.point {
       color: #a00000;
     }
+
+    /* IN/OUTラベル：楕円背景なし（文字だけ） */
     .trip-label {
-      color: #a00000;
+      background: transparent;
+      border: none;
+      border-radius: 0;
+      padding: 0;
+      box-shadow: none;
+
+      font-size: 12px;
+      font-family: sans-serif;
+      font-weight: 800;
+      color: #d00000;
+
+      /* 白地でも読めるように（縁取り） */
+      text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 2px #fff;
+
+      white-space: nowrap;
+      max-width: none;
+      overflow: visible;
+      text-overflow: clip;
+
+      pointer-events: none;
     }
   </style>
 </head>
@@ -324,8 +348,9 @@ LEAFLET_HTML = r"""
     calcMarker = L.circleMarker([tr.center_calc.lat, tr.center_calc.lon], {radius: 6}).addTo(map);
 
     // 2-segment line: start -> center_calc -> end
-    const line1 = L.polyline([[tr.start.lat, tr.start.lon], [tr.center_calc.lat, tr.center_calc.lon]], {}).addTo(tripLayer);
-    const line2 = L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [tr.end.lat, tr.end.lon]], {}).addTo(tripLayer);
+    const trajStyle = {color: 'black', weight: 2, dashArray: '4 6'};
+    const line1 = L.polyline([[tr.start.lat, tr.start.lon], [tr.center_calc.lat, tr.center_calc.lon]], trajStyle).addTo(tripLayer);
+    const line2 = L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [tr.end.lat, tr.end.lon]], trajStyle).addTo(tripLayer);
 
     // start/end markers
     const startM = L.circleMarker([tr.start.lat, tr.start.lon], {radius: 6}).addTo(tripLayer);
@@ -333,7 +358,7 @@ LEAFLET_HTML = r"""
 
     // raw points overlay (optional)
     if (tr.raw_points && tr.raw_points.length >= 2){
-      L.polyline(tr.raw_points.map(p => [p.lat, p.lon]), {color: 'black'}).addTo(tripLayer);
+      L.polyline(tr.raw_points.map(p => [p.lat, p.lon]), trajStyle).addTo(tripLayer);
       tr.raw_points.forEach((p, idx) => {
         L.circleMarker([p.lat, p.lon], {
           radius: (idx === 4 ? 6 : 4),
@@ -368,7 +393,7 @@ LEAFLET_HTML = r"""
     if (hasCenter && Number.isFinite(tr.in_angle_deg)) {
       const pin = destPoint(tr.center_calc, tr.in_angle_deg, 26.0);
       const pinLabel = destPoint({lat: pin.lat, lon: pin.lon}, (tr.in_angle_deg + 90.0) % 360.0, 6.0);
-      L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [pin.lat, pin.lon]], {color:'red', weight:4}).addTo(tripLayer);
+      L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [pin.lat, pin.lon]], {color:'red', weight:6}).addTo(tripLayer);
       L.marker([pinLabel.lat, pinLabel.lon], {
         icon: L.divIcon({className: 'trip-label', html: makeRayLabel('IN', tr.in_branch, tr.in_delta_deg)}),
         zIndexOffset: 1100,
@@ -377,7 +402,7 @@ LEAFLET_HTML = r"""
     if (hasCenter && Number.isFinite(tr.out_angle_deg)) {
       const pout = destPoint(tr.center_calc, tr.out_angle_deg, 26.0);
       const poutLabel = destPoint({lat: pout.lat, lon: pout.lon}, (tr.out_angle_deg + 270.0) % 360.0, 6.0);
-      L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [pout.lat, pout.lon]], {color:'red', weight:4}).addTo(tripLayer);
+      L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [pout.lat, pout.lon]], {color:'red', weight:6}).addTo(tripLayer);
       L.marker([poutLabel.lat, poutLabel.lon], {
         icon: L.divIcon({className: 'trip-label', html: makeRayLabel('OUT', tr.out_branch, tr.out_delta_deg)}),
         zIndexOffset: 1100,
@@ -426,22 +451,20 @@ LEAFLET_HTML = r"""
       animMarker.setLatLng([lat, lon]);
     }, 40);
 
-    // view fit: branchPoints + trip points
+    // ===== 固定ビュー：基準中心（center_spec）を中心に 200m 四方 =====
     try {
-      const pts = [];
-      if (branchPoints && branchPoints.length) {
-        branchPoints.forEach(p => pts.push(p));
-      }
-      pts.push([tr.start.lat, tr.start.lon]);
-      pts.push([tr.center_calc.lat, tr.center_calc.lon]);
-      pts.push([tr.end.lat, tr.end.lon]);
-      if (tr.raw_points && tr.raw_points.length){
-        tr.raw_points.forEach(p => pts.push([p.lat, p.lon]));
-      }
-      const b = L.latLngBounds(pts);
-      map.fitBounds(b.pad(0.25));
+      const half = 100.0; // 片側100m → 200m四方
+      const c0 = {lat: tr.center_spec.lat, lon: tr.center_spec.lon};
+
+      const n = destPoint(c0, 0.0, half);
+      const s = destPoint(c0, 180.0, half);
+      const e = destPoint(c0, 90.0, half);
+      const w = destPoint(c0, 270.0, half);
+
+      const b = L.latLngBounds([[s.lat, w.lon], [n.lat, e.lon]]);
+      map.fitBounds(b, {animate: false, padding: [10, 10]});
     } catch(e) {
-      if (hasCenter) map.setView([tr.center_calc.lat, tr.center_calc.lon], 18);
+      map.setView([tr.center_spec.lat, tr.center_spec.lon], 18);
     }
   }
 
