@@ -248,6 +248,78 @@ def trip_passes_crossroad(points, center_lat, center_lon):
     return False
 
 
+def find_crossing_events(points, center_lat, center_lon):
+    """
+    交差点付近にヒットした index 群を拾い、連続（近接）区間ごとにイベントとして返す。
+    return: List[tuple[start_idx, end_idx]]  (end_idxは含む)
+    """
+    import math
+
+    valid = [i for i, (lat, lon) in enumerate(points)
+             if not (math.isnan(lat) or math.isnan(lon))]
+    if not valid:
+        return []
+
+    hit_idx = []
+
+    for k, idx in enumerate(valid):
+        lat, lon = points[idx]
+
+        # 点距離ヒット
+        if haversine_m(lat, lon, center_lat, center_lon) <= CROSSROAD_HIT_DIST_M:
+            hit_idx.append(idx)
+
+        # 線分距離ヒット（連続する2点）
+        if k < len(valid) - 1:
+            idx2 = valid[k + 1]
+            lat2, lon2 = points[idx2]
+            if point_to_segment_distance_m(center_lon, center_lat, lon, lat, lon2, lat2) <= CROSSROAD_SEG_HIT_DIST_M:
+                # 線分ヒットは両端をイベント候補に入れる（区間化しやすい）
+                hit_idx.append(idx)
+                hit_idx.append(idx2)
+
+    if not hit_idx:
+        return []
+
+    hit_idx = sorted(set(hit_idx))
+
+    # 近接ヒットをまとめてイベント化（ギャップ<=2点は同一イベント扱い）
+    events = []
+    s = hit_idx[0]
+    prev = hit_idx[0]
+    for x in hit_idx[1:]:
+        if x - prev <= 2:
+            prev = x
+            continue
+        events.append((s, prev))
+        s = x
+        prev = x
+    events.append((s, prev))
+    return events
+
+
+def closest_segment_to_center_in_range(points, center_lat, center_lon, i_start, i_end, pad=6):
+    """
+    指定範囲（i_start〜i_end）近傍だけを探索して、最近接線分を求める。
+    pad: 前後に少し広げる（イベントの前後で線分最接近が出ることがある）
+    """
+    lo = max(0, i_start - pad)
+    hi = min(len(points) - 2, i_end + pad)  # 線分は i..i+1 なので -2
+
+    best_i = None
+    best_t = 0.0
+    best_d = float("inf")
+    for i in range(lo, hi + 1):
+        lat1, lon1 = points[i]
+        lat2, lon2 = points[i + 1]
+        t, d = segment_closest_t_and_dist_m(center_lon, center_lat, lon1, lat1, lon2, lat2)
+        if d < best_d:
+            best_d = d
+            best_t = t
+            best_i = i
+    return best_i, best_t, best_d
+
+
 def closest_center_index(points, center_lat, center_lon):
     """中心点に最も近い座標の index を返す。"""
     import math
@@ -555,7 +627,7 @@ def main() -> None:
                         total_trips += 1
 
                         run_id = str(g.iloc[0, COL_RUN_ID])
-                        trip_id = str(trip_key)
+                        trip_id_base = str(trip_key)
                         vehicle_type = str(g.iloc[0, COL_VEHICLE_TYPE])
                         vehicle_use = str(g.iloc[0, COL_VEHICLE_USE])
 
@@ -575,352 +647,367 @@ def main() -> None:
                             nopass_trips += 1
                             continue
 
-                        if not trip_passes_crossroad(points, cross.center_lat, cross.center_lon):
+                        events = find_crossing_events(points, cross.center_lat, cross.center_lon)
+                        if not events:
                             nopass_trips += 1
                             continue
 
                         hit_trips += 1
 
-                        # --------- ここから：通過したら必ず1行出す（所要時間は欠損でもOK） ---------
-                        cumdist = build_cumdist(points)
-                        dist_m = MEASURE_PRE_M + MEASURE_POST_M  # 定義上の距離（MEASURE_PRE_M+MEASURE_POST_M固定）
-                        elapsed = None
-                        time_valid = 0
-                        time_reason = "OK"
+                        # --------- ここから：通過イベントごとに必ず1行出す ---------
+                        for pass_no, (ev_s, ev_e) in enumerate(events, start=1):
+                            trip_id = f"{trip_id_base}-P{pass_no:02d}"
 
-                        # 診断用のデフォルト（埋まるところだけ埋める）
-                        seg_i = None
-                        seg_d = ""
-                        center_pos_m = ""
-                        start_pos_m = ""
-                        end_pos_m = ""
-                        lon_s = ""
-                        lat_s = ""
-                        t_s = ""
-                        lon_e = ""
-                        lat_e = ""
-                        t_e = ""
-                        in_diff = float("inf")
-                        out_diff = float("inf")
-                        angle_method_str = ""
-                        # 交差点中心（指定）と、算出中心（トリップ最近接点）
-                        cross_center_lon_s = ""
-                        cross_center_lat_s = ""
-                        center_lon_calc_s = ""
-                        center_lat_calc_s = ""
-                        center_time_calc_s = ""
-
-                        # 最近接線分（中心への最短距離となる線分）を求める
-                        seg_i_i, seg_t_f, seg_d_f = closest_segment_to_center(points, cross.center_lat, cross.center_lon)
-                        seg_i = seg_i_i
-                        idx_center = closest_center_index(points, cross.center_lat, cross.center_lon)
-
-                        # 交差点指定中心（比較表示用）
-                        cross_center_lon_s = f"{cross.center_lon:.8f}"
-                        cross_center_lat_s = f"{cross.center_lat:.8f}"
-
-                        # 算出中心（線分上最近接点の座標）
-                        if seg_i is not None:
-                            lat1, lon1 = points[seg_i]
-                            lat2, lon2 = points[seg_i + 1]
-                            lat_c = lat1 + seg_t_f * (lat2 - lat1)
-                            lon_c = lon1 + seg_t_f * (lon2 - lon1)
-                            center_lon_calc_s = f"{lon_c:.8f}"
-                            center_lat_calc_s = f"{lat_c:.8f}"
-
-                        # --- 枝判定用の中心位置（道なり距離）を「最近接線分上の最近接点」にする ---
-                        center_pos_val_dir = None
-                        if seg_i is not None:
-                            seg_len_dir = cumdist[seg_i + 1] - cumdist[seg_i]
-                            center_pos_val_dir = cumdist[seg_i] + seg_t_f * seg_len_dir
-                        elif idx_center is not None and idx_center < len(cumdist):
-                            center_pos_val_dir = cumdist[idx_center]
-
-                        # 流入/流出枝番：基本は最近接線分の前後点。取れない場合は中心最近接点±1で代替。
-                        if seg_i is not None:
-                            idx_b = seg_i
-                            idx_a = seg_i + 1
-                        elif idx_center is None:
-                            # ここまで来て points があるのに中心最寄りが取れないのは例外的
-                            time_reason = "NO_SEGMENT"
+                            cumdist = build_cumdist(points)
+                            dist_m = MEASURE_PRE_M + MEASURE_POST_M  # 定義上の距離（MEASURE_PRE_M+MEASURE_POST_M固定）
+                            elapsed = None
                             time_valid = 0
-                            no_segment_trips += 1
-                            idx_b = 0
-                            idx_a = min(1, len(points) - 1)
-                        else:
-                            idx_b = max(0, idx_center - 1)
-                            idx_a = min(len(points) - 1, idx_center + 1)
+                            time_reason = "OK"
 
-                        # ============================================================
-                        # 枝判定角度：中心前後の「2点」から走行方向を推定して安定化
-                        # ============================================================
-                        def _infer_branch_with_extend_in(center_pos_val: float):
-                            # まず従来の near は固定、far を 10m 刻みで伸ばす
-                            base_near = DIR_IN_NEAR_M
-                            far = DIR_IN_FAR_M
-                            tries = 0
-                            while tries < DIR_EXTEND_MAX_TRIES:
-                                p_far = interpolate_point_at_distance(points, cumdist, center_pos_val - far)
-                                p_near = interpolate_point_at_distance(points, cumdist, center_pos_val - base_near)
-                                if not p_far or not p_near:
-                                    # データが無くなった（範囲外）→ ここで初めて不明
-                                    return None, "", float("inf"), f"IN:interp2pt_extend_end({far:.0f}-{base_near:.0f})"
+                            # 診断用のデフォルト（埋まるところだけ埋める）
+                            seg_i = None
+                            seg_d = ""
+                            center_pos_m = ""
+                            start_pos_m = ""
+                            end_pos_m = ""
+                            lon_s = ""
+                            lat_s = ""
+                            t_s = ""
+                            lon_e = ""
+                            lat_e = ""
+                            t_e = ""
+                            in_diff = float("inf")
+                            out_diff = float("inf")
+                            angle_method_str = ""
+                            # 交差点中心（指定）と、算出中心（トリップ最近接点）
+                            cross_center_lon_s = ""
+                            cross_center_lat_s = ""
+                            center_lon_calc_s = ""
+                            center_lat_calc_s = ""
+                            center_time_calc_s = ""
 
-                                approach_bearing = bearing_deg(p_far[0], p_far[1], p_near[0], p_near[1])
-                                in_angle_try = (approach_bearing + 180.0) % 360.0  # center->branch へ
-                                br, diff = find_nearest_branch_with_diff(in_angle_try, cross.branches)
-                                if diff <= BRANCH_MAX_ANGLE_DIFF_DEG:
-                                    return in_angle_try, br, diff, f"IN:interp2pt({far:.0f}-{base_near:.0f})"
+                            # 最近接線分（中心への最短距離となる線分）を求める
+                            seg_i_i, seg_t_f, seg_d_f = closest_segment_to_center_in_range(
+                                points, cross.center_lat, cross.center_lon, ev_s, ev_e, pad=6
+                            )
+                            seg_i = seg_i_i
 
-                                # 未確定→外側へ伸ばす
-                                far += DIR_EXTEND_STEP_M
-                                tries += 1
+                            # idx_center：イベント区間内で中心に一番近い点
+                            idx_center = None
+                            best_d = float("inf")
+                            for ii in range(ev_s, min(ev_e + 1, len(points))):
+                                lat, lon = points[ii]
+                                d = haversine_m(lat, lon, cross.center_lat, cross.center_lon)
+                                if d < best_d:
+                                    best_d = d
+                                    idx_center = ii
 
-                            # 安全弁（通常ここには来ない）
-                            return None, "", float("inf"), "IN:interp2pt_extend_maxtries"
+                            # 交差点指定中心（比較表示用）
+                            cross_center_lon_s = f"{cross.center_lon:.8f}"
+                            cross_center_lat_s = f"{cross.center_lat:.8f}"
 
-                        def _infer_branch_with_extend_out(center_pos_val: float):
-                            base_near = DIR_OUT_NEAR_M
-                            far = DIR_OUT_FAR_M
-                            tries = 0
-                            while tries < DIR_EXTEND_MAX_TRIES:
-                                p_near = interpolate_point_at_distance(points, cumdist, center_pos_val + base_near)
-                                p_far = interpolate_point_at_distance(points, cumdist, center_pos_val + far)
-                                if not p_near or not p_far:
-                                    return None, "", float("inf"), f"OUT:interp2pt_extend_end({base_near:.0f}-{far:.0f})"
-
-                                out_angle_try = bearing_deg(p_near[0], p_near[1], p_far[0], p_far[1])
-                                br, diff = find_nearest_branch_with_diff(out_angle_try, cross.branches)
-                                if diff <= BRANCH_MAX_ANGLE_DIFF_DEG:
-                                    return out_angle_try, br, diff, f"OUT:interp2pt({base_near:.0f}-{far:.0f})"
-
-                                far += DIR_EXTEND_STEP_M
-                                tries += 1
-
-                            return None, "", float("inf"), "OUT:interp2pt_extend_maxtries"
-
-                        angle_method = []
-                        # ※ center_pos_val_dir は「指定中心点に対するトリップ最近接点」（線分上）を優先する
-                        center_pos_val = center_pos_val_dir
-
-                        # ---- IN ----
-                        if center_pos_val is not None:
-                            p_in_far = interpolate_point_at_distance(points, cumdist, center_pos_val - DIR_IN_FAR_M)
-                            p_in_near = interpolate_point_at_distance(points, cumdist, center_pos_val - DIR_IN_NEAR_M)
-                        else:
-                            p_in_far = None
-                            p_in_near = None
-
-                        if p_in_far and p_in_near and center_pos_val is not None:
-                            # まず従来の1回判定
-                            approach_bearing = bearing_deg(p_in_far[0], p_in_far[1], p_in_near[0], p_in_near[1])
-                            in_angle = (approach_bearing + 180.0) % 360.0
-                            in_branch_raw, in_diff = find_nearest_branch_with_diff(in_angle, cross.branches)
-
-                            if in_diff <= BRANCH_MAX_ANGLE_DIFF_DEG:
-                                in_branch = in_branch_raw
-                                angle_method.append("IN:interp2pt")
-                            else:
-                                # 未確定→10m刻みで far を伸ばしてHITまで繰り返す
-                                in_angle2, in_branch2, in_diff2, m = _infer_branch_with_extend_in(center_pos_val)
-                                angle_method.append(m)
-                                if in_angle2 is not None and in_diff2 <= BRANCH_MAX_ANGLE_DIFF_DEG:
-                                    in_angle, in_branch, in_diff = in_angle2, in_branch2, in_diff2
-                                else:
-                                    in_branch = ""
-                                    in_diff = in_diff2 if in_diff2 != float("inf") else in_diff
-                        else:
-                            # もともと補間2点が取れない → 従来fallback
-                            idx_center_fallback = idx_center if idx_center is not None else idx_b
-                            idx_in = max(0, idx_center_fallback - 2)
-                            in_angle = bearing_deg(points[idx_center_fallback][0], points[idx_center_fallback][1],
-                                                   points[idx_in][0], points[idx_in][1])
-                            in_branch_raw, in_diff = find_nearest_branch_with_diff(in_angle, cross.branches)
-                            in_branch = in_branch_raw if in_diff <= BRANCH_MAX_ANGLE_DIFF_DEG else ""
-                            angle_method.append("IN:fallback_idx-2")
-
-                        # ---- OUT ----
-                        if center_pos_val is not None:
-                            p_out_near = interpolate_point_at_distance(points, cumdist, center_pos_val + DIR_OUT_NEAR_M)
-                            p_out_far = interpolate_point_at_distance(points, cumdist, center_pos_val + DIR_OUT_FAR_M)
-                        else:
-                            p_out_near = None
-                            p_out_far = None
-
-                        if p_out_near and p_out_far and center_pos_val is not None:
-                            out_angle = bearing_deg(p_out_near[0], p_out_near[1], p_out_far[0], p_out_far[1])
-                            out_branch_raw, out_diff = find_nearest_branch_with_diff(out_angle, cross.branches)
-
-                            if out_diff <= BRANCH_MAX_ANGLE_DIFF_DEG:
-                                out_branch = out_branch_raw
-                                angle_method.append("OUT:interp2pt")
-                            else:
-                                out_angle2, out_branch2, out_diff2, m = _infer_branch_with_extend_out(center_pos_val)
-                                angle_method.append(m)
-                                if out_angle2 is not None and out_diff2 <= BRANCH_MAX_ANGLE_DIFF_DEG:
-                                    out_angle, out_branch, out_diff = out_angle2, out_branch2, out_diff2
-                                else:
-                                    out_branch = ""
-                                    out_diff = out_diff2 if out_diff2 != float("inf") else out_diff
-                        else:
-                            idx_center_fallback = idx_center if idx_center is not None else idx_a
-                            idx_out = min(len(points) - 1, idx_center_fallback + 2)
-                            out_angle = bearing_deg(points[idx_center_fallback][0], points[idx_center_fallback][1],
-                                                    points[idx_out][0], points[idx_out][1])
-                            out_branch_raw, out_diff = find_nearest_branch_with_diff(out_angle, cross.branches)
-                            out_branch = out_branch_raw if out_diff <= BRANCH_MAX_ANGLE_DIFF_DEG else ""
-                            angle_method.append("OUT:fallback_idx+2")
-
-                        angle_method_str = "/".join(angle_method)
-
-                        # 最近接線分の診断情報（可能な範囲で記録）
-                        if seg_i is not None:
-                            seg_d = f"{seg_d_f:.3f}"
-
-                        # GPS時刻（datetime）を用意（補間で必要）
-                        dt_list = [parse_dt14(t) for t in gps_times]
-                        if any(d is None for d in dt_list):
-                            # 通過としてはカウントするが、所要時間は算出不可
-                            time_valid = 0
-                            time_reason = "TIME_MISSING"
-                            bad_time_trips += 1
-                        else:
-                            # 算出中心の時刻（線分上最近接点：seg_i と seg_t_f で補間）
+                            # 算出中心（線分上最近接点の座標）
                             if seg_i is not None:
-                                from datetime import timedelta
-                                dt0 = dt_list[seg_i]
-                                dt1 = dt_list[seg_i + 1]
-                                if dt0 is not None and dt1 is not None:
-                                    dtc = dt0 + timedelta(seconds=seg_t_f * (dt1 - dt0).total_seconds())
-                                    center_time_calc_s = dtc.strftime("%Y%m%d%H%M%S")
+                                lat1, lon1 = points[seg_i]
+                                lat2, lon2 = points[seg_i + 1]
+                                lat_c = lat1 + seg_t_f * (lat2 - lat1)
+                                lon_c = lon1 + seg_t_f * (lon2 - lon1)
+                                center_lon_calc_s = f"{lon_c:.8f}"
+                                center_lat_calc_s = f"{lat_c:.8f}"
 
-                            # 道なり距離と中心基準位置（線分上最近接）を計算
-                            if seg_i is None:
-                                time_valid = 0
+                            # --- 枝判定用の中心位置（道なり距離）を「最近接線分上の最近接点」にする ---
+                            center_pos_val_dir = None
+                            if seg_i is not None:
+                                seg_len_dir = cumdist[seg_i + 1] - cumdist[seg_i]
+                                center_pos_val_dir = cumdist[seg_i] + seg_t_f * seg_len_dir
+                            elif idx_center is not None and idx_center < len(cumdist):
+                                center_pos_val_dir = cumdist[idx_center]
+
+                            # 流入/流出枝番：基本は最近接線分の前後点。取れない場合は中心最近接点±1で代替。
+                            if seg_i is not None:
+                                idx_b = seg_i
+                                idx_a = seg_i + 1
+                            elif idx_center is None:
+                                # ここまで来て points があるのに中心最寄りが取れないのは例外的
                                 time_reason = "NO_SEGMENT"
+                                time_valid = 0
                                 no_segment_trips += 1
+                                idx_b = 0
+                                idx_a = min(1, len(points) - 1)
                             else:
-                                seg_len = cumdist[seg_i + 1] - cumdist[seg_i]
-                                center_pos_val = cumdist[seg_i] + seg_t_f * seg_len
-                                center_pos_m = f"{center_pos_val:.3f}"
+                                idx_b = max(0, idx_center - 1)
+                                idx_a = min(len(points) - 1, idx_center + 1)
 
-                                start_pos_val = center_pos_val - MEASURE_PRE_M
-                                end_pos_val = center_pos_val + MEASURE_POST_M
-                                start_pos_m = f"{start_pos_val:.3f}"
-                                end_pos_m = f"{end_pos_val:.3f}"
+                            # ============================================================
+                            # 枝判定角度：中心前後の「2点」から走行方向を推定して安定化
+                            # ============================================================
+                            def _infer_branch_with_extend_in(center_pos_val: float):
+                                # まず従来の near は固定、far を 10m 刻みで伸ばす
+                                base_near = DIR_IN_NEAR_M
+                                far = DIR_IN_FAR_M
+                                tries = 0
+                                while tries < DIR_EXTEND_MAX_TRIES:
+                                    p_far = interpolate_point_at_distance(points, cumdist, center_pos_val - far)
+                                    p_near = interpolate_point_at_distance(points, cumdist, center_pos_val - base_near)
+                                    if not p_far or not p_near:
+                                        # データが無くなった（範囲外）→ ここで初めて不明
+                                        return None, "", float("inf"), f"IN:interp2pt_extend_end({far:.0f}-{base_near:.0f})"
 
-                                # 計測区間がトリップ範囲外 → 所要時間算出不可（ただし行は出す）
-                                if start_pos_val < 0 or end_pos_val > cumdist[-1]:
-                                    time_valid = 0
-                                    time_reason = "OUT_OF_RANGE"
-                                    out_of_range_trips += 1
+                                    approach_bearing = bearing_deg(p_far[0], p_far[1], p_near[0], p_near[1])
+                                    in_angle_try = (approach_bearing + 180.0) % 360.0  # center->branch へ
+                                    br, diff = find_nearest_branch_with_diff(in_angle_try, cross.branches)
+                                    if diff <= BRANCH_MAX_ANGLE_DIFF_DEG:
+                                        return in_angle_try, br, diff, f"IN:interp2pt({far:.0f}-{base_near:.0f})"
+
+                                    # 未確定→外側へ伸ばす
+                                    far += DIR_EXTEND_STEP_M
+                                    tries += 1
+
+                                # 安全弁（通常ここには来ない）
+                                return None, "", float("inf"), "IN:interp2pt_extend_maxtries"
+
+                            def _infer_branch_with_extend_out(center_pos_val: float):
+                                base_near = DIR_OUT_NEAR_M
+                                far = DIR_OUT_FAR_M
+                                tries = 0
+                                while tries < DIR_EXTEND_MAX_TRIES:
+                                    p_near = interpolate_point_at_distance(points, cumdist, center_pos_val + base_near)
+                                    p_far = interpolate_point_at_distance(points, cumdist, center_pos_val + far)
+                                    if not p_near or not p_far:
+                                        return None, "", float("inf"), f"OUT:interp2pt_extend_end({base_near:.0f}-{far:.0f})"
+
+                                    out_angle_try = bearing_deg(p_near[0], p_near[1], p_far[0], p_far[1])
+                                    br, diff = find_nearest_branch_with_diff(out_angle_try, cross.branches)
+                                    if diff <= BRANCH_MAX_ANGLE_DIFF_DEG:
+                                        return out_angle_try, br, diff, f"OUT:interp2pt({base_near:.0f}-{far:.0f})"
+
+                                    far += DIR_EXTEND_STEP_M
+                                    tries += 1
+
+                                return None, "", float("inf"), "OUT:interp2pt_extend_maxtries"
+
+                            angle_method = []
+                            # ※ center_pos_val_dir は「指定中心点に対するトリップ最近接点」（線分上）を優先する
+                            center_pos_val = center_pos_val_dir
+
+                            # ---- IN ----
+                            if center_pos_val is not None:
+                                p_in_far = interpolate_point_at_distance(points, cumdist, center_pos_val - DIR_IN_FAR_M)
+                                p_in_near = interpolate_point_at_distance(points, cumdist, center_pos_val - DIR_IN_NEAR_M)
+                            else:
+                                p_in_far = None
+                                p_in_near = None
+
+                            if p_in_far and p_in_near and center_pos_val is not None:
+                                # まず従来の1回判定
+                                approach_bearing = bearing_deg(p_in_far[0], p_in_far[1], p_in_near[0], p_in_near[1])
+                                in_angle = (approach_bearing + 180.0) % 360.0
+                                in_branch_raw, in_diff = find_nearest_branch_with_diff(in_angle, cross.branches)
+
+                                if in_diff <= BRANCH_MAX_ANGLE_DIFF_DEG:
+                                    in_branch = in_branch_raw
+                                    angle_method.append("IN:interp2pt")
                                 else:
-                                    lat_s_v, lon_s_v, dt_s = interpolate_at_distance(
-                                        points,
-                                        dt_list,
-                                        cumdist,
-                                        start_pos_val,
-                                    )
-                                    lat_e_v, lon_e_v, dt_e = interpolate_at_distance(
-                                        points,
-                                        dt_list,
-                                        cumdist,
-                                        end_pos_val,
-                                    )
-                                    if dt_s is None or dt_e is None:
-                                        time_valid = 0
-                                        time_reason = "TIME_MISSING"
-                                        bad_time_trips += 1
+                                    # 未確定→10m刻みで far を伸ばしてHITまで繰り返す
+                                    in_angle2, in_branch2, in_diff2, m = _infer_branch_with_extend_in(center_pos_val)
+                                    angle_method.append(m)
+                                    if in_angle2 is not None and in_diff2 <= BRANCH_MAX_ANGLE_DIFF_DEG:
+                                        in_angle, in_branch, in_diff = in_angle2, in_branch2, in_diff2
                                     else:
-                                        elapsed = (dt_e - dt_s).total_seconds()
-                                        if elapsed and elapsed > 0:
-                                            time_valid = 1
-                                            time_reason = "OK"
-                                        else:
-                                            elapsed = None
+                                        in_branch = ""
+                                        in_diff = in_diff2 if in_diff2 != float("inf") else in_diff
+                            else:
+                                # もともと補間2点が取れない → 従来fallback
+                                idx_center_fallback = idx_center if idx_center is not None else idx_b
+                                idx_in = max(0, idx_center_fallback - 2)
+                                in_angle = bearing_deg(points[idx_center_fallback][0], points[idx_center_fallback][1],
+                                                       points[idx_in][0], points[idx_in][1])
+                                in_branch_raw, in_diff = find_nearest_branch_with_diff(in_angle, cross.branches)
+                                in_branch = in_branch_raw if in_diff <= BRANCH_MAX_ANGLE_DIFF_DEG else ""
+                                angle_method.append("IN:fallback_idx-2")
+
+                            # ---- OUT ----
+                            if center_pos_val is not None:
+                                p_out_near = interpolate_point_at_distance(points, cumdist, center_pos_val + DIR_OUT_NEAR_M)
+                                p_out_far = interpolate_point_at_distance(points, cumdist, center_pos_val + DIR_OUT_FAR_M)
+                            else:
+                                p_out_near = None
+                                p_out_far = None
+
+                            if p_out_near and p_out_far and center_pos_val is not None:
+                                out_angle = bearing_deg(p_out_near[0], p_out_near[1], p_out_far[0], p_out_far[1])
+                                out_branch_raw, out_diff = find_nearest_branch_with_diff(out_angle, cross.branches)
+
+                                if out_diff <= BRANCH_MAX_ANGLE_DIFF_DEG:
+                                    out_branch = out_branch_raw
+                                    angle_method.append("OUT:interp2pt")
+                                else:
+                                    out_angle2, out_branch2, out_diff2, m = _infer_branch_with_extend_out(center_pos_val)
+                                    angle_method.append(m)
+                                    if out_angle2 is not None and out_diff2 <= BRANCH_MAX_ANGLE_DIFF_DEG:
+                                        out_angle, out_branch, out_diff = out_angle2, out_branch2, out_diff2
+                                    else:
+                                        out_branch = ""
+                                        out_diff = out_diff2 if out_diff2 != float("inf") else out_diff
+                            else:
+                                idx_center_fallback = idx_center if idx_center is not None else idx_a
+                                idx_out = min(len(points) - 1, idx_center_fallback + 2)
+                                out_angle = bearing_deg(points[idx_center_fallback][0], points[idx_center_fallback][1],
+                                                        points[idx_out][0], points[idx_out][1])
+                                out_branch_raw, out_diff = find_nearest_branch_with_diff(out_angle, cross.branches)
+                                out_branch = out_branch_raw if out_diff <= BRANCH_MAX_ANGLE_DIFF_DEG else ""
+                                angle_method.append("OUT:fallback_idx+2")
+
+                            angle_method_str = "/".join(angle_method)
+
+                            # 最近接線分の診断情報（可能な範囲で記録）
+                            if seg_i is not None:
+                                seg_d = f"{seg_d_f:.3f}"
+
+                            # GPS時刻（datetime）を用意（補間で必要）
+                            dt_list = [parse_dt14(t) for t in gps_times]
+                            if any(d is None for d in dt_list):
+                                # 通過としてはカウントするが、所要時間は算出不可
+                                time_valid = 0
+                                time_reason = "TIME_MISSING"
+                                bad_time_trips += 1
+                            else:
+                                # 算出中心の時刻（線分上最近接点：seg_i と seg_t_f で補間）
+                                if seg_i is not None:
+                                    from datetime import timedelta
+                                    dt0 = dt_list[seg_i]
+                                    dt1 = dt_list[seg_i + 1]
+                                    if dt0 is not None and dt1 is not None:
+                                        dtc = dt0 + timedelta(seconds=seg_t_f * (dt1 - dt0).total_seconds())
+                                        center_time_calc_s = dtc.strftime("%Y%m%d%H%M%S")
+
+                                # 道なり距離と中心基準位置（線分上最近接）を計算
+                                if seg_i is None:
+                                    time_valid = 0
+                                    time_reason = "NO_SEGMENT"
+                                    no_segment_trips += 1
+                                else:
+                                    seg_len = cumdist[seg_i + 1] - cumdist[seg_i]
+                                    center_pos_val = cumdist[seg_i] + seg_t_f * seg_len
+                                    center_pos_m = f"{center_pos_val:.3f}"
+
+                                    start_pos_val = center_pos_val - MEASURE_PRE_M
+                                    end_pos_val = center_pos_val + MEASURE_POST_M
+                                    start_pos_m = f"{start_pos_val:.3f}"
+                                    end_pos_m = f"{end_pos_val:.3f}"
+
+                                    # 計測区間がトリップ範囲外 → 所要時間算出不可（ただし行は出す）
+                                    if start_pos_val < 0 or end_pos_val > cumdist[-1]:
+                                        time_valid = 0
+                                        time_reason = "OUT_OF_RANGE"
+                                        out_of_range_trips += 1
+                                    else:
+                                        lat_s_v, lon_s_v, dt_s = interpolate_at_distance(
+                                            points,
+                                            dt_list,
+                                            cumdist,
+                                            start_pos_val,
+                                        )
+                                        lat_e_v, lon_e_v, dt_e = interpolate_at_distance(
+                                            points,
+                                            dt_list,
+                                            cumdist,
+                                            end_pos_val,
+                                        )
+                                        if dt_s is None or dt_e is None:
                                             time_valid = 0
                                             time_reason = "TIME_MISSING"
-                                        lon_s, lat_s = f"{lon_s_v:.8f}", f"{lat_s_v:.8f}"
-                                        lon_e, lat_e = f"{lon_e_v:.8f}", f"{lat_e_v:.8f}"
-                                        t_s = dt_s.strftime("%Y%m%d%H%M%S")
-                                        t_e = dt_e.strftime("%Y%m%d%H%M%S")
+                                            bad_time_trips += 1
+                                        else:
+                                            elapsed = (dt_e - dt_s).total_seconds()
+                                            if elapsed and elapsed > 0:
+                                                time_valid = 1
+                                                time_reason = "OK"
+                                            else:
+                                                elapsed = None
+                                                time_valid = 0
+                                                time_reason = "TIME_MISSING"
+                                            lon_s, lat_s = f"{lon_s_v:.8f}", f"{lat_s_v:.8f}"
+                                            lon_e, lat_e = f"{lon_e_v:.8f}", f"{lat_e_v:.8f}"
+                                            t_s = dt_s.strftime("%Y%m%d%H%M%S")
+                                            t_e = dt_e.strftime("%Y%m%d%H%M%S")
 
-                        if time_valid == 1:
-                            time_ok_trips += 1
-                        else:
-                            time_ng_trips += 1
+                            if time_valid == 1:
+                                time_ok_trips += 1
+                            else:
+                                time_ng_trips += 1
 
-                        # 生プロット（中心付近の前後4点＋中央）
-                        if idx_center is not None:
-                            raw_center_idx = idx_center
-                        elif seg_i is not None:
-                            raw_center_idx = min(seg_i + 1, len(points) - 1)
-                        else:
-                            raw_center_idx = 0
+                            # 生プロット（中心付近の前後4点＋中央）
+                            if idx_center is not None:
+                                raw_center_idx = idx_center
+                            elif seg_i is not None:
+                                raw_center_idx = min(seg_i + 1, len(points) - 1)
+                            else:
+                                raw_center_idx = 0
 
-                        def _fmt_pt(i):
-                            try:
-                                lat_v, lon_v = points[i]
-                                lon_s_v = f"{lon_v:.8f}"
-                                lat_s_v = f"{lat_v:.8f}"
-                                gps_s_v = gps_times[i] if i < len(gps_times) else ""
-                                return lon_s_v, lat_s_v, gps_s_v
-                            except Exception:
-                                return "", "", ""
+                            def _fmt_pt(i):
+                                try:
+                                    lat_v, lon_v = points[i]
+                                    lon_s_v = f"{lon_v:.8f}"
+                                    lat_s_v = f"{lat_v:.8f}"
+                                    gps_s_v = gps_times[i] if i < len(gps_times) else ""
+                                    return lon_s_v, lat_s_v, gps_s_v
+                                except Exception:
+                                    return "", "", ""
 
-                        raw_cols = []
-                        for k in [-4, -3, -2, -1, 0, 1, 2, 3, 4]:
-                            idx_raw = max(0, min(raw_center_idx + k, len(points) - 1))
-                            lon_raw, lat_raw, gps_raw = _fmt_pt(idx_raw)
-                            raw_cols.extend([lon_raw, lat_raw, gps_raw])
+                            raw_cols = []
+                            for k in [-4, -3, -2, -1, 0, 1, 2, 3, 4]:
+                                idx_raw = max(0, min(raw_center_idx + k, len(points) - 1))
+                                lon_raw, lat_raw, gps_raw = _fmt_pt(idx_raw)
+                                raw_cols.extend([lon_raw, lat_raw, gps_raw])
 
-                        row_out = [
-                            crossroad_path.name,
-                            cross.cross_id,
-                            trip_csv.name,
-                            trip_date,
-                            weekday,
-                            run_id,
-                            trip_id,
-                            vehicle_type,
-                            vehicle_use,
-                            str(in_branch),
-                            str(out_branch),
-                            f"{in_angle:.1f}" if pd.notna(in_angle) else "",
-                            f"{out_angle:.1f}" if pd.notna(out_angle) else "",
-                            f"{in_diff:.1f}" if in_diff != float("inf") else "",
-                            f"{out_diff:.1f}" if out_diff != float("inf") else "",
-                            angle_method_str,
-                            f"{dist_m:.3f}",
-                            f"{elapsed:.3f}" if elapsed is not None else "",
-                            "",
-                            "",
-                            str(time_valid),
-                            time_reason,
-                        ]
-                        # ---- 診断用列（補間区間・最近接情報） ----
-                        row_out.extend([
-                            f"{MEASURE_PRE_M:.0f}",
-                            f"{MEASURE_POST_M:.0f}",
-                            seg_d,
-                            center_pos_m,
-                            start_pos_m,
-                            end_pos_m,
-                            lon_s, lat_s, t_s,
-                            lon_e, lat_e, t_e,
-                            cross_center_lon_s, cross_center_lat_s,
-                            center_lon_calc_s, center_lat_calc_s, center_time_calc_s,
-                        ])
-                        row_out.extend(raw_cols)
+                            row_out = [
+                                crossroad_path.name,
+                                cross.cross_id,
+                                trip_csv.name,
+                                trip_date,
+                                weekday,
+                                run_id,
+                                trip_id,
+                                vehicle_type,
+                                vehicle_use,
+                                str(in_branch),
+                                str(out_branch),
+                                f"{in_angle:.1f}" if pd.notna(in_angle) else "",
+                                f"{out_angle:.1f}" if pd.notna(out_angle) else "",
+                                f"{in_diff:.1f}" if in_diff != float("inf") else "",
+                                f"{out_diff:.1f}" if out_diff != float("inf") else "",
+                                angle_method_str,
+                                f"{dist_m:.3f}",
+                                f"{elapsed:.3f}" if elapsed is not None else "",
+                                "",
+                                "",
+                                str(time_valid),
+                                time_reason,
+                            ]
+                            # ---- 診断用列（補間区間・最近接情報） ----
+                            row_out.extend([
+                                f"{MEASURE_PRE_M:.0f}",
+                                f"{MEASURE_POST_M:.0f}",
+                                seg_d,
+                                center_pos_m,
+                                start_pos_m,
+                                end_pos_m,
+                                lon_s, lat_s, t_s,
+                                lon_e, lat_e, t_e,
+                                cross_center_lon_s, cross_center_lat_s,
+                                center_lon_calc_s, center_lat_calc_s, center_time_calc_s,
+                            ])
+                            row_out.extend(raw_cols)
 
-                        assert len(row_out) == len(HEADER)
-                        row_out[idx_t0] = ""
-                        row_out[idx_delay] = ""
-                        tmp_writer.writerow(row_out)
+                            assert len(row_out) == len(HEADER)
+                            row_out[idx_t0] = ""
+                            row_out[idx_delay] = ""
+                            tmp_writer.writerow(row_out)
 
-                        if elapsed is not None:
-                            key = (str(in_branch), str(out_branch))
-                            elapsed_map.setdefault(key, []).append(float(elapsed))
+                            if elapsed is not None:
+                                key = (str(in_branch), str(out_branch))
+                                elapsed_map.setdefault(key, []).append(float(elapsed))
 
                     # ----------- 進捗表示（1行上書き） -----------
                     progress = file_idx / total_files * 100.0
