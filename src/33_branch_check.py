@@ -128,8 +128,6 @@ LEAFLET_HTML = r"""
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Branch Check</title>
-  <link rel="stylesheet" href="leaflet/leaflet.css"/>
-  <script src="leaflet/leaflet.js"></script>
   <style>
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
@@ -168,20 +166,89 @@ LEAFLET_HTML = r"""
   let centerMarker = null;
   let calcMarker = null;
 
-  let branchLayer = L.layerGroup();
-  let tripLayer = L.layerGroup();
+  let branchLayer = null;
+  let tripLayer = null;
   let branchPoints = [];
 
   let animTimer = null;
   let animMarker = null;
 
-  function initMap(centerLat, centerLon, zoom){
-    if (map) return;
-    map = L.map('map', { zoomControl: true });
+  function loadStylesheet(href){
+    return new Promise((resolve, reject) => {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = href;
+      link.onload = () => resolve();
+      link.onerror = () => reject(new Error(`failed to load css: ${href}`));
+      document.head.appendChild(link);
+    });
+  }
+
+  function loadScript(src){
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = src;
+      script.async = false;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error(`failed to load script: ${src}`));
+      document.head.appendChild(script);
+    });
+  }
+
+  async function loadLeaflet(){
+    try {
+      await loadStylesheet('leaflet/leaflet.css');
+    } catch (_) {
+      try {
+        await loadStylesheet('https://unpkg.com/leaflet@1.9.4/dist/leaflet.css');
+      } catch (_) {
+        // CSSは必須ではないので無視
+      }
+    }
+
+    if (window.L) return true;
+    try {
+      await loadScript('leaflet/leaflet.js');
+    } catch (_) {
+      try {
+        await loadScript('https://unpkg.com/leaflet@1.9.4/dist/leaflet.js');
+      } catch (_) {
+        return false;
+      }
+    }
+    return !!window.L;
+  }
+
+  function tryAddBaseTiles(){
+    if (!map) return;
     base = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 20,
       attribution: '&copy; OpenStreetMap contributors'
-    }).addTo(map);
+    });
+    let tileOk = false;
+    let errCount = 0;
+    base.on('tileload', () => {
+      tileOk = true;
+    });
+    base.on('tileerror', () => {
+      errCount += 1;
+    });
+    base.addTo(map);
+
+    setTimeout(() => {
+      if (!map) return;
+      if (!tileOk || errCount > 0) {
+        map.getContainer().style.background = '#ffffff';
+        if (base && map.hasLayer(base)) {
+          map.removeLayer(base);
+        }
+      }
+    }, 1200);
+  }
+
+  function initMap(centerLat, centerLon, zoom){
+    if (map) return;
+    map = L.map('map', { zoomControl: true });
 
     branchLayer.addTo(map);
     tripLayer.addTo(map);
@@ -191,6 +258,8 @@ LEAFLET_HTML = r"""
     centerMarker = L.circleMarker([centerLat, centerLon], {
       radius: 7, color: 'red', fillColor: 'red', fillOpacity: 1.0
     }).addTo(map);
+
+    tryAddBaseTiles();
   }
 
   function clearLayer(layer){
@@ -351,12 +420,25 @@ LEAFLET_HTML = r"""
     }
   }
 
-  // expose
-  window._branchCheck = {
-    initMap,
-    setBranchRays,
-    showTrip
-  };
+  async function bootstrap(){
+    const ok = await loadLeaflet();
+    if (!ok || !window.L){
+      document.getElementById('map').innerHTML = 'Leafletを読み込めません（オフライン/未同梱）';
+      return;
+    }
+
+    branchLayer = L.layerGroup();
+    tripLayer = L.layerGroup();
+
+    // expose
+    window._branchCheck = {
+      initMap,
+      setBranchRays,
+      showTrip
+    };
+  }
+
+  bootstrap();
 </script>
 </body>
 </html>
