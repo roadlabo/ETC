@@ -410,6 +410,15 @@ HEADER = [
     # ---- 可視化・検証用（中心点ずれの確認）----
     "交差点中心_経度", "交差点中心_緯度",
     "算出中心_経度", "算出中心_緯度", "算出中心_GPS時刻",
+    "point-4経度", "point-4緯度", "point-4GPS時刻",
+    "point-3経度", "point-3緯度", "point-3GPS時刻",
+    "point-2経度", "point-2緯度", "point-2GPS時刻",
+    "point-1経度", "point-1緯度", "point-1GPS時刻",
+    "【中央】経度", "【中央】緯度", "【中央】GPS時刻",
+    "point+1経度", "point+1緯度", "point+1GPS時刻",
+    "point+2経度", "point+2緯度", "point+2GPS時刻",
+    "point+3経度", "point+3緯度", "point+3GPS時刻",
+    "point+4経度", "point+4緯度", "point+4GPS時刻",
 ]
 
 
@@ -764,6 +773,30 @@ def main() -> None:
                         else:
                             time_ng_trips += 1
 
+                        # 生プロット（中心付近の前後4点＋中央）
+                        if idx_center is not None:
+                            raw_center_idx = idx_center
+                        elif seg_i is not None:
+                            raw_center_idx = min(seg_i + 1, len(points) - 1)
+                        else:
+                            raw_center_idx = 0
+
+                        def _fmt_pt(i):
+                            try:
+                                lat_v, lon_v = points[i]
+                                lon_s_v = f"{lon_v:.8f}"
+                                lat_s_v = f"{lat_v:.8f}"
+                                gps_s_v = gps_times[i] if i < len(gps_times) else ""
+                                return lon_s_v, lat_s_v, gps_s_v
+                            except Exception:
+                                return "", "", ""
+
+                        raw_cols = []
+                        for k in [-4, -3, -2, -1, 0, 1, 2, 3, 4]:
+                            idx_raw = max(0, min(raw_center_idx + k, len(points) - 1))
+                            lon_raw, lat_raw, gps_raw = _fmt_pt(idx_raw)
+                            raw_cols.extend([lon_raw, lat_raw, gps_raw])
+
                         row_out = [
                             crossroad_path.name,
                             cross.cross_id,
@@ -799,6 +832,7 @@ def main() -> None:
                             cross_center_lon_s, cross_center_lat_s,
                             center_lon_calc_s, center_lat_calc_s, center_time_calc_s,
                         ])
+                        row_out.extend(raw_cols)
 
                         assert len(row_out) == len(HEADER)
                         row_out[idx_t0] = ""

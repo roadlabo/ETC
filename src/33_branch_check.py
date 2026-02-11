@@ -251,6 +251,19 @@ LEAFLET_HTML = r"""
     const startM = L.circleMarker([tr.start.lat, tr.start.lon], {radius: 6}).addTo(tripLayer);
     const endM   = L.circleMarker([tr.end.lat, tr.end.lon], {radius: 6}).addTo(tripLayer);
 
+    // raw points overlay (optional)
+    if (tr.raw_points && tr.raw_points.length >= 2){
+      L.polyline(tr.raw_points.map(p => [p.lat, p.lon]), {color: 'black'}).addTo(tripLayer);
+      tr.raw_points.forEach((p, idx) => {
+        L.circleMarker([p.lat, p.lon], {
+          radius: (idx === 4 ? 6 : 4),
+          color: 'black',
+          fillColor: 'black',
+          fillOpacity: 1.0,
+        }).addTo(tripLayer);
+      });
+    }
+
     // labels
     L.marker([tr.start.lat, tr.start.lon], {
       icon: L.divIcon({className: 'trip-label', html: `IN:枝${tr.in_branch} (Δ${tr.in_diff}°)`}),
@@ -312,6 +325,9 @@ LEAFLET_HTML = r"""
       [tr.center_calc.lat, tr.center_calc.lon],
       [tr.end.lat, tr.end.lon],
     ];
+    if (tr.raw_points && tr.raw_points.length > 0){
+      tr.raw_points.forEach(p => points.push([p.lat, p.lon]));
+    }
     if (points.length >= 2){
       const bounds = L.latLngBounds(points);
       map.fitBounds(bounds, {padding:[30,30]});
@@ -397,6 +413,7 @@ DETAIL_FIELDS = [
     ("角度算出方式", "角度算出方式"),
     ("計測距離(m)", "計測距離(m)"),
     ("交差点通過速度(km/h) [参考]", "交差点通過速度(km/h)"),
+    ("RAW中央GPS時刻", "【中央】GPS時刻"),
 ]
 
 
@@ -782,6 +799,30 @@ class BranchCheckWindow(QMainWindow):
             self.detail_labels[key].setText("" if pd.isna(v) else str(v))
 
         # map payload
+        raw_cols = [
+            ("point-4経度", "point-4緯度", "point-4GPS時刻"),
+            ("point-3経度", "point-3緯度", "point-3GPS時刻"),
+            ("point-2経度", "point-2緯度", "point-2GPS時刻"),
+            ("point-1経度", "point-1緯度", "point-1GPS時刻"),
+            ("【中央】経度", "【中央】緯度", "【中央】GPS時刻"),
+            ("point+1経度", "point+1緯度", "point+1GPS時刻"),
+            ("point+2経度", "point+2緯度", "point+2GPS時刻"),
+            ("point+3経度", "point+3緯度", "point+3GPS時刻"),
+            ("point+4経度", "point+4緯度", "point+4GPS時刻"),
+        ]
+        raw_points = []
+        for lon_col, lat_col, _ in raw_cols:
+            if lon_col not in self.df.columns or lat_col not in self.df.columns:
+                continue
+            try:
+                lon_val = float(row.get(lon_col, np.nan))
+                lat_val = float(row.get(lat_col, np.nan))
+                if math.isnan(lon_val) or math.isnan(lat_val):
+                    continue
+                raw_points.append({"lat": lat_val, "lon": lon_val})
+            except Exception:
+                continue
+
         tr = {
             "center_spec": {"lat": self.center_lat, "lon": self.center_lon},
             "center_calc": {
@@ -800,6 +841,7 @@ class BranchCheckWindow(QMainWindow):
             "out_branch": str(row["流出枝番"]),
             "in_diff": ("" if pd.isna(row["流入角度差(deg)"]) else f"{float(row['流入角度差(deg)']):.1f}"),
             "out_diff": ("" if pd.isna(row["流出角度差(deg)"]) else f"{float(row['流出角度差(deg)']):.1f}"),
+            "raw_points": raw_points,
         }
         js = f"window._branchCheck.showTrip({json.dumps(tr)});"
         self.web.page().runJavaScript(js)
