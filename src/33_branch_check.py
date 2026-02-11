@@ -347,18 +347,14 @@ LEAFLET_HTML = r"""
     }).addTo(map);
     calcMarker = L.circleMarker([tr.center_calc.lat, tr.center_calc.lon], {radius: 6}).addTo(map);
 
-    // 2-segment line: start -> center_calc -> end
-    const trajStyle = {color: 'black', weight: 2, dashArray: '4 6'};
-    const line1 = L.polyline([[tr.start.lat, tr.start.lon], [tr.center_calc.lat, tr.center_calc.lon]], trajStyle).addTo(tripLayer);
-    const line2 = L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [tr.end.lat, tr.end.lon]], trajStyle).addTo(tripLayer);
+    // start/end markers（点は残す）
+    L.circleMarker([tr.start.lat, tr.start.lon], {radius: 6}).addTo(tripLayer);
+    L.circleMarker([tr.end.lat, tr.end.lon], {radius: 6}).addTo(tripLayer);
 
-    // start/end markers
-    const startM = L.circleMarker([tr.start.lat, tr.start.lon], {radius: 6}).addTo(tripLayer);
-    const endM   = L.circleMarker([tr.end.lat, tr.end.lon], {radius: 6}).addTo(tripLayer);
-
-    // raw points overlay (optional)
+    // raw points overlay (keep): raw_points を結ぶ黒点線は維持
+    const rawStyle = {color: 'black', weight: 2, dashArray: '4 6'};
     if (tr.raw_points && tr.raw_points.length >= 2){
-      L.polyline(tr.raw_points.map(p => [p.lat, p.lon]), trajStyle).addTo(tripLayer);
+      L.polyline(tr.raw_points.map(p => [p.lat, p.lon]), rawStyle).addTo(tripLayer);
       tr.raw_points.forEach((p, idx) => {
         L.circleMarker([p.lat, p.lon], {
           radius: (idx === 4 ? 6 : 4),
@@ -390,10 +386,14 @@ LEAFLET_HTML = r"""
       return `${prefix}:枝${branchText}`;
     };
 
+    let inSeg = null;
+    let outSeg = null;
+
     if (hasCenter && Number.isFinite(tr.in_angle_deg)) {
       const pin = destPoint(tr.center_calc, tr.in_angle_deg, 26.0);
       const pinLabel = destPoint({lat: pin.lat, lon: pin.lon}, (tr.in_angle_deg + 90.0) % 360.0, 6.0);
       L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [pin.lat, pin.lon]], {color:'red', weight:6}).addTo(tripLayer);
+      inSeg = {a: {lat: tr.center_calc.lat, lon: tr.center_calc.lon}, b: {lat: pin.lat, lon: pin.lon}};
       L.marker([pinLabel.lat, pinLabel.lon], {
         icon: L.divIcon({className: 'trip-label', html: makeRayLabel('IN', tr.in_branch, tr.in_delta_deg)}),
         zIndexOffset: 1100,
@@ -403,53 +403,47 @@ LEAFLET_HTML = r"""
       const pout = destPoint(tr.center_calc, tr.out_angle_deg, 26.0);
       const poutLabel = destPoint({lat: pout.lat, lon: pout.lon}, (tr.out_angle_deg + 270.0) % 360.0, 6.0);
       L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [pout.lat, pout.lon]], {color:'red', weight:6}).addTo(tripLayer);
+      outSeg = {a: {lat: tr.center_calc.lat, lon: tr.center_calc.lon}, b: {lat: pout.lat, lon: pout.lon}};
       L.marker([poutLabel.lat, poutLabel.lon], {
         icon: L.divIcon({className: 'trip-label', html: makeRayLabel('OUT', tr.out_branch, tr.out_delta_deg)}),
         zIndexOffset: 1100,
       }).addTo(tripLayer);
     }
 
-    // animation: move marker along start->end (simple interpolation)
-    const steps = 80;
-    let i = 0;
-    animMarker = L.circleMarker([tr.start.lat, tr.start.lon], {radius: 7}).addTo(tripLayer);
+    // animation: cyan bead moves on IN/OUT red segments
+    stopAnim();
+    const segs = [];
+    if (inSeg) segs.push(inSeg);
+    if (outSeg) segs.push(outSeg);
 
-    function havDist(a, b){
-      const R = 6371000.0;
-      const toRad = (x)=>x*Math.PI/180.0;
-      const dLat = toRad(b.lat - a.lat);
-      const dLon = toRad(b.lon - a.lon);
-      const la1 = toRad(a.lat);
-      const la2 = toRad(b.lat);
-      const s = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
-      return 2*R*Math.atan2(Math.sqrt(s), Math.sqrt(1-s));
+    if (segs.length > 0) {
+      animMarker = L.circleMarker([segs[0].a.lat, segs[0].a.lon], {
+        radius: 7,
+        color: '#00bcd4',
+        fillColor: '#00bcd4',
+        fillOpacity: 1.0,
+        weight: 2,
+      }).addTo(tripLayer);
+
+      let t = 0.0;
+      let dir = 1.0;
+      let segIndex = 0;
+
+      animTimer = setInterval(() => {
+        t += dir * 0.06;
+        if (t >= 1.0) { t = 1.0; dir = -1.0; }
+        if (t <= 0.0) {
+          t = 0.0;
+          dir = 1.0;
+          if (segs.length >= 2) segIndex = (segIndex + 1) % segs.length;
+        }
+
+        const s = segs[segIndex];
+        const lat = s.a.lat + (s.b.lat - s.a.lat) * t;
+        const lon = s.a.lon + (s.b.lon - s.a.lon) * t;
+        animMarker.setLatLng([lat, lon]);
+      }, 40);
     }
-    const A = {lat: tr.start.lat, lon: tr.start.lon};
-    const C = {lat: tr.center_calc.lat, lon: tr.center_calc.lon};
-    const B = {lat: tr.end.lat, lon: tr.end.lon};
-    const d1 = havDist(A, C);
-    const d2 = havDist(C, B);
-    const total = Math.max(1.0, d1 + d2);
-    const steps1 = Math.max(1, Math.round(steps * (d1 / total)));
-    const steps2 = Math.max(1, steps - steps1);
-
-    animTimer = setInterval(() => {
-      i += 1;
-      if (i > (steps1 + steps2)) { i = 0; }
-
-      let lat, lon;
-      if (i <= steps1){
-        const t = i / steps1;
-        lat = tr.start.lat + (tr.center_calc.lat - tr.start.lat) * t;
-        lon = tr.start.lon + (tr.center_calc.lon - tr.start.lon) * t;
-      }else{
-        const j = i - steps1;
-        const t = j / steps2;
-        lat = tr.center_calc.lat + (tr.end.lat - tr.center_calc.lat) * t;
-        lon = tr.center_calc.lon + (tr.end.lon - tr.center_calc.lon) * t;
-      }
-      animMarker.setLatLng([lat, lon]);
-    }, 40);
 
     // ===== 固定ビュー：基準中心（center_spec）を中心に 200m 四方 =====
     try {
