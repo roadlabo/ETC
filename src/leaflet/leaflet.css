@@ -1,0 +1,38 @@
+/* Minimal bundled stylesheet for local Leaflet-compatible rendering. */
+html, body, #map {
+  height: 100%;
+}
+.leaflet-container {
+  position: relative;
+  overflow: hidden;
+  outline: 0;
+  background: #fff;
+  font: 12px/1.5 "Helvetica Neue", Arial, Helvetica, sans-serif;
+}
+.leaflet-pane,
+.leaflet-layer,
+.leaflet-control,
+.leaflet-marker-pane,
+.leaflet-overlay-pane,
+.leaflet-tile-pane,
+.leaflet-tooltip-pane,
+.leaflet-popup-pane {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+.leaflet-layer {
+  pointer-events: none;
+}
+.leaflet-marker-pane,
+.leaflet-overlay-pane {
+  width: 100%;
+  height: 100%;
+}
+.leaflet-control-attribution {
+  right: 0;
+  bottom: 0;
+  padding: 0 5px;
+  background: rgba(255, 255, 255, 0.75);
+  position: absolute;
+}
