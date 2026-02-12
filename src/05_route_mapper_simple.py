@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import math
 import sys
+import tkinter as tk
 import webbrowser
 from datetime import datetime
 from pathlib import Path
+from tkinter import filedialog
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import folium
@@ -711,18 +713,25 @@ def main(argv: Sequence[str]) -> None:
     # NOGUI MODE
     # -----------------------------
     if "--nogui" in args:
-        try:
-            print("[INFO] running in --nogui mode")
-            html_path = run_without_gui(args)
+        print("[INFO] running in --nogui mode")
 
-            if html_path:
-                webbrowser.open(Path(html_path).resolve().as_uri())
-                print("[OK] opened in browser:", html_path)
-            else:
-                print("[ERROR] html generation failed")
+        root = tk.Tk()
+        root.withdraw()
+        folder = filedialog.askdirectory(title="CSVフォルダを選択してください")
+        root.destroy()
 
-        except Exception as e:
-            print("[ERROR]", e)
+        if not folder:
+            print("[INFO] no folder selected")
+            return
+
+        html_path = run_without_gui(folder)
+
+        if html_path:
+            webbrowser.open(Path(html_path).resolve().as_uri())
+            print("[OK] opened in browser:", html_path)
+        else:
+            print("[ERROR] html generation failed")
+
         return
 
     pattern = args[0] if args else "*.csv"
@@ -740,10 +749,8 @@ def main(argv: Sequence[str]) -> None:
     sys.exit(app.exec())
 
 
-def run_without_gui(args: Sequence[str]) -> Optional[str]:
-    filtered_args = [a for a in args if a != "--nogui"]
-
-    target = Path(filtered_args[0]).expanduser() if filtered_args else Path.cwd()
+def run_without_gui(folder_path: str) -> Optional[str]:
+    target = Path(folder_path).expanduser()
     if target.is_dir():
         candidates = sorted(target.glob("*.csv"))
         if not candidates:
