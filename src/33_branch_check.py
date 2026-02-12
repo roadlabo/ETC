@@ -53,6 +53,33 @@ def read_csv_safely(path: str) -> pd.DataFrame:
     raise RuntimeError(f"CSVの読み込みに失敗しました（encoding候補={encodings}）。最後のエラー: {last_err}")
 
 
+def pick_performance_csv_via_dialog() -> Optional[str]:
+    """
+    *_performance.csv を最優先で選ばせるファイルダイアログ。
+    --nogui でも動くように PyQt ではなく tkinter を使う（Windows標準）。
+    """
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception:
+        return None
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+
+    path = filedialog.askopenfilename(
+        title="交差点パフォーマンスCSV（*_performance.csv）を選択",
+        filetypes=[
+            ("Performance CSV", "*_performance.csv"),
+            ("CSV", "*.csv"),
+            ("All Files", "*.*"),
+        ],
+    )
+    root.destroy()
+    return path if path else None
+
+
 def meters_to_deg(lat: float, dx_m: float, dy_m: float) -> Tuple[float, float]:
     """
     dx_m: 東方向（+） meters
@@ -1158,6 +1185,14 @@ def main():
         try:
             print("[INFO] running in --nogui mode")
 
+            # --csv が無いならダイアログで選ばせる（完全版）
+            if "--csv" not in args:
+                picked = pick_performance_csv_via_dialog()
+                if not picked:
+                    print("[CANCEL] no CSV selected.")
+                    return
+                args = args + ["--csv", picked]
+
             html_path = run_without_gui(args)
 
             if html_path:
@@ -1202,15 +1237,9 @@ def run_without_gui(args: List[str]) -> Optional[str]:
     parser.add_argument("--csv", type=str, default="")
     parsed = parser.parse_args(args)
 
-    if parsed.csv:
-        csv_path = Path(parsed.csv).expanduser().resolve()
-    else:
-        candidates = sorted(Path.cwd().glob("*_performance.csv"))
-        if not candidates:
-            candidates = sorted(Path.cwd().glob("*.csv"))
-        if not candidates:
-            raise ValueError("--nogui mode requires --csv <path_to_performance.csv> or a CSV in current directory")
-        csv_path = candidates[0].resolve()
+    if not parsed.csv:
+        raise ValueError("--nogui requires --csv <path_to_performance.csv>")
+    csv_path = Path(parsed.csv).expanduser().resolve()
     df = read_csv_safely(str(csv_path))
     ensure_columns(df, REQUIRED_COLS)
 
