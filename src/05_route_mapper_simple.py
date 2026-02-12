@@ -186,6 +186,8 @@ LEAFLET_HTML = r"""
       box-shadow: 0 1px 2px rgba(0,0,0,0.15);
       pointer-events: none;
     }
+    .label-start { border-color: red; }
+    .label-goal  { border-color: blue; }
   </style>
 </head>
 <body>
@@ -194,6 +196,65 @@ LEAFLET_HTML = r"""
   let map = null;
   let base = null;
   let routeLayer = null;
+
+  // animation (raw trajectory)
+  let animMarker = null;
+  let animTimer = null;
+  let animPath = [];
+  let animIndex = 0;
+
+  function stopAnimation(){
+    try { if (animTimer) clearInterval(animTimer); } catch(e) {}
+    animTimer = null;
+    animPath = [];
+    animIndex = 0;
+    try { if (animMarker && routeLayer) routeLayer.removeLayer(animMarker); } catch(e) {}
+    animMarker = null;
+  }
+
+  function startAnimationFromPoints(points){
+    stopAnimation();
+
+    if (!points || points.length < 2) return;
+
+    // points: [{lat,lon,...}, ...] の順番＝生データ順
+    animPath = points
+      .filter(p => p && typeof p.lat === 'number' && typeof p.lon === 'number')
+      .map(p => [p.lat, p.lon]);
+
+    if (animPath.length < 2) return;
+
+    animIndex = 0;
+
+    // 動く球（軌跡上を高速で一方向）
+    // ※色は固定値。必要なら後で調整可能
+    animMarker = L.circleMarker(animPath[0], {
+      radius: 7,
+      color: 'deepskyblue',
+      weight: 3,
+      fill: true,
+      fillColor: 'deepskyblue',
+      fillOpacity: 1.0,
+      pane: 'markerPane'
+    }).addTo(routeLayer);
+
+    // 高速：20ms間隔 / 1tickで複数点進める
+    const intervalMs = 20;
+    const stepPerTick = 3; // 速さ調整（大きいほど速い）
+    animTimer = setInterval(() => {
+      if (!animMarker || animPath.length < 2) return;
+
+      animIndex += stepPerTick;
+      if (animIndex >= animPath.length) animIndex = animPath.length - 1;
+
+      animMarker.setLatLng(animPath[animIndex]);
+
+      // 終点に到達したら停止（往復しない）
+      if (animIndex >= animPath.length - 1){
+        stopAnimation();
+      }
+    }, intervalMs);
+  }
 
   function ensureLayer(){
     if (!routeLayer || typeof routeLayer.addTo !== 'function'){
@@ -205,6 +266,7 @@ LEAFLET_HTML = r"""
   }
 
   function clearLayer(){
+    stopAnimation();
     ensureLayer();
     try { routeLayer.clearLayers(); } catch(e) {}
   }
@@ -278,19 +340,21 @@ LEAFLET_HTML = r"""
       const tip = _fmtTooltip(p.time_text, p.speed);
 
       if (p.flag === 0){
-        // Start: red circle + S
-        L.circleMarker([p.lat, p.lon], {radius:8, color:'red', weight:2, fill:true, fillColor:'white', fillOpacity:1.0})
-          .bindTooltip(tip).addTo(routeLayer);
-        L.marker([p.lat, p.lon], {
-          icon: L.divIcon({className:'label', html:'S'})
-        }).addTo(routeLayer);
+        // Start: single marker (no double drawing)
+        const iconS = L.divIcon({
+          className: 'label label-start',
+          html: 'S'
+        });
+        const m = L.marker([p.lat, p.lon], { icon: iconS }).addTo(routeLayer);
+        m.bindTooltip(tip);
       } else if (p.flag === 1){
-        // Goal: blue circle + G
-        L.circleMarker([p.lat, p.lon], {radius:8, color:'blue', weight:2, fill:true, fillColor:'white', fillOpacity:1.0})
-          .bindTooltip(tip).addTo(routeLayer);
-        L.marker([p.lat, p.lon], {
-          icon: L.divIcon({className:'label', html:'G'})
-        }).addTo(routeLayer);
+        // Goal: single marker (no double drawing)
+        const iconG = L.divIcon({
+          className: 'label label-goal',
+          html: 'G'
+        });
+        const m = L.marker([p.lat, p.lon], { icon: iconG }).addTo(routeLayer);
+        m.bindTooltip(tip);
       } else {
         // Pass point
         L.circleMarker([p.lat, p.lon], {radius:4, color:'black', weight:1, fill:true, fillColor:'black', fillOpacity:1.0})
@@ -309,6 +373,11 @@ LEAFLET_HTML = r"""
     } catch(e){
       map.setView([payload.center.lat, payload.center.lon], 14);
     }
+
+    // animate raw trajectory (one-way, fast)
+    try {
+      startAnimationFromPoints(payload.points || []);
+    } catch(e) {}
   }
 
   function bootstrap(){
