@@ -271,7 +271,7 @@ LEAFLET_HTML = r"""
   const NEON_LIME  = '#7CFF00';
 
   // [ANIM] 玉の移動速度（m/s）
-  const ANIM_SPEED_MPS = 140;  // 既存値の半分
+  const ANIM_SPEED_MPS = 70;
   const ANIM_MIN_MS    = 120;  // 最短表示時間を短縮
 
   // [TRAIL] 残像レイヤ
@@ -345,6 +345,9 @@ LEAFLET_HTML = r"""
 
   // [ANIM] loop animation on trajectory
   function startTrajectoryAnimation(trackLatLngs, marker, speedMps=10) {
+    speedMps = Number(speedMps);
+    if (!Number.isFinite(speedMps) || speedMps <= 0) speedMps = 10;
+
     if (animReq) {
       cancelAnimationFrame(animReq);
       animReq = null;
@@ -370,15 +373,33 @@ LEAFLET_HTML = r"""
 
     const step = (now) => {
       const elapsed = now - t0;
-      let ratio = (elapsed % durationMs) / durationMs;
+      // durationMs の安全化
+      const denom = (Number.isFinite(durationMs) && durationMs > 0) ? durationMs : 1000;
+
+      // ratio を 0..1 のループに（%を使わず小数部を取る）
+      let ratio = elapsed / denom;
+      if (!Number.isFinite(ratio)) ratio = 0;
+      ratio = ratio - Math.floor(ratio);   // 小数部だけ残す（0..1）
+      if (!Number.isFinite(ratio)) ratio = 0;
+
       // [ANIM] 速く感じるイージング（加速気味）
       ratio = Math.pow(ratio, 0.6);
+
       if (ratio < prevRatio) {
         clearTrail();
       }
       prevRatio = ratio;
 
       const dist = total * ratio;
+      if (!Number.isFinite(dist)) {
+        console.warn('[ANIM] invalid dist:', dist, 'ratio=', ratio, 'total=', total, 'denom=', denom);
+        // 変な状態ならリセットして継続（止めない）
+        prevRatio = 0;
+        clearTrail();
+        animReq = requestAnimationFrame(step);
+        return;
+      }
+
       const ll = interpolateOnPolyline(trackLatLngs, cum, dist);
       // 安全弁：NaNが出たら止める（落とさない）
       if (!ll || !Number.isFinite(ll[0]) || !Number.isFinite(ll[1])) {
