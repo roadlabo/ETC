@@ -18,6 +18,7 @@ if not exist "%SRC%" (
   exit /b 1
 )
 
+REM 依存（pydeps）を読み込ませる
 if exist "%PYDEPS%" (
   if defined PYTHONPATH (
     set "PYTHONPATH=%PYDEPS%;%PYTHONPATH%"
@@ -26,6 +27,17 @@ if exist "%PYDEPS%" (
   )
 )
 
+REM Qt6（PyQt6）を確実に見つけさせる（WebEngine含む安定化）
+set "QT6=%PYDEPS%\PyQt6\Qt6"
+if exist "%QT6%\bin" (
+  set "PATH=%QT6%\bin;%PATH%"
+  set "QT_PLUGIN_PATH=%QT6%\plugins"
+  set "QTWEBENGINEPROCESS_PATH=%QT6%\bin\QtWebEngineProcess.exe"
+  set "QTWEBENGINE_RESOURCES_PATH=%QT6%\resources"
+  set "QTWEBENGINE_LOCALES_PATH=%QT6%\translations\qtwebengine_locales"
+)
+
+REM 起動（引数があればそれを渡す：フォルダをD&D想定）
 if "%~1"=="" (
   "%PY%" "%SRC%"
 ) else (
