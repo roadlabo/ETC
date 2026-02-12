@@ -181,6 +181,13 @@ LEAFLET_HTML = r"""
   <style>
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
+    .neon-glow {
+      filter: drop-shadow(0 0 6px rgba(0, 246, 255, 0.9))
+              drop-shadow(0 0 14px rgba(0, 246, 255, 0.55));
+    }
+    .neon-trail {
+      filter: drop-shadow(0 0 4px rgba(0, 246, 255, 0.55));
+    }
     .label {
       background: #fff;
       border: 2px solid #111;
@@ -212,14 +219,95 @@ LEAFLET_HTML = r"""
   let animTimer = null;
   let animPath = [];
   let animIndex = 0;
+  let animSegments = [];
+  let animTotalDistance = 0;
+  let prevRatio = 0;
+
+  const NEON_CYAN = '#00f6ff';
+  const NEON_PINK = '#ff2bd6';
+  const NEON_LIME = '#7CFF00';
+
+  const TRAIL_MAX = 28;
+  const TRAIL_RADIUS = 5;
+  const TRAIL_FADE = 0.85;
+  let trailLayer = null;
+  let trailMarkers = [];
+
+  function ensureTrailLayer(){
+    if (!trailLayer || typeof trailLayer.addTo !== 'function'){
+      trailLayer = L.layerGroup();
+    }
+    if (map && !map.hasLayer(trailLayer)){
+      trailLayer.addTo(map);
+    }
+  }
+
+  function clearTrail(){
+    ensureTrailLayer();
+    trailMarkers = [];
+    try { trailLayer.clearLayers(); } catch(e) {}
+  }
+
+  function pushTrail(latlng){
+    ensureTrailLayer();
+    const m = L.circleMarker(latlng, {
+      radius: TRAIL_RADIUS,
+      color: NEON_CYAN,
+      weight: 1,
+      fillColor: NEON_CYAN,
+      fillOpacity: 0.6,
+      pane: 'markerPane'
+    });
+    trailLayer.addLayer(m);
+    trailMarkers.unshift(m);
+
+    const trailEl = m.getElement?.();
+    if (trailEl) trailEl.classList.add('neon-trail');
+
+    while (trailMarkers.length > TRAIL_MAX) {
+      const old = trailMarkers.pop();
+      trailLayer.removeLayer(old);
+    }
+
+    for (let i = 0; i < trailMarkers.length; i++) {
+      const alpha = Math.pow(TRAIL_FADE, i);
+      trailMarkers[i].setStyle({
+        fillOpacity: 0.55 * alpha,
+        opacity: 0.8 * alpha
+      });
+    }
+  }
+
+  function interpolatePathByDistance(dist){
+    if (!animPath.length) return null;
+    if (animPath.length === 1 || dist <= 0) return animPath[0];
+    if (dist >= animTotalDistance) return animPath[animPath.length - 1];
+
+    for (let i = 0; i < animSegments.length; i++) {
+      const seg = animSegments[i];
+      if (dist <= seg.accum) {
+        const prevAccum = i === 0 ? 0 : animSegments[i - 1].accum;
+        const local = dist - prevAccum;
+        const ratio = seg.length > 0 ? (local / seg.length) : 0;
+        const lat = seg.start[0] + (seg.end[0] - seg.start[0]) * ratio;
+        const lon = seg.start[1] + (seg.end[1] - seg.start[1]) * ratio;
+        return [lat, lon];
+      }
+    }
+    return animPath[animPath.length - 1];
+  }
 
   function stopAnimation(){
-    try { if (animTimer) clearInterval(animTimer); } catch(e) {}
+    try { if (animTimer) cancelAnimationFrame(animTimer); } catch(e) {}
     animTimer = null;
     animPath = [];
     animIndex = 0;
+    animSegments = [];
+    animTotalDistance = 0;
+    prevRatio = 0;
     try { if (animMarker && routeLayer) routeLayer.removeLayer(animMarker); } catch(e) {}
     animMarker = null;
+    clearTrail();
   }
 
   function startAnimationFromPoints(points){
@@ -236,34 +324,58 @@ LEAFLET_HTML = r"""
 
     animIndex = 0;
 
+    animSegments = [];
+    animTotalDistance = 0;
+    for (let i = 1; i < animPath.length; i++) {
+      const start = animPath[i - 1];
+      const end = animPath[i];
+      const dLat = end[0] - start[0];
+      const dLon = end[1] - start[1];
+      const length = Math.hypot(dLat, dLon);
+      if (length <= 0) continue;
+      animTotalDistance += length;
+      animSegments.push({ start, end, length, accum: animTotalDistance });
+    }
+
+    if (!animSegments.length || animTotalDistance <= 0) return;
+    prevRatio = 0;
+
     // 動く球（軌跡上を高速で一方向）
     // ※色は固定値。必要なら後で調整可能
     animMarker = L.circleMarker(animPath[0], {
       radius: 7,
-      color: 'deepskyblue',
-      weight: 3,
+      color: NEON_CYAN,
+      weight: 2,
       fill: true,
-      fillColor: 'deepskyblue',
+      fillColor: NEON_CYAN,
       fillOpacity: 1.0,
       pane: 'markerPane'
     }).addTo(routeLayer);
+    const ballEl = animMarker.getElement?.();
+    if (ballEl) ballEl.classList.add('neon-glow');
+    pushTrail(animPath[0]);
 
-    // 高速：20ms間隔 / 1tickで複数点進める
-    const intervalMs = 20;
-    const stepPerTick = 3; // 速さ調整（大きいほど速い）
-    animTimer = setInterval(() => {
+    const durationMs = 2400;
+    const t0 = performance.now();
+    function step(now){
       if (!animMarker || animPath.length < 2) return;
 
-      animIndex += stepPerTick;
-      if (animIndex >= animPath.length) animIndex = animPath.length - 1;
-
-      animMarker.setLatLng(animPath[animIndex]);
-
-      // 終点に到達したら停止（往復しない）
-      if (animIndex >= animPath.length - 1){
-        stopAnimation();
+      const elapsed = now - t0;
+      const ratio = (elapsed % durationMs) / durationMs;
+      if (ratio < prevRatio) {
+        clearTrail();
       }
-    }, intervalMs);
+      prevRatio = ratio;
+
+      const dist = animTotalDistance * ratio;
+      const ll = interpolatePathByDistance(dist);
+      if (ll) {
+        animMarker.setLatLng(ll);
+        pushTrail(ll);
+      }
+      animTimer = requestAnimationFrame(step);
+    }
+    animTimer = requestAnimationFrame(step);
   }
 
   function ensureLayer(){
@@ -278,7 +390,9 @@ LEAFLET_HTML = r"""
   function clearLayer(){
     stopAnimation();
     ensureLayer();
+    ensureTrailLayer();
     try { routeLayer.clearLayers(); } catch(e) {}
+    clearTrail();
   }
 
   function tryAddBaseTiles(){
@@ -338,7 +452,7 @@ LEAFLET_HTML = r"""
     clearLayer();
 
     // segments (black line)
-    const lineStyle = {color:'black', weight:2, opacity:1.0};
+    const lineStyle = {color:'black', weight:2, opacity:1.0, dashArray:'6 6'};
     (payload.segments || []).forEach(seg => {
       if (seg.length >= 2){
         L.polyline(seg, lineStyle).addTo(routeLayer);
