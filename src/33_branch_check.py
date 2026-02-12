@@ -130,6 +130,49 @@ def find_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
     return None
 
 
+def _select_csv_with_qt() -> Optional[str]:
+    """Try selecting CSV with PyQt6 file dialog (works in --nogui too)."""
+    try:
+        from PyQt6.QtWidgets import QApplication, QFileDialog
+    except Exception:
+        return None
+
+    app = QApplication.instance() or QApplication([])
+    path, _ = QFileDialog.getOpenFileName(
+        None,
+        "交差点パフォーマンスCSV（*_performance.csv）を選択",
+        "",
+        "Performance CSV (*_performance.csv);;CSV Files (*.csv);;All Files (*)",
+    )
+    return path or None
+
+
+def _select_csv_with_tkinter() -> Optional[str]:
+    """Fallback selector for environments where Qt dialog is unavailable."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception:
+        return None
+
+    root = tk.Tk()
+    root.withdraw()
+    root.update()
+    path = filedialog.askopenfilename(
+        title="交差点パフォーマンスCSV（*_performance.csv）を選択",
+        filetypes=[("Performance CSV", "*_performance.csv"), ("CSV", "*.csv"), ("All Files", "*.*")],
+    )
+    root.destroy()
+    return path or None
+
+
+def prompt_csv_path() -> Optional[str]:
+    path = _select_csv_with_qt()
+    if path:
+        return path
+    return _select_csv_with_tkinter()
+
+
 # -----------------------------
 # Leaflet HTML (embedded)
 # -----------------------------
@@ -1159,9 +1202,13 @@ def main():
             print("[INFO] running in --nogui mode")
 
             if "--csv" not in args:
-                print("[ERROR] --nogui mode requires --csv <path_to_*_performance.csv>")
-                print("Usage: python 33_branch_check.py --nogui --csv D:\\path\\xxx_performance.csv")
-                return
+                selected = prompt_csv_path()
+                if selected:
+                    args = ["--nogui", "--csv", selected]
+                else:
+                    print("[ERROR] CSVが未指定です。--csv を指定するか、ダイアログで選択してください。")
+                    print("Usage: python 33_branch_check.py --nogui --csv D:\\path\\xxx_performance.csv")
+                    return
 
             html_path = run_without_gui(args)
 
@@ -1208,7 +1255,11 @@ def run_without_gui(args: List[str]) -> Optional[str]:
     parsed = parser.parse_args(args)
 
     if not parsed.csv:
-        raise ValueError("--nogui requires --csv <path_to_performance.csv>")
+        selected = prompt_csv_path()
+        if selected:
+            parsed.csv = selected
+        else:
+            raise ValueError("--csv が未指定です。PyQt6/tkinter ダイアログも利用できないため --csv が必須です。")
     csv_path = Path(parsed.csv).expanduser().resolve()
     df = read_csv_safely(str(csv_path))
     ensure_columns(df, REQUIRED_COLS)

@@ -4,6 +4,7 @@ cd /d %~dp0\..
 
 set "PY=%CD%\runtime\python\python.exe"
 set "SRC=%CD%\src\05_route_mapper_simple.py"
+set "PYDEPS=%CD%\runtime\pydeps"
 
 if not exist "%PY%" (
   echo [ERROR] python not found: "%PY%"
@@ -17,7 +18,19 @@ if not exist "%SRC%" (
   exit /b 1
 )
 
-"%PY%" "%SRC%" --nogui
+if exist "%PYDEPS%" (
+  if defined PYTHONPATH (
+    set "PYTHONPATH=%PYDEPS%;%PYTHONPATH%"
+  ) else (
+    set "PYTHONPATH=%PYDEPS%"
+  )
+)
+
+if "%~1"=="" (
+  "%PY%" "%SRC%"
+) else (
+  "%PY%" "%SRC%" "%~1"
+)
 
 pause
 endlocal
