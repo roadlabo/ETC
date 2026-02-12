@@ -1,33 +1,43 @@
 import sys
 import json
 import math
+import webbrowser
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import folium
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtCore import QUrl
-from PyQt6.QtWebEngineCore import QWebEngineSettings
-from PyQt6.QtWidgets import (
-    QApplication,
-    QFileDialog,
-    QHBoxLayout,
-    QLabel,
-    QMainWindow,
-    QMessageBox,
-    QPushButton,
-    QSplitter,
-    QTableWidget,
-    QTableWidgetItem,
-    QVBoxLayout,
-    QWidget,
-    QGridLayout,
-    QHeaderView,
-)
-from PyQt6.QtWebEngineWidgets import QWebEngineView
+NOGUI_MODE = "--nogui" in sys.argv[1:]
 
+if not NOGUI_MODE:
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtCore import QUrl
+    from PyQt6.QtWebEngineCore import QWebEngineSettings
+    from PyQt6.QtWidgets import (
+        QApplication,
+        QFileDialog,
+        QHBoxLayout,
+        QLabel,
+        QMainWindow,
+        QMessageBox,
+        QPushButton,
+        QSplitter,
+        QTableWidget,
+        QTableWidgetItem,
+        QVBoxLayout,
+        QWidget,
+        QGridLayout,
+        QHeaderView,
+    )
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+else:
+    Qt = QUrl = QWebEngineSettings = object
+    QApplication = QFileDialog = QHBoxLayout = QLabel = QMainWindow = object
+    QMessageBox = QPushButton = QSplitter = QTableWidget = object
+    QTableWidgetItem = QVBoxLayout = QWidget = QGridLayout = object
+    QHeaderView = QWebEngineView = object
 
 # -----------------------------
 # Utilities
@@ -1138,13 +1148,35 @@ class BranchCheckWindow(QMainWindow):
 
 def main():
     import argparse
+
+    args = sys.argv[1:]
+
+    # -----------------------------
+    # NOGUI MODE
+    # -----------------------------
+    if "--nogui" in args:
+        try:
+            print("[INFO] running in --nogui mode")
+
+            html_path = run_without_gui(args)
+
+            if html_path:
+                webbrowser.open(Path(html_path).resolve().as_uri())
+                print("[OK] opened in browser:", html_path)
+            else:
+                print("[ERROR] html generation failed")
+
+        except Exception as e:
+            print("[ERROR]", e)
+        return
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", type=str, default="")
-    args = parser.parse_args()
+    parsed = parser.parse_args()
 
     app = QApplication(sys.argv)
 
-    csv_path = args.csv
+    csv_path = parsed.csv
     if not csv_path:
         csv_path, _ = QFileDialog.getOpenFileName(
             None,
@@ -1162,6 +1194,48 @@ def main():
     except Exception as e:
         QMessageBox.critical(None, "エラー", str(e))
         raise
+
+
+def run_without_gui(args: List[str]) -> Optional[str]:
+    parser = __import__("argparse").ArgumentParser()
+    parser.add_argument("--nogui", action="store_true")
+    parser.add_argument("--csv", type=str, default="")
+    parsed = parser.parse_args(args)
+
+    if parsed.csv:
+        csv_path = Path(parsed.csv).expanduser().resolve()
+    else:
+        candidates = sorted(Path.cwd().glob("*_performance.csv"))
+        if not candidates:
+            candidates = sorted(Path.cwd().glob("*.csv"))
+        if not candidates:
+            raise ValueError("--nogui mode requires --csv <path_to_performance.csv> or a CSV in current directory")
+        csv_path = candidates[0].resolve()
+    df = read_csv_safely(str(csv_path))
+    ensure_columns(df, REQUIRED_COLS)
+
+    lat_col = "算出中心_緯度" if "算出中心_緯度" in df.columns else "交差点中心_緯度"
+    lon_col = "算出中心_経度" if "算出中心_経度" in df.columns else "交差点中心_経度"
+    center_lat = float(pd.to_numeric(df[lat_col], errors="coerce").dropna().median())
+    center_lon = float(pd.to_numeric(df[lon_col], errors="coerce").dropna().median())
+
+    fmap = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="OpenStreetMap")
+
+    for _, row in df.head(300).iterrows():
+        try:
+            s_lat = float(row["計測開始_緯度(補間)"])
+            s_lon = float(row["計測開始_経度(補間)"])
+            e_lat = float(row["計測終了_緯度(補間)"])
+            e_lon = float(row["計測終了_経度(補間)"])
+        except Exception:
+            continue
+
+        folium.PolyLine([(s_lat, s_lon), (center_lat, center_lon), (e_lat, e_lon)], color="orange", weight=2, opacity=0.7).add_to(fmap)
+
+    folium.Marker([center_lat, center_lon], tooltip="Center").add_to(fmap)
+    out_path = csv_path.with_name(f"{csv_path.stem}_branch_check.html")
+    fmap.save(str(out_path))
+    return str(out_path)
 
 
 if __name__ == "__main__":
