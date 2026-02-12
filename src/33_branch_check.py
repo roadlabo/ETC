@@ -252,8 +252,86 @@ LEAFLET_HTML = r"""
   let branchPoints = [];
 
   let animTimer = null;
+  let animReq = null;
   let animMarker = null;
   let branchLabelMarkers = {};
+
+  // [ANIM] move marker along trajectory polyline
+  function _haversineMeters(a, b) {
+    // a,b: [lat,lng]
+    const R = 6371000;
+    const toRad = (d) => d * Math.PI / 180;
+    const lat1 = toRad(a[0]), lat2 = toRad(b[0]);
+    const dLat = toRad(b[0] - a[0]);
+    const dLng = toRad(b[1] - a[1]);
+    const s = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2;
+    return 2 * R * Math.asin(Math.sqrt(s));
+  }
+
+  // [ANIM] build cumulative segment distances for trajectory
+  function buildCumulativeDistances(latlngs) {
+    const cum = [0];
+    for (let i = 1; i < latlngs.length; i++) {
+      cum[i] = cum[i-1] + _haversineMeters(latlngs[i-1], latlngs[i]);
+    }
+    return cum;
+  }
+
+  // [ANIM] interpolate a point on trajectory by traveled distance
+  function interpolateOnPolyline(latlngs, cum, dist) {
+    const total = cum[cum.length - 1];
+    if (total <= 0 || latlngs.length < 2) return latlngs[0] || null;
+    if (dist <= 0) return latlngs[0];
+    if (dist >= total) return latlngs[latlngs.length - 1];
+
+    let i = 1;
+    while (i < cum.length && cum[i] < dist) i++;
+    const d0 = cum[i-1], d1 = cum[i];
+    const t = (dist - d0) / Math.max(1e-9, (d1 - d0));
+    const p0 = latlngs[i-1], p1 = latlngs[i];
+
+    return [p0[0] + (p1[0]-p0[0])*t, p0[1] + (p1[1]-p0[1])*t];
+  }
+
+  // [ANIM] one-way animation on trajectory (no ping-pong)
+  function startTrajectoryAnimation(trackLatLngs, marker, speedMps=10) {
+    if (animReq) {
+      cancelAnimationFrame(animReq);
+      animReq = null;
+    }
+
+    if (!trackLatLngs || trackLatLngs.length < 2) {
+      // [ANIM] fall back to fixed point when trajectory is too short
+      if (trackLatLngs && trackLatLngs.length === 1 && marker) marker.setLatLng(trackLatLngs[0]);
+      return;
+    }
+
+    const cum = buildCumulativeDistances(trackLatLngs);
+    const total = cum[cum.length - 1];
+    if (total <= 0) {
+      marker.setLatLng(trackLatLngs[0]);
+      return;
+    }
+
+    const durationMs = Math.max(1500, (total / Math.max(0.1, speedMps)) * 1000);
+    const t0 = performance.now();
+
+    const step = (now) => {
+      const dt = now - t0;
+      const ratio = Math.min(1, dt / durationMs);
+      const dist = total * ratio;
+      const ll = interpolateOnPolyline(trackLatLngs, cum, dist);
+      if (ll) marker.setLatLng(ll);
+
+      if (ratio < 1) {
+        animReq = requestAnimationFrame(step);
+      } else {
+        animReq = null;
+      }
+    };
+
+    animReq = requestAnimationFrame(step);
+  }
 
   function tryAddBaseTiles(){
     if (!map) return;
@@ -390,6 +468,10 @@ LEAFLET_HTML = r"""
       clearInterval(animTimer);
       animTimer = null;
     }
+    if (animReq){
+      cancelAnimationFrame(animReq);
+      animReq = null;
+    }
     if (!animMarker){
       return;
     }
@@ -491,81 +573,20 @@ LEAFLET_HTML = r"""
       }).addTo(tripLayer);
     }
 
-    // ===== animation: cyan bead moves IN -> (center) -> OUT (one-way loop) =====
+    // ===== animation: cyan bead moves on black dashed trajectory (one-way) =====
     stopAnim();
 
-    const segs = [];
-    if (inSeg) segs.push(inSeg);
-    if (outSeg) segs.push(outSeg);
-
-    if (segs.length > 0) {
-      const pathPts = [];
-      if (inSeg && outSeg) {
-        pathPts.push({lat: inSeg.b.lat, lon: inSeg.b.lon});
-        pathPts.push({lat: inSeg.a.lat, lon: inSeg.a.lon});
-        pathPts.push({lat: outSeg.b.lat, lon: outSeg.b.lon});
-      } else if (inSeg) {
-        pathPts.push({lat: inSeg.a.lat, lon: inSeg.a.lon});
-        pathPts.push({lat: inSeg.b.lat, lon: inSeg.b.lon});
-      } else {
-        pathPts.push({lat: outSeg.a.lat, lon: outSeg.a.lon});
-        pathPts.push({lat: outSeg.b.lat, lon: outSeg.b.lon});
-      }
-
-      function havDist(a, b){
-        const R = 6371000.0;
-        const toRad = (x)=>x*Math.PI/180.0;
-        const dLat = toRad(b.lat - a.lat);
-        const dLon = toRad(b.lon - a.lon);
-        const la1 = toRad(a.lat);
-        const la2 = toRad(b.lat);
-        const s = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
-        return 2*R*Math.atan2(Math.sqrt(s), Math.sqrt(1-s));
-      }
-
-      const segLens = [];
-      let total = 0.0;
-      for (let i=0; i<pathPts.length-1; i++){
-        const d = havDist(pathPts[i], pathPts[i+1]);
-        segLens.push(Math.max(1e-6, d));
-        total += Math.max(1e-6, d);
-      }
-
-      animMarker = L.circleMarker([pathPts[0].lat, pathPts[0].lon], {
-        radius: 7,
-        color: '#00bcd4',
-        fillColor: '#00bcd4',
-        fillOpacity: 1.0,
-        weight: 2,
-      }).addTo(tripLayer);
-
-      let u = 0.0;
-      const du = 0.06;
-      const tickMs = 30;
-
-      function posAt(u01){
-        const target = u01 * total;
-        let acc = 0.0;
-        for (let i=0; i<segLens.length; i++){
-          const d = segLens[i];
-          if (target <= acc + d || i === segLens.length - 1){
-            const t = (target - acc) / d;
-            const a = pathPts[i];
-            const b = pathPts[i+1];
-            return {lat: a.lat + (b.lat - a.lat) * t, lon: a.lon + (b.lon - a.lon) * t};
-          }
-          acc += d;
-        }
-        return {lat: pathPts[pathPts.length-1].lat, lon: pathPts[pathPts.length-1].lon};
-      }
-
-      animTimer = setInterval(() => {
-        u += du;
-        if (u >= 1.0) u = 0.0;
-        const p = posAt(u);
-        animMarker.setLatLng([p.lat, p.lon]);
-      }, tickMs);
-    }
+    // [ANIM] use the same trajectory coordinates used by black dashed polyline
+    const trackLatLngs = (tr.raw_points || []).map(p => [p.lat, p.lon]);
+    const fallback = trackLatLngs[0] || [tr.center_spec.lat, tr.center_spec.lon];
+    animMarker = L.circleMarker(fallback, {
+      radius: 7,
+      color: '#00bcd4',
+      fillColor: '#00bcd4',
+      fillOpacity: 1.0,
+      weight: 2,
+    }).addTo(tripLayer);
+    startTrajectoryAnimation(trackLatLngs, animMarker, 10);
 
     try { highlightBranches(tr.in_branch, tr.out_branch); } catch(e) {}
 
