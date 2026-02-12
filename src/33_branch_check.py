@@ -53,33 +53,6 @@ def read_csv_safely(path: str) -> pd.DataFrame:
     raise RuntimeError(f"CSVの読み込みに失敗しました（encoding候補={encodings}）。最後のエラー: {last_err}")
 
 
-def pick_performance_csv_via_dialog() -> Optional[str]:
-    """
-    *_performance.csv を最優先で選ばせるファイルダイアログ。
-    --nogui でも動くように PyQt ではなく tkinter を使う（Windows標準）。
-    """
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except Exception:
-        return None
-
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-
-    path = filedialog.askopenfilename(
-        title="交差点パフォーマンスCSV（*_performance.csv）を選択",
-        filetypes=[
-            ("Performance CSV", "*_performance.csv"),
-            ("CSV", "*.csv"),
-            ("All Files", "*.*"),
-        ],
-    )
-    root.destroy()
-    return path if path else None
-
-
 def meters_to_deg(lat: float, dx_m: float, dy_m: float) -> Tuple[float, float]:
     """
     dx_m: 東方向（+） meters
@@ -1185,13 +1158,10 @@ def main():
         try:
             print("[INFO] running in --nogui mode")
 
-            # --csv が無いならダイアログで選ばせる（完全版）
             if "--csv" not in args:
-                picked = pick_performance_csv_via_dialog()
-                if not picked:
-                    print("[CANCEL] no CSV selected.")
-                    return
-                args = args + ["--csv", picked]
+                print("[ERROR] --nogui mode requires --csv <path_to_*_performance.csv>")
+                print("Usage: python 33_branch_check.py --nogui --csv D:\\path\\xxx_performance.csv")
+                return
 
             html_path = run_without_gui(args)
 
