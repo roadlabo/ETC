@@ -2,34 +2,45 @@ from __future__ import annotations
 
 import math
 import sys
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import folium
 import numpy as np
 import pandas as pd
 
-from PyQt6.QtCore import Qt, QUrl
-from PyQt6.QtWebEngineCore import QWebEngineSettings
-from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWidgets import (
-    QApplication,
-    QFileDialog,
-    QHBoxLayout,
-    QLabel,
-    QMainWindow,
-    QMessageBox,
-    QPushButton,
-    QSplitter,
-    QVBoxLayout,
-    QWidget,
-    QListWidget,
-    QListWidgetItem,
-    QLineEdit,
-)
-
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+
+NOGUI_MODE = "--nogui" in sys.argv[1:]
+
+if not NOGUI_MODE:
+    from PyQt6.QtCore import Qt, QUrl
+    from PyQt6.QtWebEngineCore import QWebEngineSettings
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+    from PyQt6.QtWidgets import (
+        QApplication,
+        QFileDialog,
+        QHBoxLayout,
+        QLabel,
+        QMainWindow,
+        QMessageBox,
+        QPushButton,
+        QSplitter,
+        QVBoxLayout,
+        QWidget,
+        QListWidget,
+        QListWidgetItem,
+        QLineEdit,
+    )
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+else:
+    FigureCanvas = object
+    Qt = QUrl = QWebEngineSettings = QWebEngineView = object
+    QApplication = QFileDialog = QHBoxLayout = QLabel = QMainWindow = object
+    QMessageBox = QPushButton = QSplitter = QVBoxLayout = QWidget = object
+    QListWidget = QListWidgetItem = QLineEdit = object
 
 
 # ============================================================
@@ -694,7 +705,27 @@ class RouteMapperWindow(QMainWindow):
 
 
 def main(argv: Sequence[str]) -> None:
-    pattern = argv[1] if len(argv) > 1 else "*.csv"
+    args = list(argv[1:])
+
+    # -----------------------------
+    # NOGUI MODE
+    # -----------------------------
+    if "--nogui" in args:
+        try:
+            print("[INFO] running in --nogui mode")
+            html_path = run_without_gui(args)
+
+            if html_path:
+                webbrowser.open(Path(html_path).resolve().as_uri())
+                print("[OK] opened in browser:", html_path)
+            else:
+                print("[ERROR] html generation failed")
+
+        except Exception as e:
+            print("[ERROR]", e)
+        return
+
+    pattern = args[0] if args else "*.csv"
 
     app = QApplication(sys.argv)
 
@@ -707,6 +738,42 @@ def main(argv: Sequence[str]) -> None:
     w = RouteMapperWindow(directory=Path(d), pattern=pattern)
     w.show()
     sys.exit(app.exec())
+
+
+def run_without_gui(args: Sequence[str]) -> Optional[str]:
+    filtered_args = [a for a in args if a != "--nogui"]
+
+    target = Path(filtered_args[0]).expanduser() if filtered_args else Path.cwd()
+    if target.is_dir():
+        candidates = sorted(target.glob("*.csv"))
+        if not candidates:
+            raise FileNotFoundError(f"CSV not found in directory: {target}")
+        csv_path = candidates[0]
+    else:
+        csv_path = target
+
+    df = read_route_data(csv_path)
+    if df.empty:
+        return None
+
+    lat0 = float(df.iloc[0]["lat"])
+    lon0 = float(df.iloc[0]["lon"])
+    fmap = folium.Map(location=[lat0, lon0], zoom_start=12, tiles="OpenStreetMap")
+
+    points: List[Tuple[float, float, int]] = []
+    for r in df.itertuples(index=False):
+        points.append((float(getattr(r, "lat")), float(getattr(r, "lon")), int(getattr(r, "flag"))))
+
+    for seg in split_segments(points):
+        folium.PolyLine(seg, color="blue", weight=4, opacity=0.8).add_to(fmap)
+
+    if points:
+        folium.Marker([points[0][0], points[0][1]], tooltip="Start").add_to(fmap)
+        folium.Marker([points[-1][0], points[-1][1]], tooltip="Goal").add_to(fmap)
+
+    out_path = csv_path.with_name(f"{csv_path.stem}_route_map.html")
+    fmap.save(str(out_path))
+    return str(out_path)
 
 
 if __name__ == "__main__":
