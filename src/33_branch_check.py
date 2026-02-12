@@ -270,8 +270,8 @@ LEAFLET_HTML = r"""
   const NEON_PINK  = '#ff2bd6';
   const NEON_LIME  = '#7CFF00';
 
-  // [ANIM] 玉の移動速度（m/s）: ビュンビュン系
-  const ANIM_SPEED_MPS = 280;  // 爆速だけど視認できるバランス
+  // [ANIM] 玉の移動速度（m/s）
+  const ANIM_SPEED_MPS = 140;  // 既存値の半分
   const ANIM_MIN_MS    = 120;  // 最短表示時間を短縮
 
   // [TRAIL] 残像レイヤ
@@ -291,6 +291,31 @@ LEAFLET_HTML = r"""
     const dLng = toRad(b[1] - a[1]);
     const s = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2;
     return 2 * R * Math.asin(Math.sqrt(s));
+  }
+
+  // [ANIM] normalize trajectory coordinates to avoid NaN/invalid LatLng
+  function normalizeTrackLatLngs(raw) {
+    if (!Array.isArray(raw)) return [];
+    const out = [];
+    for (let i = 0; i < raw.length; i++) {
+      const p = raw[i];
+      if (!p || p.length < 2) continue;
+
+      let lat = Number(p[0]);
+      let lng = Number(p[1]);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+
+      // [lng,lat] 混在への救済
+      if (Math.abs(lat) > 90 && Math.abs(lng) <= 90) {
+        const tmp = lat;
+        lat = lng;
+        lng = tmp;
+      }
+
+      if (Math.abs(lat) > 90 || Math.abs(lng) > 180) continue;
+      out.push([lat, lng]);
+    }
+    return out;
   }
 
   // [ANIM] build cumulative segment distances for trajectory
@@ -333,7 +358,8 @@ LEAFLET_HTML = r"""
 
     const cum = buildCumulativeDistances(trackLatLngs);
     const total = cum[cum.length - 1];
-    if (total <= 0) {
+    if (!Number.isFinite(total) || total <= 0) {
+      console.warn('[ANIM] invalid total length:', total, 'points=', trackLatLngs.length);
       marker.setLatLng(trackLatLngs[0]);
       return;
     }
@@ -354,10 +380,14 @@ LEAFLET_HTML = r"""
 
       const dist = total * ratio;
       const ll = interpolateOnPolyline(trackLatLngs, cum, dist);
-      if (ll) {
-        marker.setLatLng(ll);
-        pushTrail(ll);
+      // 安全弁：NaNが出たら止める（落とさない）
+      if (!ll || !Number.isFinite(ll[0]) || !Number.isFinite(ll[1])) {
+        console.warn('[ANIM] invalid ll:', ll, 'dist=', dist, 'total=', total);
+        stopTrajectoryAnimation();
+        return;
       }
+      marker.setLatLng(ll);
+      pushTrail(ll);
 
       animReq = requestAnimationFrame(step);
     };
@@ -593,11 +623,14 @@ LEAFLET_HTML = r"""
     L.circleMarker([tr.end.lat, tr.end.lon], {radius: 6}).addTo(tripLayer);
 
     // raw points overlay (keep): raw_points を結ぶ黒点線は維持
+    const trackLatLngs = (tr.raw_points || []).map(p => [p.lat, p.lon]);
+    const trackLatLngsNorm = normalizeTrackLatLngs(trackLatLngs);
+
     const rawStyle = {color: 'black', weight: 2, dashArray: '4 6'};
-    if (tr.raw_points && tr.raw_points.length >= 2){
-      L.polyline(tr.raw_points.map(p => [p.lat, p.lon]), rawStyle).addTo(tripLayer);
-      tr.raw_points.forEach((p, idx) => {
-        L.circleMarker([p.lat, p.lon], {
+    if (trackLatLngsNorm.length >= 2){
+      L.polyline(trackLatLngsNorm, rawStyle).addTo(tripLayer);
+      trackLatLngsNorm.forEach((p, idx) => {
+        L.circleMarker(p, {
           radius: (idx === 4 ? 6 : 4),
           color: 'black',
           fillColor: 'black',
@@ -653,8 +686,7 @@ LEAFLET_HTML = r"""
 
     // ===== [ANIM] animation: neon bead loops on black dashed trajectory =====
     // [ANIM] use the same trajectory coordinates used by black dashed polyline
-    const trackLatLngs = (tr.raw_points || []).map(p => [p.lat, p.lon]);
-    const fallback = trackLatLngs[0] || [tr.center_spec.lat, tr.center_spec.lon];
+    const fallback = trackLatLngsNorm[0] || [tr.center_spec.lat, tr.center_spec.lon];
     animMarker = L.circleMarker(fallback, {
       radius: 7,
       color: NEON_CYAN,
@@ -664,7 +696,7 @@ LEAFLET_HTML = r"""
     }).addTo(tripLayer);
     const el = animMarker.getElement?.();
     if (el) el.classList.add('neon-glow');
-    startTrajectoryAnimation(trackLatLngs, animMarker, ANIM_SPEED_MPS);
+    startTrajectoryAnimation(trackLatLngsNorm, animMarker, ANIM_SPEED_MPS);
 
     try { highlightBranches(tr.in_branch, tr.out_branch); } catch(e) {}
 
