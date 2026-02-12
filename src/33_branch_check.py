@@ -271,12 +271,12 @@ LEAFLET_HTML = r"""
   const NEON_LIME  = '#7CFF00';
 
   // [ANIM] 玉の移動速度（m/s）: ビュンビュン系
-  const ANIM_SPEED_MPS = 35;   // 目安: 25〜60
-  const ANIM_MIN_MS    = 350;  // 最短でも0.35秒で終わる（短距離でも速く見せる）
+  const ANIM_SPEED_MPS = 280;  // 爆速だけど視認できるバランス
+  const ANIM_MIN_MS    = 120;  // 最短表示時間を短縮
 
   // [TRAIL] 残像レイヤ
   let trailLayer = null;
-  const TRAIL_MAX = 28;
+  const TRAIL_MAX = 20;
   const TRAIL_RADIUS = 5;
   const TRAIL_FADE = 0.85;
   let trailMarkers = [];
@@ -338,7 +338,7 @@ LEAFLET_HTML = r"""
       return;
     }
 
-    const durationMs = Math.max(ANIM_MIN_MS, (total / Math.max(0.1, speedMps)) * 1000);
+    const durationMs = Math.max(ANIM_MIN_MS, (total / Math.max(0.1, speedMps)) * 100);
     const t0 = performance.now();
     let prevRatio = 0;
 
@@ -346,7 +346,7 @@ LEAFLET_HTML = r"""
       const elapsed = now - t0;
       let ratio = (elapsed % durationMs) / durationMs;
       // [ANIM] 速く感じるイージング（加速気味）
-      ratio = Math.pow(ratio, 0.75);
+      ratio = Math.pow(ratio, 0.6);
       if (ratio < prevRatio) {
         clearTrail();
       }
