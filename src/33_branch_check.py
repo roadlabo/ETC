@@ -236,6 +236,15 @@ LEAFLET_HTML = r"""
 
       pointer-events: none;
     }
+
+    /* [CYBER] ネオン風発光 */
+    .neon-glow {
+      filter: drop-shadow(0 0 6px rgba(0, 246, 255, 0.95))
+              drop-shadow(0 0 14px rgba(0, 246, 255, 0.55));
+    }
+    .neon-trail {
+      filter: drop-shadow(0 0 4px rgba(0, 246, 255, 0.55));
+    }
   </style>
 </head>
 <body>
@@ -256,9 +265,21 @@ LEAFLET_HTML = r"""
   let animMarker = null;
   let branchLabelMarkers = {};
 
+  // [CYBER] ネオンカラー定数
+  const NEON_CYAN  = '#00f6ff';
+  const NEON_PINK  = '#ff2bd6';
+  const NEON_LIME  = '#7CFF00';
+
   // [ANIM] 玉の移動速度（m/s）: ビュンビュン系
   const ANIM_SPEED_MPS = 35;   // 目安: 25〜60
   const ANIM_MIN_MS    = 350;  // 最短でも0.35秒で終わる（短距離でも速く見せる）
+
+  // [TRAIL] 残像レイヤ
+  let trailLayer = null;
+  const TRAIL_MAX = 28;
+  const TRAIL_RADIUS = 5;
+  const TRAIL_FADE = 0.85;
+  let trailMarkers = [];
 
   // [ANIM] move marker along trajectory polyline
   function _haversineMeters(a, b) {
@@ -297,7 +318,7 @@ LEAFLET_HTML = r"""
     return [p0[0] + (p1[0]-p0[0])*t, p0[1] + (p1[1]-p0[1])*t];
   }
 
-  // [ANIM] one-way animation on trajectory (no ping-pong)
+  // [ANIM] loop animation on trajectory
   function startTrajectoryAnimation(trackLatLngs, marker, speedMps=10) {
     if (animReq) {
       cancelAnimationFrame(animReq);
@@ -319,24 +340,67 @@ LEAFLET_HTML = r"""
 
     const durationMs = Math.max(ANIM_MIN_MS, (total / Math.max(0.1, speedMps)) * 1000);
     const t0 = performance.now();
+    let prevRatio = 0;
 
     const step = (now) => {
-      const dt = now - t0;
-      let ratio = Math.min(1, dt / durationMs);
+      const elapsed = now - t0;
+      let ratio = (elapsed % durationMs) / durationMs;
       // [ANIM] 速く感じるイージング（加速気味）
       ratio = Math.pow(ratio, 0.75);
+      if (ratio < prevRatio) {
+        clearTrail();
+      }
+      prevRatio = ratio;
+
       const dist = total * ratio;
       const ll = interpolateOnPolyline(trackLatLngs, cum, dist);
-      if (ll) marker.setLatLng(ll);
-
-      if (ratio < 1) {
-        animReq = requestAnimationFrame(step);
-      } else {
-        animReq = null;
+      if (ll) {
+        marker.setLatLng(ll);
+        pushTrail(ll);
       }
+
+      animReq = requestAnimationFrame(step);
     };
 
     animReq = requestAnimationFrame(step);
+  }
+
+  // [TRAIL] 残像管理
+  function clearTrail() {
+    if (trailLayer && typeof trailLayer.clearLayers === 'function') {
+      trailLayer.clearLayers();
+    }
+    trailMarkers = [];
+  }
+
+  function pushTrail(latlng) {
+    if (!trailLayer) return;
+    const m = L.circleMarker(latlng, {
+      radius: TRAIL_RADIUS,
+      color: NEON_CYAN,
+      weight: 1,
+      fillColor: NEON_CYAN,
+      fillOpacity: 0.6,
+    });
+
+    trailLayer.addLayer(m);
+    trailMarkers.unshift(m);
+
+    while (trailMarkers.length > TRAIL_MAX) {
+      const old = trailMarkers.pop();
+      trailLayer.removeLayer(old);
+    }
+
+    for (let i = 0; i < trailMarkers.length; i++) {
+      const a = Math.pow(TRAIL_FADE, i);
+      trailMarkers[i].setStyle({
+        fillOpacity: 0.55 * a,
+        opacity: 0.8 * a,
+      });
+    }
+
+    const el = m.getElement?.();
+    if (el) el.classList.add('neon-trail');
   }
 
   function tryAddBaseTiles(){
@@ -394,6 +458,7 @@ LEAFLET_HTML = r"""
 
     branchLayer.addTo(map);
     tripLayer.addTo(map);
+    trailLayer = L.layerGroup().addTo(map);
 
     map.setView([centerLat, centerLon], zoom || 17);
 
@@ -500,13 +565,20 @@ LEAFLET_HTML = r"""
     animMarker = null;
   }
 
+  // [ANIM] external stop API
+  function stopTrajectoryAnimation(){
+    stopAnim();
+  }
+
   function showTrip(tr){
     // tr: {center_spec:{lat,lon}, center_calc:{lat,lon}, start:{lat,lon}, end:{lat,lon}, ...}
     ensureLayers();
     if (!map) initMap(tr.center_spec.lat, tr.center_spec.lon, 18);
 
     clearLayer(tripLayer);
-    stopAnim();
+    // [ANIM] トリップ切替時は前回アニメと残像を必ず停止/掃除
+    stopTrajectoryAnimation();
+    clearTrail();
 
     // center circle & marker refresh
     if (centerMarker) map.removeLayer(centerMarker);
@@ -579,19 +651,19 @@ LEAFLET_HTML = r"""
       }).addTo(tripLayer);
     }
 
-    // ===== animation: cyan bead moves on black dashed trajectory (one-way) =====
-    stopAnim();
-
+    // ===== [ANIM] animation: neon bead loops on black dashed trajectory =====
     // [ANIM] use the same trajectory coordinates used by black dashed polyline
     const trackLatLngs = (tr.raw_points || []).map(p => [p.lat, p.lon]);
     const fallback = trackLatLngs[0] || [tr.center_spec.lat, tr.center_spec.lon];
     animMarker = L.circleMarker(fallback, {
       radius: 7,
-      color: '#00bcd4',
-      fillColor: '#00bcd4',
+      color: NEON_CYAN,
+      fillColor: NEON_CYAN,
       fillOpacity: 1.0,
       weight: 2,
     }).addTo(tripLayer);
+    const el = animMarker.getElement?.();
+    if (el) el.classList.add('neon-glow');
     startTrajectoryAnimation(trackLatLngs, animMarker, ANIM_SPEED_MPS);
 
     try { highlightBranches(tr.in_branch, tr.out_branch); } catch(e) {}
@@ -616,7 +688,7 @@ LEAFLET_HTML = r"""
   function bootstrap(){
     if (!window.L){
       document.getElementById('map').innerHTML = 'Leafletの読み込みに失敗しました（JS読込/セキュリティ設定を確認）';
-      window._branchCheck = { initMap: ()=>{}, setBranchRays: ()=>{}, showTrip: ()=>{}, highlightBranches: ()=>{} };
+      window._branchCheck = { initMap: ()=>{}, setBranchRays: ()=>{}, showTrip: ()=>{}, highlightBranches: ()=>{}, stopTrajectoryAnimation: ()=>{} };
       return;
     }
 
@@ -627,7 +699,8 @@ LEAFLET_HTML = r"""
       initMap,
       setBranchRays,
       showTrip,
-      highlightBranches
+      highlightBranches,
+      stopTrajectoryAnimation,
     };
   }
 
