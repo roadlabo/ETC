@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import math
 import sys
-import tkinter as tk
 import webbrowser
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import folium
@@ -715,13 +713,16 @@ def main(argv: Sequence[str]) -> None:
     if "--nogui" in args:
         print("[INFO] running in --nogui mode")
 
-        root = tk.Tk()
-        root.withdraw()
-        folder = filedialog.askdirectory(title="CSVフォルダを選択してください")
-        root.destroy()
+        folder = None
+        if "--folder" in args:
+            idx = args.index("--folder")
+            if idx + 1 < len(args):
+                folder = args[idx + 1]
 
         if not folder:
-            print("[INFO] no folder selected")
+            print("[ERROR] --nogui requires --folder <path_to_csv_directory>")
+            print("Usage:")
+            print("  python 05_route_mapper_simple.py --nogui --folder D:\\path\\to\\csv_dir")
             return
 
         html_path = run_without_gui(folder)
