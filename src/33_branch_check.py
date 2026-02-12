@@ -256,6 +256,10 @@ LEAFLET_HTML = r"""
   let animMarker = null;
   let branchLabelMarkers = {};
 
+  // [ANIM] 玉の移動速度（m/s）: ビュンビュン系
+  const ANIM_SPEED_MPS = 35;   // 目安: 25〜60
+  const ANIM_MIN_MS    = 350;  // 最短でも0.35秒で終わる（短距離でも速く見せる）
+
   // [ANIM] move marker along trajectory polyline
   function _haversineMeters(a, b) {
     // a,b: [lat,lng]
@@ -313,12 +317,14 @@ LEAFLET_HTML = r"""
       return;
     }
 
-    const durationMs = Math.max(1500, (total / Math.max(0.1, speedMps)) * 1000);
+    const durationMs = Math.max(ANIM_MIN_MS, (total / Math.max(0.1, speedMps)) * 1000);
     const t0 = performance.now();
 
     const step = (now) => {
       const dt = now - t0;
-      const ratio = Math.min(1, dt / durationMs);
+      let ratio = Math.min(1, dt / durationMs);
+      // [ANIM] 速く感じるイージング（加速気味）
+      ratio = Math.pow(ratio, 0.75);
       const dist = total * ratio;
       const ll = interpolateOnPolyline(trackLatLngs, cum, dist);
       if (ll) marker.setLatLng(ll);
@@ -586,7 +592,7 @@ LEAFLET_HTML = r"""
       fillOpacity: 1.0,
       weight: 2,
     }).addTo(tripLayer);
-    startTrajectoryAnimation(trackLatLngs, animMarker, 10);
+    startTrajectoryAnimation(trackLatLngs, animMarker, ANIM_SPEED_MPS);
 
     try { highlightBranches(tr.in_branch, tr.out_branch); } catch(e) {}
 
