@@ -20,6 +20,7 @@ ETC2.0 プローブデータを「行政 EBPM の説明責任」に耐える形�
 - コンセプト: [docs/00_concept.md](docs/00_concept.md)
 - 処理フローとスクリプト一覧: [docs/01_pipeline.md](docs/01_pipeline.md)
 - FAQ（できること/できないこと）: [docs/99_faq.md](docs/99_faq.md)
+- USB配布（embeddable python + 同梱依存）: [docs/usb_embeddable_python.md](docs/usb_embeddable_python.md)
 - 個別スクリプトの詳細: docs/ 配下で src と同じ basename の MD を参照（例: `src/20_route_trip_extractor.py` → `docs/20_route_trip_extractor.md`）。
 
 作業フォルダ構成は [docs/05_work_folder_structure.md](docs/05_work_folder_structure.md) を参照する。

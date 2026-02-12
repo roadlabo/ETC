@@ -11,8 +11,6 @@ import folium
 import numpy as np
 import pandas as pd
 
-from matplotlib.figure import Figure
-
 NOGUI_MODE = "--nogui" in sys.argv[1:]
 
 if not NOGUI_MODE:
@@ -34,9 +32,10 @@ if not NOGUI_MODE:
         QListWidgetItem,
         QLineEdit,
     )
+    from matplotlib.figure import Figure
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 else:
-    FigureCanvas = object
+    Figure = FigureCanvas = object
     Qt = QUrl = QWebEngineSettings = QWebEngineView = object
     QApplication = QFileDialog = QHBoxLayout = QLabel = QMainWindow = object
     QMessageBox = QPushButton = QSplitter = QVBoxLayout = QWidget = object
@@ -707,23 +706,29 @@ class RouteMapperWindow(QMainWindow):
 def main(argv: Sequence[str]) -> None:
     args = list(argv[1:])
 
+    folder_arg = ""
+    for arg in args:
+        if not arg.startswith("-"):
+            folder_arg = arg
+            break
+
     # -----------------------------
     # NOGUI MODE
     # -----------------------------
     if "--nogui" in args:
         print("[INFO] running in --nogui mode")
 
-        folder = None
+        folder = folder_arg
         if "--folder" in args:
             idx = args.index("--folder")
             if idx + 1 < len(args):
                 folder = args[idx + 1]
 
         if not folder:
-            print("[ERROR] --nogui requires --folder <path_to_csv_directory>")
-            print("Usage:")
-            print("  python 05_route_mapper_simple.py --nogui --folder D:\\path\\to\\csv_dir")
-            return
+            folder = select_directory_with_qt()
+        if not folder:
+            folder = str(Path.cwd())
+            print(f"[WARN] フォルダ指定・ダイアログ選択不可のため、カレントを使用します: {folder}")
 
         html_path = run_without_gui(folder)
 
@@ -735,13 +740,13 @@ def main(argv: Sequence[str]) -> None:
 
         return
 
-    pattern = args[0] if args else "*.csv"
+    pattern = "*.csv"
 
     app = QApplication(sys.argv)
 
     # 初回：フォルダ選択
     initial = r"D:\01仕事\05 ETC2.0分析\生データ"
-    d = QFileDialog.getExistingDirectory(None, "CSVフォルダを選択してください", initial)
+    d = folder_arg or QFileDialog.getExistingDirectory(None, "CSVフォルダを選択してください", initial)
     if not d:
         return
 
@@ -782,6 +787,17 @@ def run_without_gui(folder_path: str) -> Optional[str]:
     out_path = csv_path.with_name(f"{csv_path.stem}_route_map.html")
     fmap.save(str(out_path))
     return str(out_path)
+
+
+def select_directory_with_qt() -> Optional[str]:
+    try:
+        from PyQt6.QtWidgets import QApplication, QFileDialog
+    except Exception:
+        return None
+
+    app = QApplication.instance() or QApplication([])
+    selected = QFileDialog.getExistingDirectory(None, "CSVフォルダを選択してください", str(Path.cwd()))
+    return selected or None
 
 
 if __name__ == "__main__":
