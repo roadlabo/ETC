@@ -1121,6 +1121,8 @@ class BranchCheckWindow(QMainWindow):
         self.table = QTableWidget()
         self.table.setColumnCount(len(DISPLAY_COLS_IN_TABLE))
         self.table.setHorizontalHeaderLabels(DISPLAY_COLS_IN_TABLE)
+        # IMPORTANT: populate中はsortingを必ずOFF（ONだと行が動いて他列が空白になる）
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(self.df))
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -1130,12 +1132,6 @@ class BranchCheckWindow(QMainWindow):
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setDefaultSectionSize(78)
         hh.setMinimumSectionSize(60)
-        # --- sort (header click) ---
-        self.table.setSortingEnabled(True)
-        hh.setSortIndicatorShown(True)
-        hh.setSectionsClickable(True)
-        hh.setSortIndicatorClearable(False)
-        hh.setSortIndicator(0, Qt.SortOrder.AscendingOrder)
 
         # --- DBG: 4行目が空に見える原因調査 ---
         try:
@@ -1171,8 +1167,14 @@ class BranchCheckWindow(QMainWindow):
                         pass
                 self.table.setItem(r, c_idx, item)
 
+        hh.setSortIndicatorShown(True)
+        hh.setSectionsClickable(True)
+        hh.setSortIndicatorClearable(False)
+        self.table.setSortingEnabled(True)
+
         try:
             col = DISPLAY_COLS_IN_TABLE.index("遅れ時間(s)")
+            self.table.sortItems(col, Qt.SortOrder.DescendingOrder)
             hh.setSortIndicator(col, Qt.SortOrder.DescendingOrder)
         except Exception:
             pass
