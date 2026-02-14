@@ -864,9 +864,6 @@ DISPLAY_COLS_IN_TABLE = [c for c in DISPLAY_COLS_IN_TABLE if c is not None]
 NUMERIC_SORT_COLS = {
     "運行日",
     "運行ID",
-    "自動車の種別",
-    "用途",
-    "所要時間算出可否",
     "遅れ時間(s)",
     "流入枝番",
     "流出枝番",
@@ -1179,6 +1176,11 @@ class BranchCheckWindow(QMainWindow):
                         item.setData(Qt.ItemDataRole.EditRole, None)
                     else:
                         item.setData(Qt.ItemDataRole.EditRole, float(vnum))
+
+                if c_name in {"流入枝番", "流出枝番"}:
+                    vnum = pd.to_numeric(val, errors="coerce")
+                    if not pd.isna(vnum):
+                        item.setText(str(int(vnum)))
 
                 if c_name in ["流入角度差(deg)", "流出角度差(deg)"]:
                     try:
