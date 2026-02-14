@@ -1587,15 +1587,23 @@ def main():
 
     csv_path = parsed.csv
     if not csv_path:
+        # ① ファイル選択を見せる前に「起動中」を閉じる
         if busy is not None:
             busy.close()
             busy = None
+
         csv_path, _ = QFileDialog.getOpenFileName(
             None,
             "交差点パフォーマンスCSV（*_performance.csv）を選択",
             "",
             "CSV Files (*.csv);;All Files (*)",
         )
+        if not csv_path:
+            return
+
+        # ② 選択後：ここから先の処理用に「起動中」を作り直す
+        # （これで「画面を表示中…」が必ず見える）
+        busy = make_busy_dialog("起動中", "CSV/設定を読み込み中…")
     if not csv_path:
         return
 
