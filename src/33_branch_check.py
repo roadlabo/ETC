@@ -1,7 +1,11 @@
+import os
 import sys
 import json
 import math
+import traceback
+import logging
 import webbrowser
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -42,6 +46,41 @@ else:
 # -----------------------------
 # Utilities
 # -----------------------------
+def setup_logging(app_name="33_branch_check", log_dir="logs"):
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, f"{app_name}.log")
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    # 既存ハンドラがあれば二重登録防止
+    if logger.handlers:
+        return log_path
+
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    fh = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5, encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+
+    # ついでに stderr もログへ
+    class _StderrToLog:
+        def write(self, msg):
+            msg = msg.rstrip()
+            if msg:
+                logging.error(msg)
+
+        def flush(self):  # noqa
+            pass
+
+    sys.stderr = _StderrToLog()
+
+    return log_path
+
+
 def read_csv_safely(path: str) -> pd.DataFrame:
     encodings = ["cp932", "shift_jis", "utf-8"]
     last_err = None
@@ -1102,12 +1141,12 @@ class BranchCheckWindow(QMainWindow):
         try:
             r = 3
             row = self.df.iloc[r]
-            print("[DBG] row3 display values:",
-                  {c: row.get(c, None) for c in DISPLAY_COLS_IN_TABLE})
-            print("[DBG] row3 isna:",
-                  {c: bool(pd.isna(row.get(c, None))) for c in DISPLAY_COLS_IN_TABLE})
+            logging.info("[DBG] row3 display values: %s",
+                         {c: row.get(c, None) for c in DISPLAY_COLS_IN_TABLE})
+            logging.info("[DBG] row3 isna: %s",
+                         {c: bool(pd.isna(row.get(c, None))) for c in DISPLAY_COLS_IN_TABLE})
         except Exception as e:
-            print("[DBG] failed:", e)
+            logging.info("[DBG] failed: %s", e)
 
         for r in range(len(self.df)):
             row = self.df.iloc[r]
@@ -1396,27 +1435,28 @@ def main():
     # -----------------------------
     if "--nogui" in args:
         try:
-            print("[INFO] running in --nogui mode")
+            logging.info("[INFO] running in --nogui mode")
 
             if "--csv" not in args:
                 selected = prompt_csv_path()
                 if selected:
                     args = ["--nogui", "--csv", selected]
                 else:
-                    print("[ERROR] CSVが未指定です。--csv を指定するか、ダイアログで選択してください。")
-                    print("Usage: python 33_branch_check.py --nogui --csv D:\\path\\xxx_performance.csv")
+                    logging.error("[ERROR] CSVが未指定です。--csv を指定するか、ダイアログで選択してください。")
+                    logging.info("Usage: python 33_branch_check.py --nogui --csv D:\\path\\xxx_performance.csv")
                     return
 
             html_path = run_without_gui(args)
 
             if html_path:
                 webbrowser.open(Path(html_path).resolve().as_uri())
-                print("[OK] opened in browser:", html_path)
+                logging.info("[OK] opened in browser: %s", html_path)
             else:
-                print("[ERROR] html generation failed")
+                logging.error("[ERROR] html generation failed")
 
         except Exception as e:
-            print("[ERROR]", e)
+            logging.exception("[ERROR] %s", e)
+            logging.error(traceback.format_exc())
         return
 
     parser = argparse.ArgumentParser()
@@ -1486,4 +1526,21 @@ def run_without_gui(args: List[str]) -> Optional[str]:
 
 
 if __name__ == "__main__":
-    main()
+    log_path = setup_logging()
+    logging.info("=== START 33_branch_check ===")
+    logging.info("log_path=%s", log_path)
+
+    try:
+        main()
+    except Exception:
+        logging.exception("UNHANDLED EXCEPTION")
+        # 可能ならGUIで一言出す（バッチ運用でも気づける）
+        try:
+            from PyQt6.QtWidgets import QMessageBox, QApplication
+
+            app = QApplication.instance()
+            if app is not None:
+                QMessageBox.critical(None, "33_branch_check エラー", f"例外が発生しました。\nログ: {log_path}")
+        except Exception:
+            pass
+        raise
