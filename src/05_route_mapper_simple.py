@@ -31,7 +31,7 @@ if not NOGUI_MODE:
         QWidget,
         QListWidget,
         QListWidgetItem,
-        QLineEdit,
+        QProgressDialog,
     )
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -40,7 +40,7 @@ else:
     Qt = QUrl = QWebEngineSettings = QWebEngineView = object
     QApplication = QFileDialog = QHBoxLayout = QLabel = QMainWindow = object
     QMessageBox = QPushButton = QSplitter = QVBoxLayout = QWidget = object
-    QListWidget = QListWidgetItem = QLineEdit = object
+    QListWidget = QListWidgetItem = QProgressDialog = object
 
 
 # ============================================================
@@ -178,15 +178,26 @@ def is_internet_available(timeout_sec: float = 1.0) -> bool:
         return False
 
 
-def show_modeless_message(parent, title: str, text: str):
-    m = QMessageBox(parent)
-    m.setIcon(QMessageBox.Icon.Information)
-    m.setWindowTitle(title)
-    m.setText(text)
-    m.setStandardButtons(QMessageBox.StandardButton.NoButton)
-    m.setModal(False)
-    m.show()
-    return m
+def make_busy_dialog(title: str = "起動中", text: str = "準備しています…") -> QProgressDialog:
+    from PyQt6.QtCore import QTimer
+
+    dlg = QProgressDialog(text, None, 0, 0)  # 0..0 = 無限進捗（くるくる）
+    dlg.setWindowTitle(title)
+    dlg.setMinimumDuration(0)
+    dlg.setCancelButton(None)
+    dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+    dlg.setAutoClose(False)
+    dlg.setAutoReset(False)
+    dlg.show()
+    QTimer.singleShot(0, lambda: None)
+    return dlg
+
+
+def update_busy_dialog(dlg: QProgressDialog, text: str):
+    if dlg is None:
+        return
+    dlg.setLabelText(text)
+    QApplication.processEvents()
 
 
 LEAFLET_HTML = r"""
@@ -599,7 +610,7 @@ class SpeedPlot(QWidget):
 class RouteMapperWindow(QMainWindow):
     def __init__(self, directory: Path, pattern: str) -> None:
         super().__init__()
-        self.setWindowTitle("05_route_mapper - ルート可視化（33型UI）")
+        self.setWindowTitle("第１・２スクリーニングデータ　ビューアー")
         self.resize(1500, 900)
 
         self.directory = directory
@@ -623,19 +634,21 @@ class RouteMapperWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
 
         bar = QHBoxLayout()
-        self.ed_pattern = QLineEdit(self.pattern)
-        self.ed_pattern.setPlaceholderText("pattern (e.g. *.csv)")
         self.btn_pick_dir = QPushButton("フォルダ選択…")
         self.btn_reload = QPushButton("再読込")
-        bar.addWidget(QLabel("pattern:"))
-        bar.addWidget(self.ed_pattern, 1)
         bar.addWidget(self.btn_pick_dir)
         bar.addWidget(self.btn_reload)
+        bar.addStretch(1)
         left_layout.addLayout(bar)
 
+        dir_row = QHBoxLayout()
         self.lbl_dir = QLabel(f"DIR: {self.directory}")
         self.lbl_dir.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        left_layout.addWidget(self.lbl_dir)
+        self.lbl_nfiles = QLabel("ファイル数：0")
+        self.lbl_nfiles.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        dir_row.addWidget(self.lbl_dir, 1)
+        dir_row.addWidget(self.lbl_nfiles, 0)
+        left_layout.addLayout(dir_row)
 
         self.list = QListWidget()
         self.list.itemSelectionChanged.connect(self._on_selection_changed)
@@ -658,7 +671,6 @@ class RouteMapperWindow(QMainWindow):
 
         self.btn_pick_dir.clicked.connect(self._pick_directory)
         self.btn_reload.clicked.connect(self._refresh_file_list)
-        self.ed_pattern.returnPressed.connect(self._refresh_file_list)
 
         # ---------------- Right panel: map + plot ----------------
         right = QWidget()
@@ -702,12 +714,19 @@ class RouteMapperWindow(QMainWindow):
         self._refresh_file_list()
 
     def _refresh_file_list(self) -> None:
-        self.pattern = self.ed_pattern.text().strip() or "*.csv"
+        self.pattern = "*.csv"
         if not self.directory.exists():
+            self.files = []
+            self.list.clear()
+            self.lbl_nfiles.setText("ファイル数：0")
+            self.status.setText("No CSV files found.")
+            self._set_info_defaults()
+            self.plot.update_plot(pd.DataFrame())
             QMessageBox.warning(self, "Directory not found", f"Directory does not exist:\n{self.directory}")
             return
 
         self.files = sorted([p for p in self.directory.glob(self.pattern) if p.is_file()])
+        self.lbl_nfiles.setText(f"ファイル数：{len(self.files)}")
         self.list.clear()
         for p in self.files:
             self.list.addItem(QListWidgetItem(p.name))
@@ -891,17 +910,13 @@ def main(argv: Sequence[str]) -> None:
 
     app = QApplication(sys.argv)
 
-    # 起動メッセージ
-    startup_msg = show_modeless_message(
-        None,
-        "起動中",
-        "準備しています。フォルダを選択してください。"
-    )
+    busy = make_busy_dialog("起動中", "Qt初期化中…（初回は時間がかかることがあります）")
 
     initial = r"D:\01仕事\05 ETC2.0分析\生データ"
 
-    # フォルダ選択前にメッセージを消す
-    startup_msg.close()
+    if busy is not None:
+        busy.close()
+        busy = None
 
     d = folder_arg or QFileDialog.getExistingDirectory(
         None,
@@ -912,12 +927,7 @@ def main(argv: Sequence[str]) -> None:
     if not d:
         return
 
-    # フォルダ選択後「画面表示中」
-    loading_msg = show_modeless_message(
-        None,
-        "処理中",
-        "画面表示中"
-    )
+    busy = make_busy_dialog("起動中", "画面を表示中…")
 
     # インターネット未接続通知（既存白背景ロジックは変更しない）
     if not is_internet_available():
@@ -930,7 +940,7 @@ def main(argv: Sequence[str]) -> None:
     w = RouteMapperWindow(directory=Path(d), pattern=pattern)
 
     # ウィンドウ側でも閉じられるよう参照渡し
-    w._msg_loading = loading_msg
+    w._msg_loading = busy
 
     w.show()
     sys.exit(app.exec())
