@@ -212,6 +212,22 @@ def prompt_csv_path() -> Optional[str]:
     return _select_csv_with_tkinter()
 
 
+def install_excepthook(log_path: str):
+    def _hook(exctype, value, tb):
+        msg = "".join(traceback.format_exception(exctype, value, tb))
+        logging.error("UNHANDLED EXCEPTION (Qt slot or main):\n%s", msg)
+        try:
+            QMessageBox.critical(
+                None,
+                "Unhandled Python exception",
+                f"例外が発生しました。\nログを確認してください:\n{log_path}",
+            )
+        except Exception:
+            pass
+
+    sys.excepthook = _hook
+
+
 # -----------------------------
 # Leaflet HTML (embedded)
 # -----------------------------
@@ -1335,7 +1351,7 @@ class BranchCheckWindow(QMainWindow):
             return f"{text[:4]}/{text[4:6]}/{text[6:8]} {text[8:10]}:{text[10:12]}:{text[12:14]}"
         return text
 
-    def _selected_row_index(self) -> Optional[int]:
+    def _selected_row_key(self) -> Optional[int]:
         items = self.table.selectedItems()
         if not items:
             return None
@@ -1350,17 +1366,17 @@ class BranchCheckWindow(QMainWindow):
         return int(df_i)
 
     def _on_selection_changed(self):
-        df_i = self._selected_row_index()
-        if df_i is None:
+        k = self._selected_row_key()
+        if k is None:
             return
-        if df_i not in self.df.index:
+        if k not in self.df.index:
             return
 
         self._run_branch_js(
             f"window._branchCheck.setBranchRays({json.dumps(self.branch_rays)});"
         )
 
-        row = self.df.loc[df_i]
+        row = self.df.loc[k]
 
         # details
         for _, key in DETAIL_FIELDS:
@@ -1429,7 +1445,9 @@ class BranchCheckWindow(QMainWindow):
         js = f"window._branchCheck.showTrip({json.dumps(tr)});"
         self._run_branch_js(js)
 
-        self.statusBar().showMessage(f"Selected: {idx+1}/{len(self.df)}")
+        selected_row = self.table.currentRow()
+        if selected_row >= 0:
+            self.statusBar().showMessage(f"Selected: {selected_row + 1}/{len(self.df)}")
 
     def _reload_csv_dialog(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1450,6 +1468,11 @@ class BranchCheckWindow(QMainWindow):
 
 def main():
     import argparse
+
+    log_path = setup_logging()
+    install_excepthook(log_path)
+    logging.info("=== START 33_branch_check ===")
+    logging.info("log_path=%s", log_path)
 
     args = sys.argv[1:]
 
@@ -1550,9 +1573,6 @@ def run_without_gui(args: List[str]) -> Optional[str]:
 
 if __name__ == "__main__":
     log_path = setup_logging()
-    logging.info("=== START 33_branch_check ===")
-    logging.info("log_path=%s", log_path)
-
     try:
         main()
     except Exception:
