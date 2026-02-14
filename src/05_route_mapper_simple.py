@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import socket
 import sys
 import webbrowser
 from datetime import datetime
@@ -167,6 +168,25 @@ def split_segments(points: List[Tuple[float, float, int]]) -> List[List[Tuple[fl
         segs.append(seg)
 
     return segs
+
+
+def is_internet_available(timeout_sec: float = 1.0) -> bool:
+    try:
+        with socket.create_connection(("tile.openstreetmap.org", 443), timeout=timeout_sec):
+            return True
+    except Exception:
+        return False
+
+
+def show_modeless_message(parent, title: str, text: str):
+    m = QMessageBox(parent)
+    m.setIcon(QMessageBox.Icon.Information)
+    m.setWindowTitle(title)
+    m.setText(text)
+    m.setStandardButtons(QMessageBox.StandardButton.NoButton)
+    m.setModal(False)
+    m.show()
+    return m
 
 
 LEAFLET_HTML = r"""
@@ -586,6 +606,7 @@ class RouteMapperWindow(QMainWindow):
         self.pattern = pattern
 
         self.files: List[Path] = []
+        self._msg_loading = None
         self.current_df: Optional[pd.DataFrame] = None
 
         self._build_ui()
@@ -669,7 +690,11 @@ class RouteMapperWindow(QMainWindow):
         layout.addWidget(splitter)
 
     def _pick_directory(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "CSVフォルダを選択", str(self.directory))
+        d = QFileDialog.getExistingDirectory(
+            self,
+            "第1・2スクリーニングデータ格納フォルダの選択",
+            str(self.directory)
+        )
         if not d:
             return
         self.directory = Path(d)
@@ -716,6 +741,14 @@ class RouteMapperWindow(QMainWindow):
                     self._render_current()
             except Exception:
                 pass
+
+        # 地図準備完了 → 処理中メッセージを閉じる
+        if self._msg_loading is not None:
+            try:
+                self._msg_loading.close()
+            except Exception:
+                pass
+            self._msg_loading = None
 
     def _init_map(self, lat: float, lon: float) -> None:
         self._run_js(f"window._routeMapper.initMap({lat}, {lon}, 12);")
@@ -858,13 +891,47 @@ def main(argv: Sequence[str]) -> None:
 
     app = QApplication(sys.argv)
 
-    # 初回：フォルダ選択
+    # 起動メッセージ
+    startup_msg = show_modeless_message(
+        None,
+        "起動中",
+        "準備しています。フォルダを選択してください。"
+    )
+
     initial = r"D:\01仕事\05 ETC2.0分析\生データ"
-    d = folder_arg or QFileDialog.getExistingDirectory(None, "CSVフォルダを選択してください", initial)
+
+    # フォルダ選択前にメッセージを消す
+    startup_msg.close()
+
+    d = folder_arg or QFileDialog.getExistingDirectory(
+        None,
+        "第1・2スクリーニングデータ格納フォルダの選択",
+        initial
+    )
+
     if not d:
         return
 
+    # フォルダ選択後「画面表示中」
+    loading_msg = show_modeless_message(
+        None,
+        "処理中",
+        "画面表示中"
+    )
+
+    # インターネット未接続通知（既存白背景ロジックは変更しない）
+    if not is_internet_available():
+        QMessageBox.information(
+            None,
+            "オフライン表示",
+            "インターネット接続が無いため白背景で表示します。"
+        )
+
     w = RouteMapperWindow(directory=Path(d), pattern=pattern)
+
+    # ウィンドウ側でも閉じられるよう参照渡し
+    w._msg_loading = loading_msg
+
     w.show()
     sys.exit(app.exec())
 
