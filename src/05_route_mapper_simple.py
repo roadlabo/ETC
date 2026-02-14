@@ -178,9 +178,7 @@ def is_internet_available(timeout_sec: float = 1.0) -> bool:
         return False
 
 
-def make_busy_dialog(title: str = "起動中", text: str = "準備しています…") -> QProgressDialog:
-    from PyQt6.QtCore import QTimer
-
+def make_busy_dialog(title: str, text: str) -> QProgressDialog:
     dlg = QProgressDialog(text, None, 0, 0)  # 0..0 = 無限進捗（くるくる）
     dlg.setWindowTitle(title)
     dlg.setMinimumDuration(0)
@@ -189,15 +187,17 @@ def make_busy_dialog(title: str = "起動中", text: str = "準備していま�
     dlg.setAutoClose(False)
     dlg.setAutoReset(False)
     dlg.show()
-    QTimer.singleShot(0, lambda: None)
+    QApplication.processEvents()
     return dlg
 
 
-def update_busy_dialog(dlg: QProgressDialog, text: str):
+def close_busy_dialog(dlg: Optional[QProgressDialog]) -> None:
     if dlg is None:
         return
-    dlg.setLabelText(text)
-    QApplication.processEvents()
+    try:
+        dlg.close()
+    except Exception:
+        pass
 
 
 LEAFLET_HTML = r"""
@@ -635,9 +635,7 @@ class RouteMapperWindow(QMainWindow):
 
         bar = QHBoxLayout()
         self.btn_pick_dir = QPushButton("フォルダ選択…")
-        self.btn_reload = QPushButton("再読込")
         bar.addWidget(self.btn_pick_dir)
-        bar.addWidget(self.btn_reload)
         bar.addStretch(1)
         left_layout.addLayout(bar)
 
@@ -670,7 +668,6 @@ class RouteMapperWindow(QMainWindow):
         left_layout.addWidget(self.status)
 
         self.btn_pick_dir.clicked.connect(self._pick_directory)
-        self.btn_reload.clicked.connect(self._refresh_file_list)
 
         # ---------------- Right panel: map + plot ----------------
         right = QWidget()
@@ -709,6 +706,10 @@ class RouteMapperWindow(QMainWindow):
         )
         if not d:
             return
+
+        close_busy_dialog(self._msg_loading)
+        self._msg_loading = make_busy_dialog("処理中", "データ読込中…")
+
         self.directory = Path(d)
         self.lbl_dir.setText(f"DIR: {self.directory}")
         self._refresh_file_list()
@@ -716,6 +717,8 @@ class RouteMapperWindow(QMainWindow):
     def _refresh_file_list(self) -> None:
         self.pattern = "*.csv"
         if not self.directory.exists():
+            close_busy_dialog(self._msg_loading)
+            self._msg_loading = None
             self.files = []
             self.list.clear()
             self.lbl_nfiles.setText("ファイル数：0")
@@ -735,6 +738,8 @@ class RouteMapperWindow(QMainWindow):
             self.status.setText("No CSV files found.")
             self._set_info_defaults()
             self.plot.update_plot(pd.DataFrame())
+            close_busy_dialog(self._msg_loading)
+            self._msg_loading = None
             return
 
         self.status.setText("Select a CSV file.")
@@ -762,17 +767,13 @@ class RouteMapperWindow(QMainWindow):
                 pass
 
         # 地図準備完了 → 処理中メッセージを閉じる
-        if self._msg_loading is not None:
-            try:
-                self._msg_loading.close()
-            except Exception:
-                pass
-            self._msg_loading = None
+        close_busy_dialog(self._msg_loading)
+        self._msg_loading = None
 
     def _init_map(self, lat: float, lon: float) -> None:
         self._run_js(f"window._routeMapper.initMap({lat}, {lon}, 12);")
 
-    def _run_js(self, js: str, retry_ms: int = 120) -> None:
+    def _run_js(self, js: str, retry_ms: int = 120, on_ready=None) -> None:
         wrapped = (
             "(function(){"
             "if (window._routeMapper) {"
@@ -785,9 +786,14 @@ class RouteMapperWindow(QMainWindow):
 
         def _cb(ok: bool):
             if ok:
+                if on_ready:
+                    try:
+                        on_ready()
+                    except Exception:
+                        pass
                 return
             from PyQt6.QtCore import QTimer
-            QTimer.singleShot(retry_ms, lambda: self.web.page().runJavaScript(wrapped))
+            QTimer.singleShot(retry_ms, lambda: self.web.page().runJavaScript(wrapped, _cb))
 
         self.web.page().runJavaScript(wrapped, _cb)
 
@@ -863,7 +869,10 @@ class RouteMapperWindow(QMainWindow):
         }
 
         import json
-        self._run_js(f"window._routeMapper.showRoute({json.dumps(payload)});")
+        self._run_js(
+            f"window._routeMapper.showRoute({json.dumps(payload)});",
+            on_ready=lambda: (close_busy_dialog(self._msg_loading), setattr(self, "_msg_loading", None)),
+        )
 
         # plot
         self.plot.update_plot(df)
@@ -914,9 +923,8 @@ def main(argv: Sequence[str]) -> None:
 
     initial = r"D:\01仕事\05 ETC2.0分析\生データ"
 
-    if busy is not None:
-        busy.close()
-        busy = None
+    close_busy_dialog(busy)
+    busy = None
 
     d = folder_arg or QFileDialog.getExistingDirectory(
         None,
@@ -927,7 +935,7 @@ def main(argv: Sequence[str]) -> None:
     if not d:
         return
 
-    busy = make_busy_dialog("起動中", "画面を表示中…")
+    busy = make_busy_dialog("起動中", "データ読込中…")
 
     # インターネット未接続通知（既存白背景ロジックは変更しない）
     if not is_internet_available():
