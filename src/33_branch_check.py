@@ -1587,6 +1587,9 @@ def main():
 
     csv_path = parsed.csv
     if not csv_path:
+        if busy is not None:
+            busy.close()
+            busy = None
         csv_path, _ = QFileDialog.getOpenFileName(
             None,
             "交差点パフォーマンスCSV（*_performance.csv）を選択",
@@ -1601,6 +1604,9 @@ def main():
         w = BranchCheckWindow(csv_path, progress_callback=lambda msg: update_busy_dialog(busy, msg))
         update_busy_dialog(busy, "画面を表示中…")
         w.show()
+        if busy is not None:
+            QTimer.singleShot(0, busy.close)
+            busy = None
         sys.exit(app.exec())
     except Exception as e:
         QMessageBox.critical(None, "エラー", str(e))
