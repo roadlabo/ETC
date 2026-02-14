@@ -7,7 +7,7 @@ import logging
 import webbrowser
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Callable
 
 import numpy as np
 import pandas as pd
@@ -17,6 +17,7 @@ NOGUI_MODE = "--nogui" in sys.argv[1:]
 
 if not NOGUI_MODE:
     from PyQt6.QtCore import Qt
+    from PyQt6.QtCore import QTimer
     from PyQt6.QtCore import QUrl
     from PyQt6.QtWebEngineCore import QWebEngineSettings
     from PyQt6.QtWidgets import (
@@ -27,6 +28,7 @@ if not NOGUI_MODE:
         QMainWindow,
         QMessageBox,
         QPushButton,
+        QProgressDialog,
         QSplitter,
         QTableWidget,
         QTableWidgetItem,
@@ -37,9 +39,9 @@ if not NOGUI_MODE:
     )
     from PyQt6.QtWebEngineWidgets import QWebEngineView
 else:
-    Qt = QUrl = QWebEngineSettings = object
+    Qt = QUrl = QWebEngineSettings = QTimer = object
     QApplication = QFileDialog = QHBoxLayout = QLabel = QMainWindow = object
-    QMessageBox = QPushButton = QSplitter = QTableWidget = object
+    QMessageBox = QPushButton = QProgressDialog = QSplitter = QTableWidget = object
     QTableWidgetItem = QVBoxLayout = QWidget = QGridLayout = object
     QHeaderView = QWebEngineView = object
 
@@ -247,6 +249,26 @@ def install_excepthook(log_path: str):
             pass
 
     sys.excepthook = _hook
+
+
+def make_busy_dialog(title: str = "起動中", text: str = "準備しています…") -> QProgressDialog:
+    dlg = QProgressDialog(text, None, 0, 0)  # 0..0 = 無限進捗（くるくる）
+    dlg.setWindowTitle(title)
+    dlg.setMinimumDuration(0)
+    dlg.setCancelButton(None)
+    dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+    dlg.setAutoClose(False)
+    dlg.setAutoReset(False)
+    dlg.show()
+    QTimer.singleShot(0, lambda: None)
+    return dlg
+
+
+def update_busy_dialog(dlg: QProgressDialog, text: str):
+    if dlg is None:
+        return
+    dlg.setLabelText(text)
+    QApplication.processEvents()
 
 
 # -----------------------------
@@ -892,6 +914,9 @@ NUMERIC_SORT_COLS = {
     "流出角度差(deg)",
 }
 
+MAX_ROWS = 200_000
+WARN_ROWS = 50_000
+
 
 DETAIL_FIELDS = [
     ("交差点ファイル名", "交差点ファイル名"),
@@ -915,13 +940,15 @@ DETAIL_FIELDS = [
 
 
 class BranchCheckWindow(QMainWindow):
-    def __init__(self, csv_path: str):
+    def __init__(self, csv_path: str, progress_callback: Optional[Callable[[str], None]] = None):
         super().__init__()
         self.setWindowTitle("33_branch_check - 枝判定 目視チェッカー")
         self.resize(1400, 900)
         self._angle_zero_east_ccw = True
+        self._progress_callback = progress_callback
 
         self.csv_path = csv_path
+        self._report_progress("CSV/設定を読み込み中…")
         self.df = read_csv_safely(csv_path)
         # 列名の見えないズレ対策（前後空白/全角空白）
         self.df.columns = (
@@ -931,6 +958,20 @@ class BranchCheckWindow(QMainWindow):
         )
 
         ensure_columns(self.df, REQUIRED_COLS)
+        n = len(self.df)
+        logging.info("rows_loaded=%d", n)
+        if n >= WARN_ROWS:
+            self._report_progress(f"CSV読み込み中…（{n:,}行。少しお待ちください）")
+        if n > MAX_ROWS:
+            QMessageBox.warning(
+                None,
+                "データ件数が多すぎます",
+                f"データ件数が {n:,} 行あります。\n"
+                f"一覧表示は最大 {MAX_ROWS:,} 行までに制限しています。\n\n"
+                f"先頭 {MAX_ROWS:,} 行のみ表示します。",
+            )
+            logging.warning("row_guard: truncated %d -> %d", n, MAX_ROWS)
+            self.df = self.df.iloc[:MAX_ROWS].copy()
 
         # 数値列をなるべく数値化
         numeric_cols = [
@@ -958,6 +999,7 @@ class BranchCheckWindow(QMainWindow):
                 self.df[c] = pd.to_numeric(self.df[c], errors="coerce")
 
         self._ensure_speed_column()
+        self._report_progress("ソート準備中…")
         self._sort_trips()
 
         self.df = self.df.dropna(subset=[
@@ -983,12 +1025,17 @@ class BranchCheckWindow(QMainWindow):
             self.branch_rays = self._compute_branch_rays()
 
         # UI
+        self._report_progress("一覧表を作成中…")
         self._build_ui()
 
         # 初期選択
         if len(self.df) > 0:
             self.table.selectRow(0)
             self._on_selection_changed()
+
+    def _report_progress(self, text: str) -> None:
+        if self._progress_callback is not None:
+            self._progress_callback(text)
 
     def _compute_branch_rays(self) -> List[Dict[str, Any]]:
         rays = []
@@ -1139,6 +1186,8 @@ class BranchCheckWindow(QMainWindow):
         return rays
 
     def _build_ui(self):
+        logging.info("building_table rows=%d", len(self.df))
+        self._report_progress("一覧表を作成中…")
         root = QWidget()
         self.setCentralWidget(root)
 
@@ -1534,6 +1583,7 @@ def main():
     parsed = parser.parse_args()
 
     app = QApplication(sys.argv)
+    busy = make_busy_dialog("起動中", "Qt初期化中…（初回は時間がかかることがあります）")
 
     csv_path = parsed.csv
     if not csv_path:
@@ -1547,12 +1597,17 @@ def main():
         return
 
     try:
-        w = BranchCheckWindow(csv_path)
+        update_busy_dialog(busy, "CSV/設定を読み込み中…")
+        w = BranchCheckWindow(csv_path, progress_callback=lambda msg: update_busy_dialog(busy, msg))
+        update_busy_dialog(busy, "画面を表示中…")
         w.show()
         sys.exit(app.exec())
     except Exception as e:
         QMessageBox.critical(None, "エラー", str(e))
         raise
+    finally:
+        if busy is not None:
+            busy.close()
 
 
 def run_without_gui(args: List[str]) -> Optional[str]:
