@@ -10,28 +10,19 @@ from __future__ import annotations
 
 import csv
 import math
+import argparse
 import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-# 入力トリップCSVディレクトリ / 出力ディレクトリ
-DEFAULT_INPUT_DIR: Path | None = Path(r"/path/to/input_directory")
-DEFAULT_OUTPUT_DIR: Path | None = Path(r"/path/to/output_directory")
-
-# 交差点CSVファイルが入っているフォルダ（この中の *.csv を全て対象とする）
-CROSSROAD_CSV_DIR: Path | None = Path(r"/path/to/crossroads_dir")
-
-# （任意）個別に追加したい交差点CSVがあればここにも書けるようにしておく
-CROSSROAD_CSV_LIST: list[Path] = [
-    # 例:
-    # Path(r"/path/to/special_crossroad.csv"),
-]
+FOLDER_CROSS = "11_交差点(Point)データ"
+FOLDER_OUT = "20_第２スクリーニング"
 
 THRESH_M = 20.0      # 交差点中心からの判定距離[m]
 MIN_HITS = 1         # HITとみなす最小ヒット数（点＋線分の合計）
@@ -40,6 +31,12 @@ VERBOSE = False
 # 入力ディレクトリ配下のサブフォルダも含めて探索するかどうか
 RECURSIVE = True
 AUDIT_MODE = False   # （必要なら距離計算回数などの統計用）
+
+
+def resolve_project_paths(project_dir: Path) -> tuple[Path, Path]:
+    """Resolve fixed folders from the project directory."""
+
+    return project_dir / FOLDER_CROSS, project_dir / FOLDER_OUT
 
 # 曜日フィルタは 15_trip_extractor_route.py と同様の TARGET_WEEKDAYS を流用
 TARGET_WEEKDAYS: set[int] = {1, 2, 3, 4, 5, 6, 7}
@@ -608,35 +605,13 @@ def process_file_for_all_crossroads(
 # CLI helpers
 # ---------------------------------------------------------------------------
 
-def parse_args(argv: Sequence[str]) -> Dict[str, Path | None]:
-    if not argv:
-        return {}
-
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Extract trips that pass near specified crossroad points"
-    )
-    parser.add_argument("--input-dir", type=Path, help="Directory containing trip CSV files")
-    parser.add_argument("--output-dir", type=Path, help="Directory to store extracted trips")
-    return vars(parser.parse_args(list(argv)))
-
-
-def resolve_paths(args: Dict[str, Path | None]) -> Tuple[Path, Path]:
-    """Resolve the input and output directories."""
-
-    input_dir = args.get("input_dir")
-    output_dir = args.get("output_dir")
-
-    input_dir = input_dir or DEFAULT_INPUT_DIR
-    output_dir = output_dir or DEFAULT_OUTPUT_DIR
-
-    if input_dir is None or output_dir is None:
-        raise SystemExit(
-            "Specify --input-dir and --output-dir or set DEFAULT_INPUT_DIR and DEFAULT_OUTPUT_DIR in the script."
-        )
-
-    return Path(input_dir), Path(output_dir)
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Point 第2スクリーニング（プロジェクト駆動）")
+    parser.add_argument("--project", required=True, help="project001 のようなプロジェクトフォルダ")
+    parser.add_argument("--input", required=True, help="第1スクリーニングデータフォルダ（CSV群）")
+    parser.add_argument("--targets", nargs="*", default=None, help="処理する交差点名（stem一致）")
+    parser.add_argument("--dry-run", action="store_true", help="一覧表示のみ（処理しない）")
+    return parser.parse_args(list(argv) if argv is not None else None)
 
 
 # ---------------------------------------------------------------------------
@@ -700,38 +675,38 @@ def run_crossroad(
     return hits
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    argv = sys.argv[1:] if argv is None else list(argv)
-    args = parse_args(argv)
+def run_second_screening(
+    input_dir: Path,
+    crossroad_csv_dir: Path,
+    output_dir: Path,
+    targets: Optional[List[str]],
+    dry_run: bool,
+) -> int:
+    print(f"[INFO] Input  : {input_dir}")
+    print(f"[INFO] Cross  : {crossroad_csv_dir}")
+    print(f"[INFO] Output : {output_dir}")
 
-    try:
-        input_dir, output_dir = resolve_paths(args)
-    except Exception as exc:
-        print(f"Initialization failed: {exc}")
+    if not crossroad_csv_dir.exists() or not crossroad_csv_dir.is_dir():
+        print(f"[ERROR] crossroad dir not found: {crossroad_csv_dir}")
         return 1
-
     if not input_dir.exists() or not input_dir.is_dir():
-        print(f"Input directory not found: {input_dir}")
+        print(f"[ERROR] input dir not found: {input_dir}")
         return 1
 
-    # 交差点CSVをフォルダ＋個別指定から集約
-    cross_paths: list[Path] = []
+    all_cross_paths = [p for p in sorted(crossroad_csv_dir.glob("*.csv")) if p.is_file()]
+    if not all_cross_paths:
+        print(f"[ERROR] no crossroad csv in: {crossroad_csv_dir}")
+        return 1
 
-    if CROSSROAD_CSV_DIR is not None:
-        if not CROSSROAD_CSV_DIR.exists() or not CROSSROAD_CSV_DIR.is_dir():
-            print(f"Crossroad CSV directory not found: {CROSSROAD_CSV_DIR}")
-            return 1
-        cross_paths.extend(
-            p for p in sorted(CROSSROAD_CSV_DIR.glob("*.csv")) if p.is_file()
-        )
-
-    # 互換性のため、個別指定も併用できるようにする
-    if CROSSROAD_CSV_LIST:
-        cross_paths.extend(CROSSROAD_CSV_LIST)
+    if targets:
+        target_set = set(targets)
+        cross_paths = [p for p in all_cross_paths if p.stem in target_set]
+    else:
+        cross_paths = all_cross_paths
 
     if not cross_paths:
-        print("No crossroad CSV files configured.")
-        return 1
+        print("[WARN] no target crossroads matched --targets")
+        return 0
 
     crossroads = load_crossroad_points(cross_paths)
     if not crossroads:
@@ -750,7 +725,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"  - {cp.name}")
 
     total_files = len(trip_files)
-
     hits_per_cross = {cp.name: 0 for cp in crossroads}
     saved_per_cross = {cp.name: 0 for cp in crossroads}
 
@@ -767,7 +741,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir,
             THRESH_M,
             MIN_HITS,
-            DRY_RUN,
+            dry_run,
             VERBOSE,
             hits_per_cross,
             saved_per_cross,
@@ -806,6 +780,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"  {cp.name}: {hits_per_cross[cp.name]} (saved={saved_per_cross[cp.name]})")
 
     return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    project_dir = Path(args.project).resolve()
+    input_dir = Path(args.input).resolve()
+
+    if not project_dir.exists() or not project_dir.is_dir():
+        print(f"[ERROR] project not found: {project_dir}")
+        return 1
+
+    crossroad_csv_dir, output_dir = resolve_project_paths(project_dir)
+
+    print(f"[INFO] Project: {project_dir}")
+    return run_second_screening(
+        input_dir=input_dir,
+        crossroad_csv_dir=crossroad_csv_dir,
+        output_dir=output_dir,
+        targets=args.targets,
+        dry_run=args.dry_run,
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry
