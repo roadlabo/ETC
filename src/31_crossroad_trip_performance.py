@@ -7,6 +7,7 @@ import argparse
 import bisect
 import csv
 import os
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -377,11 +378,14 @@ def parse_dt14(s):
 
 
 def weekday_abbr(date8):
-    """YYYYMMDD → MON〜SUN"""
+    """YYYYMMDD → MON〜SUN（失敗時は空文字）"""
     from datetime import datetime
     if not date8 or len(date8) != 8:
         return ""
-    dt = datetime.strptime(date8, "%Y%m%d")
+    try:
+        dt = datetime.strptime(date8, "%Y%m%d")
+    except Exception:
+        return ""
     return ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"][dt.weekday()]
 
 
@@ -660,6 +664,11 @@ def main() -> None:
             time_ok_trips = 0
             time_ng_trips = 0
             no_segment_trips = 0
+            weekday_skip = 0
+            bad_date = 0
+            bad_points = 0
+            non_tty_progress_step = 200
+            non_tty_mode = not sys.stdout.isatty()
 
             print(f"\n[{cfg_idx}/{len(run_config)}] 交差点: {crossroad_path.name}")
             print(f"  入力フォルダ: {trip_folder}")
@@ -707,10 +716,16 @@ def main() -> None:
                     # ------------------- トリップごとの処理 -------------------
                     for trip_key, g in trip_groups:
                         trip_date = str(g.iloc[0, COL_DATE])
-                        weekday = weekday_abbr(trip_date[:8]) if trip_date else ""
+                        date8 = trip_date[:8] if trip_date else ""
+                        weekday = weekday_abbr(date8)
 
-                        if target_weekdays and weekday not in target_weekdays:
-                            continue
+                        if target_weekdays:
+                            if not weekday:
+                                bad_date += 1
+                                continue
+                            if weekday not in target_weekdays:
+                                weekday_skip += 1
+                                continue
 
                         total_trips += 1
 
@@ -731,7 +746,8 @@ def main() -> None:
                             points.append((lat, lon))
                             gps_times.append(str(row[COL_GPS_TIME]))
 
-                        if not points:
+                        if len(points) < 2:
+                            bad_points += 1
                             nopass_trips += 1
                             continue
 
@@ -1101,15 +1117,18 @@ def main() -> None:
                     progress = file_idx / total_files * 100.0
                     elapsed_cfg = time.time() - cfg_start
 
-                    print(
-                        f"\r  進捗: {file_idx:4d}/{total_files:4d} "
+                    progress_line = (
+                        f"進捗: {file_idx:4d}/{total_files:4d} "
                         f"({progress:5.1f}%)  "
                         f"対象トリップ: {total_trips:6d}  HIT: {hit_trips:6d}  "
                         f"該当なし: {nopass_trips:6d}  "
-                        f"経過時間: {elapsed_cfg/60:5.1f}分",
-                        end="",
-                        flush=True,
+                        f"経過時間: {elapsed_cfg/60:5.1f}分"
                     )
+                    if non_tty_mode:
+                        if file_idx % non_tty_progress_step == 0 or file_idx == total_files:
+                            print(f"  {progress_line}")
+                    else:
+                        print(f"\r  {progress_line}", end="", flush=True)
 
                 tmp_fh.close()
                 tmp_fh = None
@@ -1168,7 +1187,8 @@ def main() -> None:
         cfg_end_str = time.strftime("%Y-%m-%d %H:%M:%S")
         cfg_minutes = (cfg_end - cfg_start) / 60
 
-        print()  # 強制改行
+        if not non_tty_mode:
+            print()  # 強制改行
         print(f"  セット終了時間: {cfg_end_str}")
         print(
             f"  完了: ファイル={total_files}, 対象トリップ={total_trips}, "
@@ -1176,7 +1196,14 @@ def main() -> None:
             f"所要時間OK={time_ok_trips}, 所要時間NG={time_ng_trips}, "
             f"所要時間NG(時刻欠損)={bad_time_trips}, 所要時間NG(区間範囲外)={out_of_range_trips}, "
             f"所要時間NG(線分取得不可)={no_segment_trips}, "
+            f"weekday_skip={weekday_skip}, bad_date={bad_date}, bad_points={bad_points}, "
             f"所要時間={cfg_minutes:5.1f}分"
+        )
+        print(
+            f"  [SUMMARY31] 対象トリップ={total_trips}, HIT={hit_trips}, 該当なし={nopass_trips}, "
+            f"所要時間NG(時刻欠損)={bad_time_trips}, 所要時間NG(区間範囲外)={out_of_range_trips}, "
+            f"所要時間NG(線分取得不可)={no_segment_trips}, "
+            f"weekday_skip={weekday_skip}, bad_date={bad_date}, bad_points={bad_points}"
         )
 
     # -------------------- 全体終了 --------------------

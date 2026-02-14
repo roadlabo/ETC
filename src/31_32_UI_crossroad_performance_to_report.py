@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -30,6 +31,15 @@ FOLDER_S2 = "20_第２スクリーニング"
 FOLDER_31OUT = "31_交差点パフォーマンス"
 FOLDER_32OUT = "32_交差点レポート"
 WEEKDAY_KANJI = ["月", "火", "水", "木", "金", "土", "日"]
+WEEKDAY_KANJI_TO_ABBR = {
+    "月": "MON",
+    "火": "TUE",
+    "水": "WED",
+    "木": "THU",
+    "金": "FRI",
+    "土": "SAT",
+    "日": "SUN",
+}
 
 
 class MainWindow(QMainWindow):
@@ -47,6 +57,7 @@ class MainWindow(QMainWindow):
         self._stdout_buf = ""
         self._stderr_buf = ""
         self._last_log_line: str | None = None
+        self._recent_process_lines: list[str] = []
 
         self._build_ui()
         self._log("[INFO] ①プロジェクト選択 → ②曜日選択 → 31→32 一括実行")
@@ -102,7 +113,7 @@ class MainWindow(QMainWindow):
         self.lbl_project = QLabel("Project: (未選択)")
         v.addWidget(self.lbl_project)
 
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, 13)
         self.table.setHorizontalHeaderLabels(
             [
                 "実行",
@@ -113,6 +124,11 @@ class MainWindow(QMainWindow):
                 "第2スクリーニング(CSVあり)",
                 "31出力(performance.csv)",
                 "32出力(report.xlsx)",
+                "状態",
+                "対象トリップ",
+                "HIT",
+                "該当なし",
+                "時刻NG(欠損/範囲外/線分不可)",
             ]
         )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -158,12 +174,13 @@ class MainWindow(QMainWindow):
         if not text or self._is_qt_font_warning(text):
             return
 
-        if "進捗:" in text:
+        if from_carriage_return or text.startswith("進捗:") or "進捗:" in text:
             self.lbl_progress.setText(text)
             return
 
-        if from_carriage_return:
-            return
+        self._recent_process_lines.append(text)
+        if len(self._recent_process_lines) > 200:
+            self._recent_process_lines = self._recent_process_lines[-200:]
 
         self._log(text)
 
@@ -244,8 +261,8 @@ class MainWindow(QMainWindow):
 
     def _selected_weekdays_for_cli(self) -> list[str]:
         if self.chk_all.isChecked():
-            return ["ALL"]
-        selected = [wd for wd, chk in self.weekday_checks.items() if chk.isChecked()]
+            return []
+        selected = [WEEKDAY_KANJI_TO_ABBR[wd] for wd, chk in self.weekday_checks.items() if chk.isChecked()]
         return selected
 
     def _selected_weekdays_for_log(self) -> str:
@@ -314,6 +331,11 @@ class MainWindow(QMainWindow):
             self.table.setItem(r, 5, QTableWidgetItem("✔" if has_s2_csv else "×"))
             self.table.setItem(r, 6, QTableWidgetItem("✔" if has31 else "×"))
             self.table.setItem(r, 7, QTableWidgetItem("✔" if has32 else "×"))
+            self.table.setItem(r, 8, QTableWidgetItem(""))
+            self.table.setItem(r, 9, QTableWidgetItem(""))
+            self.table.setItem(r, 10, QTableWidgetItem(""))
+            self.table.setItem(r, 11, QTableWidgetItem(""))
+            self.table.setItem(r, 12, QTableWidgetItem(""))
 
         self._log(f"[INFO] scanned: {len(csvs)} crossroads")
 
@@ -371,11 +393,12 @@ class MainWindow(QMainWindow):
             str(script31),
             "--project",
             str(self.project_dir),
-            "--weekdays",
-            *self._selected_weekdays_for_cli(),
             "--targets",
             name,
         ]
+        selected_weekdays = self._selected_weekdays_for_cli()
+        if selected_weekdays:
+            args.extend(["--weekdays", *selected_weekdays])
         self._launch_process(args)
 
     def _start_step32(self, name: str) -> None:
@@ -395,6 +418,7 @@ class MainWindow(QMainWindow):
         self.proc = QProcess(self)
         self._stdout_buf = ""
         self._stderr_buf = ""
+        self._recent_process_lines = []
         self.proc.setProgram(sys.executable)
         self.proc.setArguments(args)
         self.proc.readyReadStandardOutput.connect(self._on_stdout)
@@ -422,18 +446,82 @@ class MainWindow(QMainWindow):
             return
 
         if code != 0:
-            self._log(f"[ERROR] {self.current_step} failed: {self.current_name} (code={code})")
-            self._log(f"[DONE] {self.current_name}")
+            reason = self._extract_last_error_line() or f"{self.current_step} failed (code={code})"
+            self._set_status_for_current_row(reason)
             self._start_next_crossroad()
             return
 
         if self.current_step == "31":
+            self._apply_31_summary_to_current_row()
+            self._set_status_for_current_row("31完了")
             self.current_step = "32"
             self._start_step32(self.current_name)
             return
 
+        self._set_status_for_current_row("完了")
         self._log(f"[DONE] {self.current_name}")
         self._start_next_crossroad()
+
+    def _find_row_by_name(self, name: str) -> int | None:
+        for r in range(self.table.rowCount()):
+            name_item = self.table.item(r, 1)
+            if name_item and name_item.text() == name:
+                return r
+        return None
+
+    def _set_status_for_current_row(self, status: str) -> None:
+        if self.current_name is None:
+            return
+        row = self._find_row_by_name(self.current_name)
+        if row is None:
+            return
+        self.table.setItem(row, 8, QTableWidgetItem(status))
+
+    def _extract_last_error_line(self) -> str:
+        for line in reversed(self._recent_process_lines):
+            if "[ERROR]" in line:
+                return line
+        return ""
+
+    def _apply_31_summary_to_current_row(self) -> None:
+        if self.current_name is None:
+            return
+        row = self._find_row_by_name(self.current_name)
+        if row is None:
+            return
+
+        summary_line = ""
+        for line in reversed(self._recent_process_lines):
+            if "[SUMMARY31]" in line or "完了:" in line:
+                summary_line = line
+                break
+        if not summary_line:
+            return
+
+        trip = self._extract_summary_value(summary_line, "対象トリップ")
+        hit = self._extract_summary_value(summary_line, "HIT")
+        nopass = self._extract_summary_value(summary_line, "該当なし")
+        ng_missing = self._extract_summary_value(summary_line, "所要時間NG(時刻欠損)")
+        ng_range = self._extract_summary_value(summary_line, "所要時間NG(区間範囲外)")
+        ng_segment = self._extract_summary_value(summary_line, "所要時間NG(線分取得不可)")
+
+        ng_total = ""
+        if all(v != "" for v in (ng_missing, ng_range, ng_segment)):
+            ng_total = str(int(ng_missing) + int(ng_range) + int(ng_segment))
+
+        self.table.setItem(row, 9, QTableWidgetItem(trip))
+        self.table.setItem(row, 10, QTableWidgetItem(hit))
+        self.table.setItem(row, 11, QTableWidgetItem(nopass))
+        self.table.setItem(row, 12, QTableWidgetItem(ng_total))
+
+    def _extract_summary_value(self, line: str, key: str) -> str:
+        m = re.search(rf"{re.escape(key)}\s*=\s*(\d+)", line)
+        if m:
+            return m.group(1)
+        m = re.search(rf"{re.escape(key)}\s*[:：]\s*(\d+)", line)
+        if m:
+            return m.group(1)
+        return ""
 
 
 
