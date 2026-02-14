@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import argparse
 from datetime import date, datetime
 from pathlib import Path
 
@@ -67,6 +68,9 @@ BATCH_JOBS: list[dict] = [
 
 # BATCH_JOBS が空なら従来どおりGUI（ダイアログ）で3ファイルを選ぶ
 BATCH_MODE_ACTIVE = False
+FOLDER_CROSS = "11_交差点(Point)データ"
+FOLDER_31OUT = "31_交差点パフォーマンス"
+FOLDER_32OUT = "32_交差点レポート"
 
 # Column names for performance data (header row is read by pandas)
 COL_FILE = "抽出CSVファイル名"
@@ -1245,8 +1249,56 @@ def run_batch(app: QApplication, jobs: list[dict]) -> None:
     app.quit()
 
 
+def _list_crossroad_names(cross_dir: Path) -> list[str]:
+    if not cross_dir.exists():
+        return []
+    return [p.stem for p in sorted(cross_dir.glob("*.csv"))]
+
+
+def build_jobs_from_project(project_dir: Path, targets: list[str] | None) -> list[dict]:
+    cross_dir = project_dir / FOLDER_CROSS
+    perf_dir = project_dir / FOLDER_31OUT
+    out_dir = project_dir / FOLDER_32OUT
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    names = targets if targets else _list_crossroad_names(cross_dir)
+    jobs: list[dict] = []
+    for name in names:
+        crossroad_csv = cross_dir / f"{name}.csv"
+        crossroad_img = cross_dir / f"{name}.jpg"
+        performance_csv = perf_dir / f"{name}_performance.csv"
+        output_xlsx = out_dir / f"{name}_report.xlsx"
+
+        missing = [p for p in [crossroad_csv, crossroad_img, performance_csv] if not p.exists()]
+        if missing:
+            print(f"[SKIP] {name}: missing files")
+            for m in missing:
+                print(f"  - {m}")
+            continue
+
+        jobs.append(
+            {
+                "crossroad_csv": str(crossroad_csv),
+                "crossroad_img": str(crossroad_img),
+                "performance_csv": str(performance_csv),
+                "output_xlsx": str(output_xlsx),
+            }
+        )
+    return jobs
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="32_crossroad_report")
+    parser.add_argument("--project", type=str, help="プロジェクトフォルダ")
+    parser.add_argument("--targets", nargs="*", help="交差点名（stem）")
+    args = parser.parse_args()
+
     app = QApplication(sys.argv)
+    if args.project:
+        jobs = build_jobs_from_project(Path(args.project).resolve(), args.targets)
+        run_batch(app, jobs)
+        sys.exit(0)
+
     # バッチ優先：BATCH_JOBS があればダイアログ無しで順次処理して終了
     if BATCH_JOBS:
         run_batch(app, BATCH_JOBS)
