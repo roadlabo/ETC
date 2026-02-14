@@ -31,7 +31,7 @@ class MainWindow(QMainWindow):
         self.proc: QProcess | None = None
 
         self._build_ui()
-        self._log("[INFO] ①②を選択 → 再スキャン → 実行、の流れです。")
+        self._log("[INFO] ①②を選択 → 実行、の流れです。")
 
     def _build_ui(self):
         root = QWidget()
@@ -44,17 +44,14 @@ class MainWindow(QMainWindow):
 
         btn_project = QPushButton("① プロジェクト選択")
         btn_input = QPushButton("② 第1スクリーニング選択")
-        btn_scan = QPushButton("再スキャン")
         self.btn_run = QPushButton("第2スクリーニング開始")
 
         btn_project.clicked.connect(self.select_project)
         btn_input.clicked.connect(self.select_input)
-        btn_scan.clicked.connect(self.scan_crossroads)
         self.btn_run.clicked.connect(self.run_screening)
 
         top.addWidget(btn_project)
         top.addWidget(btn_input)
-        top.addWidget(btn_scan)
         top.addWidget(self.btn_run)
         top.addStretch(1)
 
