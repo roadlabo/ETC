@@ -846,8 +846,14 @@ DISPLAY_COLS_IN_TABLE = [
 DISPLAY_COLS_IN_TABLE = [c for c in DISPLAY_COLS_IN_TABLE if c is not None]
 
 NUMERIC_SORT_COLS = {
+    "運行日",
+    "運行ID",
+    "自動車の種別",
+    "用途",
+    "所要時間算出可否",
     "遅れ時間(s)",
-    "所要時間(s)",
+    "流入枝番",
+    "流出枝番",
     "流入角度差(deg)",
     "流出角度差(deg)",
 }
@@ -1145,6 +1151,7 @@ class BranchCheckWindow(QMainWindow):
             logging.info("[DBG] failed: %s", e)
 
         for r in range(len(self.df)):
+            df_i = int(self.df.index[r])
             row = self.df.iloc[r]
             for c_idx, c_name in enumerate(DISPLAY_COLS_IN_TABLE):
                 val = row.get(c_name, "")
@@ -1165,6 +1172,10 @@ class BranchCheckWindow(QMainWindow):
                             item.setBackground(Qt.GlobalColor.yellow)
                     except Exception:
                         pass
+
+                if c_idx == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, df_i)
+
                 self.table.setItem(r, c_idx, item)
 
         hh.setSortIndicatorShown(True)
@@ -1328,18 +1339,28 @@ class BranchCheckWindow(QMainWindow):
         items = self.table.selectedItems()
         if not items:
             return None
-        return items[0].row()
+
+        r = items[0].row()
+        it0 = self.table.item(r, 0)
+        if it0 is None:
+            return None
+        df_i = it0.data(Qt.ItemDataRole.UserRole)
+        if df_i is None:
+            return None
+        return int(df_i)
 
     def _on_selection_changed(self):
-        idx = self._selected_row_index()
-        if idx is None or idx < 0 or idx >= len(self.df):
+        df_i = self._selected_row_index()
+        if df_i is None:
+            return
+        if df_i not in self.df.index:
             return
 
         self._run_branch_js(
             f"window._branchCheck.setBranchRays({json.dumps(self.branch_rays)});"
         )
 
-        row = self.df.iloc[idx]
+        row = self.df.loc[df_i]
 
         # details
         for _, key in DETAIL_FIELDS:
