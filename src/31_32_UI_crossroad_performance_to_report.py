@@ -151,7 +151,7 @@ class MainWindow(QMainWindow):
         if self._weekday_updating:
             return
         self._weekday_updating = True
-        st = self._norm_checkstate(state)
+        st = state if isinstance(state, Qt.CheckState) else Qt.CheckState(state)
         target_state = Qt.CheckState.Checked if st == Qt.CheckState.Checked else Qt.CheckState.Unchecked
         for chk in self.weekday_checks.values():
             chk.setCheckState(target_state)
