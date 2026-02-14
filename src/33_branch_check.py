@@ -43,6 +43,27 @@ else:
     QTableWidgetItem = QVBoxLayout = QWidget = QGridLayout = object
     QHeaderView = QWebEngineView = object
 
+if not NOGUI_MODE:
+    # --- Table sort: force numeric sort via custom item ---
+    ROLE_DFKEY = Qt.ItemDataRole.UserRole
+    ROLE_SORTKEY = Qt.ItemDataRole.UserRole + 1
+
+    class SortableItem(QTableWidgetItem):
+        """QTableWidgetItem that sorts by ROLE_SORTKEY when present."""
+
+        def __lt__(self, other):
+            try:
+                a = self.data(ROLE_SORTKEY)
+                b = other.data(ROLE_SORTKEY)
+                if a is not None and b is not None:
+                    return a < b
+            except Exception:
+                pass
+            return super().__lt__(other)
+else:
+    ROLE_DFKEY = ROLE_SORTKEY = None
+    SortableItem = QTableWidgetItem
+
 # -----------------------------
 # Utilities
 # -----------------------------
@@ -1168,14 +1189,15 @@ class BranchCheckWindow(QMainWindow):
             row = self.df.iloc[r]
             for c_idx, c_name in enumerate(DISPLAY_COLS_IN_TABLE):
                 val = row.get(c_name, "")
-                item = QTableWidgetItem("" if pd.isna(val) else str(val))
+                text = "" if pd.isna(val) else str(val)
+                item = SortableItem(text)
 
                 if c_name in NUMERIC_SORT_COLS:
                     vnum = pd.to_numeric(val, errors="coerce")
                     if pd.isna(vnum):
-                        item.setData(Qt.ItemDataRole.EditRole, None)
+                        item.setData(ROLE_SORTKEY, None)
                     else:
-                        item.setData(Qt.ItemDataRole.EditRole, float(vnum))
+                        item.setData(ROLE_SORTKEY, float(vnum))
 
                 if c_name in {"流入枝番", "流出枝番"}:
                     vnum = pd.to_numeric(val, errors="coerce")
@@ -1192,7 +1214,7 @@ class BranchCheckWindow(QMainWindow):
                         pass
 
                 if c_idx == 0:
-                    item.setData(Qt.ItemDataRole.UserRole, df_i)
+                    item.setData(ROLE_DFKEY, df_i)
 
                 self.table.setItem(r, c_idx, item)
 
@@ -1362,7 +1384,7 @@ class BranchCheckWindow(QMainWindow):
         it0 = self.table.item(r, 0)
         if it0 is None:
             return None
-        df_i = it0.data(Qt.ItemDataRole.UserRole)
+        df_i = it0.data(ROLE_DFKEY)
         if df_i is None:
             return None
         return int(df_i)
