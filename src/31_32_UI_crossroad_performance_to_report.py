@@ -139,16 +139,25 @@ class MainWindow(QMainWindow):
             chk.setCheckState(target_state)
         self._weekday_updating = False
 
-    def _on_all_weekday_changed(self, state: int) -> None:
+    def _as_checkstate(self, state) -> Qt.CheckState:
+        if isinstance(state, Qt.CheckState):
+            return state
+        try:
+            return Qt.CheckState(int(state))
+        except (TypeError, ValueError):
+            return Qt.CheckState.Unchecked
+
+    def _on_all_weekday_changed(self, state) -> None:
         if self._weekday_updating:
             return
         self._weekday_updating = True
-        target_state = Qt.CheckState.Checked if state == int(Qt.CheckState.Checked) else Qt.CheckState.Unchecked
+        st = self._as_checkstate(state)
+        target_state = Qt.CheckState.Checked if st == Qt.CheckState.Checked else Qt.CheckState.Unchecked
         for chk in self.weekday_checks.values():
             chk.setCheckState(target_state)
         self._weekday_updating = False
 
-    def _on_single_weekday_changed(self, _state: int) -> None:
+    def _on_single_weekday_changed(self, _state) -> None:
         if self._weekday_updating:
             return
         self._weekday_updating = True
