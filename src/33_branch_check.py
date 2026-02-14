@@ -844,6 +844,12 @@ class BranchCheckWindow(QMainWindow):
 
         self.csv_path = csv_path
         self.df = read_csv_safely(csv_path)
+        # 列名の見えないズレ対策（前後空白/全角空白）
+        self.df.columns = (
+            self.df.columns.astype(str)
+            .str.replace("\u3000", " ", regex=False)  # 全角スペース→半角
+            .str.strip()
+        )
 
         ensure_columns(self.df, REQUIRED_COLS)
 
@@ -1091,6 +1097,17 @@ class BranchCheckWindow(QMainWindow):
         hh.setSectionsClickable(True)
         hh.setSortIndicatorClearable(False)
         hh.setSortIndicator(0, Qt.SortOrder.AscendingOrder)
+
+        # --- DBG: 4行目が空に見える原因調査 ---
+        try:
+            r = 3
+            row = self.df.iloc[r]
+            print("[DBG] row3 display values:",
+                  {c: row.get(c, None) for c in DISPLAY_COLS_IN_TABLE})
+            print("[DBG] row3 isna:",
+                  {c: bool(pd.isna(row.get(c, None))) for c in DISPLAY_COLS_IN_TABLE})
+        except Exception as e:
+            print("[DBG] failed:", e)
 
         for r in range(len(self.df)):
             row = self.df.iloc[r]
