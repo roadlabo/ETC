@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -29,6 +30,14 @@ FOLDER_32OUT = "32_交差点レポート"
 WEEKDAY_KANJI = ["月", "火", "水", "木", "金", "土", "日"]
 
 
+def _suppress_qt_font_warning() -> None:
+    rule = "qt.text.font.db=false"
+    current = os.environ.get("QT_LOGGING_RULES", "")
+    if rule in current:
+        return
+    os.environ["QT_LOGGING_RULES"] = f"{current};{rule}" if current else rule
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -41,6 +50,9 @@ class MainWindow(QMainWindow):
         self.current_name: str | None = None
         self.current_step = ""
         self._weekday_updating = False
+        self._stdout_buf = ""
+        self._stderr_buf = ""
+        self._last_log_line: str | None = None
 
         self._build_ui()
         self._log("[INFO] ①プロジェクト選択 → ②曜日選択 → 31→32 一括実行")
@@ -119,10 +131,41 @@ class MainWindow(QMainWindow):
         self.log.setReadOnly(True)
         self.log.setStyleSheet("background-color: black; color: #00ff66;")
         self.log.setFont(QFont("Consolas", 10))
+        self.log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.log.setMaximumBlockCount(5000)
         v.addWidget(self.log, stretch=2)
 
     def _log(self, s: str) -> None:
+        if s == "" and self._last_log_line == "":
+            return
         self.log.appendPlainText(s)
+        self._last_log_line = s
+
+    def _decode_bytes(self, b: bytes) -> str:
+        if not b:
+            return ""
+        try:
+            return b.decode("utf-8")
+        except UnicodeDecodeError:
+            return b.decode("cp932", errors="replace")
+
+    def _append_and_emit_lines(self, chunk: str, current_buffer: str) -> str:
+        if not chunk:
+            return current_buffer
+        normalized = chunk.replace("\r\n", "\n").replace("\r", "\n")
+        current_buffer += normalized
+        while "\n" in current_buffer:
+            line, current_buffer = current_buffer.split("\n", 1)
+            self._log(line)
+        return current_buffer
+
+    def _flush_process_buffers(self) -> None:
+        if self._stdout_buf:
+            self._log(self._stdout_buf)
+            self._stdout_buf = ""
+        if self._stderr_buf:
+            self._log(self._stderr_buf)
+            self._stderr_buf = ""
 
     def _set_run_controls_enabled(self, enabled: bool) -> None:
         self.btn_project.setEnabled(enabled)
@@ -316,6 +359,8 @@ class MainWindow(QMainWindow):
             self.proc = None
 
         self.proc = QProcess(self)
+        self._stdout_buf = ""
+        self._stderr_buf = ""
         self.proc.setProgram(sys.executable)
         self.proc.setArguments(args)
         self.proc.readyReadStandardOutput.connect(self._on_stdout)
@@ -326,20 +371,19 @@ class MainWindow(QMainWindow):
     def _on_stdout(self) -> None:
         if not self.proc:
             return
-        data = bytes(self.proc.readAllStandardOutput()).decode("utf-8", errors="replace")
-        if data:
-            for line in data.splitlines():
-                self._log(line)
+        raw = bytes(self.proc.readAllStandardOutput())
+        data = self._decode_bytes(raw)
+        self._stdout_buf = self._append_and_emit_lines(data, self._stdout_buf)
 
     def _on_stderr(self) -> None:
         if not self.proc:
             return
-        data = bytes(self.proc.readAllStandardError()).decode("utf-8", errors="replace")
-        if data:
-            for line in data.splitlines():
-                self._log(line)
+        raw = bytes(self.proc.readAllStandardError())
+        data = self._decode_bytes(raw)
+        self._stderr_buf = self._append_and_emit_lines(data, self._stderr_buf)
 
     def _on_finished(self, code: int, _status) -> None:
+        self._flush_process_buffers()
         if self.current_name is None:
             self._start_next_crossroad()
             return
@@ -361,6 +405,7 @@ class MainWindow(QMainWindow):
 
 
 def main() -> None:
+    _suppress_qt_font_warning()
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
