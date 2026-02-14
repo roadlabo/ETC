@@ -2,6 +2,8 @@ import os
 import sys
 from pathlib import Path
 
+os.environ.setdefault("QT_LOGGING_RULES", "qt.text.font.db=false")
+
 from PyQt6.QtCore import Qt, QProcess
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
@@ -28,14 +30,6 @@ FOLDER_S2 = "20_第２スクリーニング"
 FOLDER_31OUT = "31_交差点パフォーマンス"
 FOLDER_32OUT = "32_交差点レポート"
 WEEKDAY_KANJI = ["月", "火", "水", "木", "金", "土", "日"]
-
-
-def _suppress_qt_font_warning() -> None:
-    rule = "qt.text.font.db=false"
-    current = os.environ.get("QT_LOGGING_RULES", "")
-    if rule in current:
-        return
-    os.environ["QT_LOGGING_RULES"] = f"{current};{rule}" if current else rule
 
 
 class MainWindow(QMainWindow):
@@ -133,6 +127,11 @@ class MainWindow(QMainWindow):
         self.log.setFont(QFont("Consolas", 10))
         self.log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.log.setMaximumBlockCount(5000)
+
+        self.lbl_progress = QLabel("")
+        self.lbl_progress.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.lbl_progress.setStyleSheet("font-family: Consolas, 'Yu Gothic UI', monospace;")
+        v.addWidget(self.lbl_progress)
         v.addWidget(self.log, stretch=2)
 
     def _log(self, s: str) -> None:
@@ -141,30 +140,65 @@ class MainWindow(QMainWindow):
         self.log.appendPlainText(s)
         self._last_log_line = s
 
-    def _decode_bytes(self, b: bytes) -> str:
-        if not b:
+    def _decode_qbytearray(self, ba) -> str:
+        raw = bytes(ba)
+        if not raw:
             return ""
         try:
-            return b.decode("utf-8")
+            return raw.decode("utf-8")
         except UnicodeDecodeError:
-            return b.decode("cp932", errors="replace")
+            return raw.decode("cp932", errors="replace")
 
-    def _append_and_emit_lines(self, chunk: str, current_buffer: str) -> str:
+    def _is_qt_font_warning(self, line: str) -> bool:
+        stripped = line.strip()
+        return stripped.startswith("qt.text.font.db:")
+
+    def _handle_stream_line(self, line: str, from_carriage_return: bool, _is_err: bool) -> None:
+        text = line.strip()
+        if not text or self._is_qt_font_warning(text):
+            return
+
+        if "進捗:" in text:
+            self.lbl_progress.setText(text)
+            return
+
+        if from_carriage_return:
+            return
+
+        self._log(text)
+
+    def _append_stream_chunk(self, chunk: str, is_err: bool) -> None:
         if not chunk:
-            return current_buffer
-        normalized = chunk.replace("\r\n", "\n").replace("\r", "\n")
-        current_buffer += normalized
-        while "\n" in current_buffer:
-            line, current_buffer = current_buffer.split("\n", 1)
-            self._log(line)
-        return current_buffer
+            return
+
+        if is_err:
+            buf = self._stderr_buf + chunk
+        else:
+            buf = self._stdout_buf + chunk
+
+        start = 0
+        idx = 0
+        while idx < len(buf):
+            ch = buf[idx]
+            if ch in ("\r", "\n"):
+                line = buf[start:idx]
+                prev_is_cr = idx > 0 and buf[idx - 1] == "\r"
+                from_carriage_return = ch == "\r" or prev_is_cr
+                self._handle_stream_line(line, from_carriage_return, is_err)
+                start = idx + 1
+            idx += 1
+
+        if is_err:
+            self._stderr_buf = buf[start:]
+        else:
+            self._stdout_buf = buf[start:]
 
     def _flush_process_buffers(self) -> None:
         if self._stdout_buf:
-            self._log(self._stdout_buf)
+            self._handle_stream_line(self._stdout_buf, False, False)
             self._stdout_buf = ""
         if self._stderr_buf:
-            self._log(self._stderr_buf)
+            self._handle_stream_line(self._stderr_buf, False, True)
             self._stderr_buf = ""
 
     def _set_run_controls_enabled(self, enabled: bool) -> None:
@@ -371,19 +405,18 @@ class MainWindow(QMainWindow):
     def _on_stdout(self) -> None:
         if not self.proc:
             return
-        raw = bytes(self.proc.readAllStandardOutput())
-        data = self._decode_bytes(raw)
-        self._stdout_buf = self._append_and_emit_lines(data, self._stdout_buf)
+        chunk = self._decode_qbytearray(self.proc.readAllStandardOutput())
+        self._append_stream_chunk(chunk, is_err=False)
 
     def _on_stderr(self) -> None:
         if not self.proc:
             return
-        raw = bytes(self.proc.readAllStandardError())
-        data = self._decode_bytes(raw)
-        self._stderr_buf = self._append_and_emit_lines(data, self._stderr_buf)
+        chunk = self._decode_qbytearray(self.proc.readAllStandardError())
+        self._append_stream_chunk(chunk, is_err=True)
 
     def _on_finished(self, code: int, _status) -> None:
         self._flush_process_buffers()
+        self.lbl_progress.setText("")
         if self.current_name is None:
             self._start_next_crossroad()
             return
@@ -405,7 +438,6 @@ class MainWindow(QMainWindow):
 
 
 def main() -> None:
-    _suppress_qt_font_warning()
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
