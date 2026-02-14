@@ -39,7 +39,7 @@ CONFIG = [
 # 抜粋したい曜日（TRIP_DATE から算出した MON〜SUN の略称）
 # 例：火・水・木のみ抽出したい場合
 TARGET_WEEKDAYS = ["TUE", "WED", "THU"]
-# 全曜日を対象にしたい場合は空リストにする：
+# ALLを対象にしたい場合は空リストにする：
 # TARGET_WEEKDAYS: list[str] = []
 
 
@@ -510,26 +510,81 @@ COL_LON = 14          # O列: 経度
 COL_LAT = 15          # P列: 緯度
 
 
+def _list_crossroad_names(cross_dir: Path) -> list[str]:
+    if not cross_dir.exists():
+        return []
+    return [p.stem for p in sorted(cross_dir.glob("*.csv"))]
+
+
+def _build_config_from_project(project_dir: Path, targets: list[str] | None) -> tuple[list[dict], Path]:
+    cross_dir = project_dir / "11_交差点(Point)データ"
+    s2_dir = project_dir / "20_第２スクリーニング"
+    out_dir = project_dir / "31_交差点パフォーマンス"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    names = targets if targets else _list_crossroad_names(cross_dir)
+    config: list[dict] = []
+    for name in names:
+        crossroad_file = cross_dir / f"{name}.csv"
+        trip_folder = s2_dir / name
+        if not crossroad_file.exists():
+            print(f"[SKIP] {name}: cross csv not found: {crossroad_file}")
+            continue
+        if not trip_folder.exists():
+            print(f"[SKIP] {name}: 第2スクリーニングフォルダなし: {trip_folder}")
+            continue
+        if not any(trip_folder.glob("*.csv")):
+            print(f"[SKIP] {name}: 第2スクリーニングCSVなし: {trip_folder}")
+            continue
+        config.append({"trip_folder": str(trip_folder), "crossroad_file": str(crossroad_file)})
+    return config, out_dir
+
+
+def _resolve_target_weekdays(weekday: str | None) -> list[str]:
+    if not weekday:
+        return TARGET_WEEKDAYS
+    wd = weekday.strip().upper()
+    if wd == "ALL":
+        return []
+    allowed = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}
+    if wd not in allowed:
+        raise ValueError(f"invalid --weekday: {weekday}")
+    return [wd]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="交差点通過性能算出スクリプト")
+    parser.add_argument("--project", type=str, help="プロジェクトフォルダ")
+    parser.add_argument("--weekday", type=str, help="ALL|MON|...|SUN")
+    parser.add_argument("--targets", nargs="*", help="交差点名（stem）")
     parser.add_argument(
         "--keep-temp",
         action="store_true",
         help="デバッグ用: 中間temp CSVを削除せず残す",
     )
     args = parser.parse_args()
+
+    run_config = CONFIG
+    output_base_dir = Path(OUTPUT_BASE_DIR)
+    target_weekdays = TARGET_WEEKDAYS
+    if args.weekday:
+        target_weekdays = _resolve_target_weekdays(args.weekday)
+    if args.project:
+        project_dir = Path(args.project).resolve()
+        run_config, output_base_dir = _build_config_from_project(project_dir, args.targets)
+
     # -------------------- 全体開始 --------------------
     start_all = time.time()
     start_all_str = time.strftime("%Y-%m-%d %H:%M:%S")
 
     print("=== 交差点性能解析: 31_crossroad_trip_performance ===")
     print(f"開始時間: {start_all_str}")
-    print(f"出力フォルダ: {OUTPUT_BASE_DIR}")
-    print(f"設定セット数: {len(CONFIG)}")
-    if TARGET_WEEKDAYS:
-        print(f"対象曜日: {', '.join(TARGET_WEEKDAYS)}")
+    print(f"出力フォルダ: {output_base_dir}")
+    print(f"設定セット数: {len(run_config)}")
+    if target_weekdays:
+        print(f"対象曜日: {', '.join(target_weekdays)}")
     else:
-        print("対象曜日: 全曜日")
+        print("対象曜日: ALL")
     print(
         f"計測区間(所要時間算出): 前{MEASURE_PRE_M:.0f}m〜後{MEASURE_POST_M:.0f}m"
         f"（距離{MEASURE_PRE_M+MEASURE_POST_M:.0f}m固定）"
@@ -540,7 +595,7 @@ def main() -> None:
     # ==============================================================
     #   各 CONFIG セット（交差点ごと）の処理
     # ==============================================================
-    for cfg_idx, cfg in enumerate(CONFIG, start=1):
+    for cfg_idx, cfg in enumerate(run_config, start=1):
         tmp_path = None
         tmp_fh = None
         tmp_writer = None
@@ -548,7 +603,7 @@ def main() -> None:
             trip_folder = Path(cfg["trip_folder"])
             crossroad_path = Path(cfg["crossroad_file"])
 
-            out_dir = Path(OUTPUT_BASE_DIR)
+            out_dir = output_base_dir
             out_dir.mkdir(parents=True, exist_ok=True)
             out_csv = out_dir / f"{crossroad_path.stem}_performance.csv"
 
@@ -556,7 +611,7 @@ def main() -> None:
             total_files = len(trip_files)
 
             if total_files == 0:
-                print(f"[{cfg_idx}/{len(CONFIG)}] 交差点: {crossroad_path.name}  入力CSVなし（スキップ）")
+                print(f"[{cfg_idx}/{len(run_config)}] 交差点: {crossroad_path.name}  入力CSVなし（スキップ）")
                 continue
 
             # -------------------- セット開始 --------------------
@@ -573,14 +628,14 @@ def main() -> None:
             time_ng_trips = 0
             no_segment_trips = 0
 
-            print(f"\n[{cfg_idx}/{len(CONFIG)}] 交差点: {crossroad_path.name}")
+            print(f"\n[{cfg_idx}/{len(run_config)}] 交差点: {crossroad_path.name}")
             print(f"  入力フォルダ: {trip_folder}")
             print(f"  対象CSVファイル数: {total_files}")
             print(f"  セット開始時間: {cfg_start_str}")
-            if TARGET_WEEKDAYS:
-                print(f"  曜日フィルタ: {', '.join(TARGET_WEEKDAYS)}")
+            if target_weekdays:
+                print(f"  曜日フィルタ: {', '.join(target_weekdays)}")
             else:
-                print("  曜日フィルタ: なし（全曜日）")
+                print("  曜日フィルタ: なし（ALL）")
 
             tmp_fh = tempfile.NamedTemporaryFile(
                 mode="w",
@@ -621,7 +676,7 @@ def main() -> None:
                         trip_date = str(g.iloc[0, COL_DATE])
                         weekday = weekday_abbr(trip_date[:8]) if trip_date else ""
 
-                        if TARGET_WEEKDAYS and weekday not in TARGET_WEEKDAYS:
+                        if target_weekdays and weekday not in target_weekdays:
                             continue
 
                         total_trips += 1
