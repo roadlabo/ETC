@@ -5,7 +5,7 @@ from PyQt6.QtCore import Qt, QProcess
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
-    QComboBox,
+    QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -26,7 +26,7 @@ FOLDER_CROSS = "11_交差点(Point)データ"
 FOLDER_S2 = "20_第２スクリーニング"
 FOLDER_31OUT = "31_交差点パフォーマンス"
 FOLDER_32OUT = "32_交差点レポート"
-WEEKDAYS = ["ALL", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+WEEKDAY_KANJI = ["月", "火", "水", "木", "金", "土", "日"]
 
 
 class MainWindow(QMainWindow):
@@ -40,6 +40,7 @@ class MainWindow(QMainWindow):
         self.queue: list[str] = []
         self.current_name: str | None = None
         self.current_step = ""
+        self._weekday_updating = False
 
         self._build_ui()
         self._log("[INFO] ①プロジェクト選択 → ②曜日選択 → 31→32 一括実行")
@@ -55,14 +56,24 @@ class MainWindow(QMainWindow):
         self.btn_project = QPushButton("① プロジェクト選択")
         self.btn_project.clicked.connect(self.select_project)
 
-        self.cmb_weekday = QComboBox()
-        self.cmb_weekday.addItems(WEEKDAYS)
-        self.cmb_weekday.setCurrentText("ALL")
-
         weekday_container = QHBoxLayout()
+        weekday_container.setContentsMargins(0, 0, 0, 0)
+        weekday_container.setSpacing(10)
         weekday_label = QLabel("② 曜日選択")
         weekday_container.addWidget(weekday_label)
-        weekday_container.addWidget(self.cmb_weekday)
+
+        self.chk_all = QCheckBox("ALL")
+        self.chk_all.stateChanged.connect(self._on_all_weekday_changed)
+        weekday_container.addWidget(self.chk_all)
+
+        self.weekday_checks: dict[str, QCheckBox] = {}
+        for wd in WEEKDAY_KANJI:
+            chk = QCheckBox(wd)
+            chk.stateChanged.connect(self._on_single_weekday_changed)
+            self.weekday_checks[wd] = chk
+            weekday_container.addWidget(chk)
+
+        self._set_weekdays_from_all(True)
 
         weekday_widget = QWidget()
         weekday_widget.setLayout(weekday_container)
@@ -116,7 +127,44 @@ class MainWindow(QMainWindow):
     def _set_run_controls_enabled(self, enabled: bool) -> None:
         self.btn_project.setEnabled(enabled)
         self.btn_run.setEnabled(enabled)
-        self.cmb_weekday.setEnabled(enabled)
+        self.chk_all.setEnabled(enabled)
+        for chk in self.weekday_checks.values():
+            chk.setEnabled(enabled)
+
+    def _set_weekdays_from_all(self, checked: bool) -> None:
+        self._weekday_updating = True
+        target_state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        self.chk_all.setCheckState(target_state)
+        for chk in self.weekday_checks.values():
+            chk.setCheckState(target_state)
+        self._weekday_updating = False
+
+    def _on_all_weekday_changed(self, state: int) -> None:
+        if self._weekday_updating:
+            return
+        self._weekday_updating = True
+        target_state = Qt.CheckState.Checked if state == int(Qt.CheckState.Checked) else Qt.CheckState.Unchecked
+        for chk in self.weekday_checks.values():
+            chk.setCheckState(target_state)
+        self._weekday_updating = False
+
+    def _on_single_weekday_changed(self, _state: int) -> None:
+        if self._weekday_updating:
+            return
+        self._weekday_updating = True
+        all_checked = all(chk.isChecked() for chk in self.weekday_checks.values())
+        self.chk_all.setCheckState(Qt.CheckState.Checked if all_checked else Qt.CheckState.Unchecked)
+        self._weekday_updating = False
+
+    def _selected_weekdays_for_cli(self) -> list[str]:
+        if self.chk_all.isChecked():
+            return ["ALL"]
+        selected = [wd for wd, chk in self.weekday_checks.items() if chk.isChecked()]
+        return selected
+
+    def _selected_weekdays_for_log(self) -> str:
+        selected = self._selected_weekdays_for_cli()
+        return " ".join(selected) if selected else "(none)"
 
     def select_project(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "プロジェクトフォルダを選択", str(Path.cwd()))
@@ -207,7 +255,8 @@ class MainWindow(QMainWindow):
 
         self._log("")
         self._log("[INFO] =======================================")
-        self._log(f"[INFO] start: targets={len(targets)}, weekday={self.cmb_weekday.currentText()}")
+        self._log(f"[INFO] weekdays: {self._selected_weekdays_for_log()}")
+        self._log(f"[INFO] start: targets={len(targets)}")
         self._log("[INFO] =======================================")
 
         QMessageBox.information(self, "実行開始", f"{len(targets)}交差点の処理を開始します。")
@@ -232,7 +281,15 @@ class MainWindow(QMainWindow):
             self._start_next_crossroad()
             return
 
-        args = [str(script31), "--project", str(self.project_dir), "--weekday", self.cmb_weekday.currentText(), "--targets", name]
+        args = [
+            str(script31),
+            "--project",
+            str(self.project_dir),
+            "--weekdays",
+            *self._selected_weekdays_for_cli(),
+            "--targets",
+            name,
+        ]
         self._launch_process(args)
 
     def _start_step32(self, name: str) -> None:
