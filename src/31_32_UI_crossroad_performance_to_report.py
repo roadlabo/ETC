@@ -41,6 +41,28 @@ WEEKDAY_KANJI_TO_ABBR = {
     "日": "SUN",
 }
 
+COL_RUN = 0
+COL_NAME = 1
+COL_CROSS_CSV = 2
+COL_CROSS_JPG = 3
+COL_S2_DIR = 4
+COL_S2_CSV = 5
+COL_OUT31 = 6
+COL_OUT32 = 7
+COL_STATUS = 8
+COL_DONE_FILES = 9
+COL_TOTAL_FILES = 10
+COL_HIT = 11
+COL_NOPASS = 12
+COL_NG_DETAIL = 13
+
+_RE_PROGRESS = re.compile(r"進捗:\s*(\d+)\s*/\s*(\d+)")
+_RE_STATS = re.compile(r"HIT:\s*(\d+).*?該当なし:\s*(\d+)")
+_RE_DONE = re.compile(
+    r"完了:\s*ファイル=(\d+).*?HIT=(\d+).*?該当なし=(\d+).*?"
+    r"所要時間NG\(時刻欠損\)=(\d+).*?所要時間NG\(区間範囲外\)=(\d+).*?所要時間NG\(線分取得不可\)=(\d+)"
+)
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -113,7 +135,8 @@ class MainWindow(QMainWindow):
         self.lbl_project = QLabel("Project: (未選択)")
         v.addWidget(self.lbl_project)
 
-        self.table = QTableWidget(0, 13)
+        self.table = QTableWidget(0, 14)
+        self.table.setColumnCount(14)
         self.table.setHorizontalHeaderLabels(
             [
                 "実行",
@@ -125,10 +148,11 @@ class MainWindow(QMainWindow):
                 "31出力(performance.csv)",
                 "32出力(report.xlsx)",
                 "状態",
-                "対象トリップ",
+                "分析済ファイル",
+                "対象ファイル",
                 "HIT",
                 "該当なし",
-                "時刻NG(欠損/範囲外/線分不可)",
+                "NG(欠損/範囲外/線分不可)",
             ]
         )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -176,7 +200,11 @@ class MainWindow(QMainWindow):
 
         if from_carriage_return or text.startswith("進捗:") or "進捗:" in text:
             self.lbl_progress.setText(text)
+            self._update_table_progress(text)
             return
+
+        if "完了:" in text and "ファイル=" in text:
+            self._apply_done_summary(text)
 
         self._recent_process_lines.append(text)
         if len(self._recent_process_lines) > 200:
@@ -323,27 +351,39 @@ class MainWindow(QMainWindow):
             chk = QTableWidgetItem("")
             chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             chk.setCheckState(Qt.CheckState.Checked if default_run else Qt.CheckState.Unchecked)
-            self.table.setItem(r, 0, chk)
-            self.table.setItem(r, 1, QTableWidgetItem(name))
-            self.table.setItem(r, 2, QTableWidgetItem("✔" if has_csv else "×"))
-            self.table.setItem(r, 3, QTableWidgetItem("✔" if has_jpg else "×"))
-            self.table.setItem(r, 4, QTableWidgetItem("✔" if has_s2_dir else "×"))
-            self.table.setItem(r, 5, QTableWidgetItem("✔" if has_s2_csv else "×"))
-            self.table.setItem(r, 6, QTableWidgetItem("✔" if has31 else "×"))
-            self.table.setItem(r, 7, QTableWidgetItem("✔" if has32 else "×"))
-            self.table.setItem(r, 8, QTableWidgetItem(""))
-            self.table.setItem(r, 9, QTableWidgetItem(""))
-            self.table.setItem(r, 10, QTableWidgetItem(""))
-            self.table.setItem(r, 11, QTableWidgetItem(""))
-            self.table.setItem(r, 12, QTableWidgetItem(""))
+            self.table.setItem(r, COL_RUN, chk)
+            self.table.setItem(r, COL_NAME, QTableWidgetItem(name))
+            self.table.setItem(r, COL_CROSS_CSV, QTableWidgetItem("✔" if has_csv else "×"))
+            self.table.setItem(r, COL_CROSS_JPG, QTableWidgetItem("✔" if has_jpg else "×"))
+            self.table.setItem(r, COL_S2_DIR, QTableWidgetItem("✔" if has_s2_dir else "×"))
+            self.table.setItem(r, COL_S2_CSV, QTableWidgetItem("✔" if has_s2_csv else "×"))
+            self.table.setItem(r, COL_OUT31, QTableWidgetItem("✔" if has31 else "×"))
+            self.table.setItem(r, COL_OUT32, QTableWidgetItem("✔" if has32 else "×"))
+            self.table.setItem(r, COL_STATUS, QTableWidgetItem(""))
+            self.table.setItem(r, COL_DONE_FILES, QTableWidgetItem(""))
+            self.table.setItem(r, COL_TOTAL_FILES, QTableWidgetItem(""))
+            self.table.setItem(r, COL_HIT, QTableWidgetItem(""))
+            self.table.setItem(r, COL_NOPASS, QTableWidgetItem(""))
+            self.table.setItem(r, COL_NG_DETAIL, QTableWidgetItem(""))
+
+            info = {
+                "cross_csv": str(csv_path),
+                "cross_jpg": str(jpg_path),
+                "s2_dir": str(s2_cross_dir),
+                "out31": str(out31),
+                "out32": str(out32),
+            }
+            name_item = self.table.item(r, COL_NAME)
+            if name_item:
+                name_item.setData(Qt.ItemDataRole.UserRole, info)
 
         self._log(f"[INFO] scanned: {len(csvs)} crossroads")
 
     def _collect_targets(self) -> list[str]:
         targets: list[str] = []
         for r in range(self.table.rowCount()):
-            chk = self.table.item(r, 0)
-            name_item = self.table.item(r, 1)
+            chk = self.table.item(r, COL_RUN)
+            name_item = self.table.item(r, COL_NAME)
             if chk and name_item and chk.checkState() == Qt.CheckState.Checked:
                 targets.append(name_item.text())
         return targets
@@ -380,6 +420,21 @@ class MainWindow(QMainWindow):
         self.current_name = self.queue.pop(0)
         self.current_step = "31"
         self._log(f"[START] {self.current_name}")
+
+        row = self._row_index_by_name(self.current_name)
+        if row >= 0:
+            name_item = self.table.item(row, COL_NAME)
+            info = name_item.data(Qt.ItemDataRole.UserRole) if name_item else {}
+            info = info or {}
+            self._log(f"[INFO] cross_csv: {info.get('cross_csv', '')}")
+            self._log(f"[INFO] s2_dir  : {info.get('s2_dir', '')}")
+            try:
+                s2 = Path(info.get("s2_dir", ""))
+                n_csv = len(list(s2.glob("*.csv"))) if s2.exists() else 0
+                self._log(f"[INFO] s2_csv_count: {n_csv}")
+            except Exception:
+                pass
+
         self._start_step31(self.current_name)
 
     def _start_step31(self, name: str) -> None:
@@ -446,14 +501,17 @@ class MainWindow(QMainWindow):
             return
 
         if code != 0:
-            reason = self._extract_last_error_line() or f"{self.current_step} failed (code={code})"
-            self._set_status_for_current_row(reason)
+            reason = self._extract_last_error_line()
+            status = f"{self.current_step} failed (code={code})"
+            if reason:
+                status = f"{status} / {reason}"
+            self._set_status_for_current_row(status)
             self._start_next_crossroad()
             return
 
         if self.current_step == "31":
             self._apply_31_summary_to_current_row()
-            self._set_status_for_current_row("31完了")
+            self._set_status_for_current_row("31 OK")
             self.current_step = "32"
             self._start_step32(self.current_name)
             return
@@ -463,11 +521,15 @@ class MainWindow(QMainWindow):
         self._start_next_crossroad()
 
     def _find_row_by_name(self, name: str) -> int | None:
+        row = self._row_index_by_name(name)
+        return row if row >= 0 else None
+
+    def _row_index_by_name(self, name: str) -> int:
         for r in range(self.table.rowCount()):
-            name_item = self.table.item(r, 1)
+            name_item = self.table.item(r, COL_NAME)
             if name_item and name_item.text() == name:
                 return r
-        return None
+        return -1
 
     def _set_status_for_current_row(self, status: str) -> None:
         if self.current_name is None:
@@ -475,7 +537,7 @@ class MainWindow(QMainWindow):
         row = self._find_row_by_name(self.current_name)
         if row is None:
             return
-        self.table.setItem(row, 8, QTableWidgetItem(status))
+        self.table.setItem(row, COL_STATUS, QTableWidgetItem(status))
 
     def _extract_last_error_line(self) -> str:
         for line in reversed(self._recent_process_lines):
@@ -509,10 +571,54 @@ class MainWindow(QMainWindow):
         if all(v != "" for v in (ng_missing, ng_range, ng_segment)):
             ng_total = str(int(ng_missing) + int(ng_range) + int(ng_segment))
 
-        self.table.setItem(row, 9, QTableWidgetItem(trip))
-        self.table.setItem(row, 10, QTableWidgetItem(hit))
-        self.table.setItem(row, 11, QTableWidgetItem(nopass))
-        self.table.setItem(row, 12, QTableWidgetItem(ng_total))
+        self.table.setItem(row, COL_TOTAL_FILES, QTableWidgetItem(trip))
+        self.table.setItem(row, COL_HIT, QTableWidgetItem(hit))
+        self.table.setItem(row, COL_NOPASS, QTableWidgetItem(nopass))
+        self.table.setItem(row, COL_NG_DETAIL, QTableWidgetItem(ng_total))
+
+    def _update_table_progress(self, text: str) -> None:
+        if not self.current_name:
+            return
+        row = self._row_index_by_name(self.current_name)
+        if row < 0:
+            return
+
+        progress_match = _RE_PROGRESS.search(text)
+        if progress_match:
+            done = int(progress_match.group(1))
+            total = int(progress_match.group(2))
+            self.table.setItem(row, COL_DONE_FILES, QTableWidgetItem(str(done)))
+            self.table.setItem(row, COL_TOTAL_FILES, QTableWidgetItem(str(total)))
+
+        stats_match = _RE_STATS.search(text)
+        if stats_match:
+            hit = int(stats_match.group(1))
+            nop = int(stats_match.group(2))
+            self.table.setItem(row, COL_HIT, QTableWidgetItem(str(hit)))
+            self.table.setItem(row, COL_NOPASS, QTableWidgetItem(str(nop)))
+
+    def _apply_done_summary(self, text: str) -> None:
+        if not self.current_name:
+            return
+        row = self._row_index_by_name(self.current_name)
+        if row < 0:
+            return
+
+        match = _RE_DONE.search(text)
+        if not match:
+            return
+
+        total_files = int(match.group(1))
+        hit = int(match.group(2))
+        nop = int(match.group(3))
+        bad = int(match.group(4))
+        oor = int(match.group(5))
+        nos = int(match.group(6))
+
+        self.table.setItem(row, COL_TOTAL_FILES, QTableWidgetItem(str(total_files)))
+        self.table.setItem(row, COL_HIT, QTableWidgetItem(str(hit)))
+        self.table.setItem(row, COL_NOPASS, QTableWidgetItem(str(nop)))
+        self.table.setItem(row, COL_NG_DETAIL, QTableWidgetItem(f"{bad}/{oor}/{nos}"))
 
     def _extract_summary_value(self, line: str, key: str) -> str:
         m = re.search(rf"{re.escape(key)}\s*=\s*(\d+)", line)
