@@ -50,8 +50,16 @@ class MainWindow(QMainWindow):
         btn_input.clicked.connect(self.select_input)
         self.btn_run.clicked.connect(self.run_screening)
 
+        arrow1 = QLabel(" → ")
+        arrow2 = QLabel(" → ")
+
+        arrow1.setStyleSheet("font-size: 18px; font-weight: bold;")
+        arrow2.setStyleSheet("font-size: 18px; font-weight: bold;")
+
         top.addWidget(btn_project)
+        top.addWidget(arrow1)
         top.addWidget(btn_input)
+        top.addWidget(arrow2)
         top.addWidget(self.btn_run)
         top.addStretch(1)
 
