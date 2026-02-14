@@ -1,6 +1,7 @@
 import sys
 import json
 import math
+import socket
 import webbrowser
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Callable
@@ -100,6 +101,14 @@ def ensure_columns(df: pd.DataFrame, cols: List[str]) -> None:
             "第2スクリーニング工程の出力を指定してください。",
         ]
         raise ValueError("\n".join(message_lines))
+
+
+def is_internet_available(timeout_sec: float = 1.0) -> bool:
+    try:
+        with socket.create_connection(("tile.openstreetmap.org", 443), timeout=timeout_sec):
+            return True
+    except Exception:
+        return False
 
 
 def find_point_csv(perf_csv_path: str) -> Optional[Path]:
@@ -887,7 +896,7 @@ DETAIL_FIELDS = [
 class BranchCheckWindow(QMainWindow):
     def __init__(self, csv_path: str, progress_callback: Optional[Callable[[str], None]] = None):
         super().__init__()
-        self.setWindowTitle("33_branch_check - 枝判定 目視チェッカー")
+        self.setWindowTitle("交差点パフォーマンス　流入・流出枝判定ビューアー")
         self.resize(1400, 900)
         self._angle_zero_east_ccw = True
         self._progress_callback = progress_callback
@@ -970,6 +979,14 @@ class BranchCheckWindow(QMainWindow):
         # UI
         self._report_progress("一覧表を作成中…")
         self._build_ui()
+
+        # インターネット未接続時は通知のみ（地図ロジックは既存のまま）
+        if not is_internet_available():
+            QMessageBox.information(
+                self,
+                "オフライン表示",
+                "インターネット接続が無いため白背景で表示します。"
+            )
 
         # 初期選択
         if len(self.df) > 0:
