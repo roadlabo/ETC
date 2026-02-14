@@ -139,19 +139,19 @@ class MainWindow(QMainWindow):
             chk.setCheckState(target_state)
         self._weekday_updating = False
 
-    def _as_checkstate(self, state) -> Qt.CheckState:
-        if isinstance(state, Qt.CheckState):
-            return state
+    def _norm_checkstate(self, state) -> Qt.CheckState:
+        # state は int の場合も Qt.CheckState の場合もあるため両対応
         try:
-            return Qt.CheckState(int(state))
-        except (TypeError, ValueError):
-            return Qt.CheckState.Unchecked
+            return Qt.CheckState(state)
+        except TypeError:
+            # ここに来るのは enum 型など。比較可能なのでそのまま返す
+            return state
 
     def _on_all_weekday_changed(self, state) -> None:
         if self._weekday_updating:
             return
         self._weekday_updating = True
-        st = self._as_checkstate(state)
+        st = self._norm_checkstate(state)
         target_state = Qt.CheckState.Checked if st == Qt.CheckState.Checked else Qt.CheckState.Unchecked
         for chk in self.weekday_checks.values():
             chk.setCheckState(target_state)
