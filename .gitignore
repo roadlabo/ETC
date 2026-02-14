@@ -15,3 +15,9 @@ src/map_kp.html
 *.csv
 src/map_kp.html
 *.csv
+
+# =========================================
+# Runtime (embeddable python / deployed files)
+# =========================================
+runtime/
+logs/
