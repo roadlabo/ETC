@@ -806,6 +806,13 @@ DISPLAY_COLS_IN_TABLE = [
 ]
 DISPLAY_COLS_IN_TABLE = [c for c in DISPLAY_COLS_IN_TABLE if c is not None]
 
+NUMERIC_SORT_COLS = {
+    "遅れ時間(s)",
+    "所要時間(s)",
+    "流入角度差(deg)",
+    "流出角度差(deg)",
+}
+
 
 DETAIL_FIELDS = [
     ("交差点ファイル名", "交差点ファイル名"),
@@ -1078,12 +1085,26 @@ class BranchCheckWindow(QMainWindow):
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setDefaultSectionSize(78)
         hh.setMinimumSectionSize(60)
+        # --- sort (header click) ---
+        self.table.setSortingEnabled(True)
+        hh.setSortIndicatorShown(True)
+        hh.setSectionsClickable(True)
+        hh.setSortIndicatorClearable(False)
+        hh.setSortIndicator(0, Qt.SortOrder.AscendingOrder)
 
         for r in range(len(self.df)):
             row = self.df.iloc[r]
             for c_idx, c_name in enumerate(DISPLAY_COLS_IN_TABLE):
                 val = row.get(c_name, "")
                 item = QTableWidgetItem("" if pd.isna(val) else str(val))
+
+                if c_name in NUMERIC_SORT_COLS:
+                    vnum = pd.to_numeric(val, errors="coerce")
+                    if pd.isna(vnum):
+                        item.setData(Qt.ItemDataRole.EditRole, None)
+                    else:
+                        item.setData(Qt.ItemDataRole.EditRole, float(vnum))
+
                 if c_name in ["流入角度差(deg)", "流出角度差(deg)"]:
                     try:
                         v = float(val)
@@ -1093,6 +1114,12 @@ class BranchCheckWindow(QMainWindow):
                     except Exception:
                         pass
                 self.table.setItem(r, c_idx, item)
+
+        try:
+            col = DISPLAY_COLS_IN_TABLE.index("遅れ時間(s)")
+            hh.setSortIndicator(col, Qt.SortOrder.DescendingOrder)
+        except Exception:
+            pass
 
         left_layout.addWidget(self.table)
 
