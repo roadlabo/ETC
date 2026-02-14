@@ -42,6 +42,16 @@ TARGET_WEEKDAYS = ["TUE", "WED", "THU"]
 # ALLを対象にしたい場合は空リストにする：
 # TARGET_WEEKDAYS: list[str] = []
 
+WEEKDAY_KANJI_TO_ABBR = {
+    "月": "MON",
+    "火": "TUE",
+    "水": "WED",
+    "木": "THU",
+    "金": "FRI",
+    "土": "SAT",
+    "日": "SUN",
+}
+
 
 # ============================================================
 # 交差点影響区間（独自定義）の計測区間設定
@@ -540,22 +550,47 @@ def _build_config_from_project(project_dir: Path, targets: list[str] | None) -> 
     return config, out_dir
 
 
-def _resolve_target_weekdays(weekday: str | None) -> list[str]:
-    if not weekday:
+def _normalize_weekday_value(raw: str) -> str:
+    value = raw.strip()
+    if not value:
+        raise ValueError("empty weekday value")
+    upper = value.upper()
+    if upper == "ALL":
+        return "ALL"
+    if upper in {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}:
+        return upper
+    if value in WEEKDAY_KANJI_TO_ABBR:
+        return WEEKDAY_KANJI_TO_ABBR[value]
+    raise ValueError(f"invalid weekday value: {raw}")
+
+
+def _resolve_target_weekdays(weekdays: list[str] | None, weekday_legacy: str | None) -> list[str]:
+    if weekdays is None and not weekday_legacy:
         return TARGET_WEEKDAYS
-    wd = weekday.strip().upper()
-    if wd == "ALL":
+
+    normalized: list[str] = []
+    raw_values = weekdays if weekdays is not None else [weekday_legacy]  # legacy fallback
+    for raw in raw_values:
+        if raw is None:
+            continue
+        wd = _normalize_weekday_value(raw)
+        normalized.append(wd)
+
+    if not normalized or "ALL" in normalized:
         return []
-    allowed = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}
-    if wd not in allowed:
-        raise ValueError(f"invalid --weekday: {weekday}")
-    return [wd]
+
+    unique: list[str] = []
+    for wd in normalized:
+        if wd not in unique:
+            unique.append(wd)
+    return unique
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="交差点通過性能算出スクリプト")
     parser.add_argument("--project", type=str, help="プロジェクトフォルダ")
-    parser.add_argument("--weekday", type=str, help="ALL|MON|...|SUN")
+    parser.add_argument("--weekdays", nargs="*", help="ALL または 月火水木金土日 / MON..SUN の複数指定")
+    parser.add_argument("--weekday", type=str, help="[互換] ALL|MON|...|SUN|月..日")
     parser.add_argument("--targets", nargs="*", help="交差点名（stem）")
     parser.add_argument(
         "--keep-temp",
@@ -566,9 +601,7 @@ def main() -> None:
 
     run_config = CONFIG
     output_base_dir = Path(OUTPUT_BASE_DIR)
-    target_weekdays = TARGET_WEEKDAYS
-    if args.weekday:
-        target_weekdays = _resolve_target_weekdays(args.weekday)
+    target_weekdays = _resolve_target_weekdays(args.weekdays, args.weekday)
     if args.project:
         project_dir = Path(args.project).resolve()
         run_config, output_base_dir = _build_config_from_project(project_dir, args.targets)
