@@ -365,7 +365,7 @@ class MainWindow(QMainWindow):
             self.table.setItem(r, COL_OUT32, QTableWidgetItem("✔" if has32 else "×"))
             self.table.setItem(r, COL_STATUS, QTableWidgetItem(""))
             self.table.setItem(r, COL_DONE_FILES, QTableWidgetItem("0"))
-            self.table.setItem(r, COL_TOTAL_FILES, QTableWidgetItem("0"))
+            self.table.setItem(r, COL_TOTAL_FILES, QTableWidgetItem(str(n_csv)))
             self.table.setItem(r, COL_HIT, QTableWidgetItem("0"))
             self.table.setItem(r, COL_NOPASS, QTableWidgetItem("0"))
 
@@ -460,6 +460,8 @@ class MainWindow(QMainWindow):
             str(self.project_dir),
             "--targets",
             name,
+            "--progress-step",
+            "1",
         ]
         selected_weekdays = self._selected_weekdays_for_cli()
         if selected_weekdays:
@@ -485,7 +487,7 @@ class MainWindow(QMainWindow):
         self._stderr_buf = ""
         self._recent_process_lines = []
         self.proc.setProgram(sys.executable)
-        self.proc.setArguments(args)
+        self.proc.setArguments(["-u", *args])
         self.proc.readyReadStandardOutput.connect(self._on_stdout)
         self.proc.readyReadStandardError.connect(self._on_stderr)
         self.proc.finished.connect(self._on_finished)

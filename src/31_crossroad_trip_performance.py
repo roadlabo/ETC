@@ -601,6 +601,12 @@ def main() -> None:
         action="store_true",
         help="デバッグ用: 中間temp CSVを削除せず残す",
     )
+    parser.add_argument(
+        "--progress-step",
+        type=int,
+        default=200,
+        help="non-tty時の進捗出力間隔（例: 1=毎ファイル, 10=10ファイルごと）",
+    )
     args = parser.parse_args()
 
     run_config = CONFIG
@@ -667,8 +673,8 @@ def main() -> None:
             weekday_skip = 0
             bad_date = 0
             bad_points = 0
-            non_tty_progress_step = 200
             non_tty_mode = not sys.stdout.isatty()
+            non_tty_progress_step = max(1, int(args.progress_step))
 
             print(f"\n[{cfg_idx}/{len(run_config)}] 交差点: {crossroad_path.name}")
             print(f"  入力フォルダ: {trip_folder}")
@@ -1126,7 +1132,7 @@ def main() -> None:
                     )
                     if non_tty_mode:
                         if file_idx % non_tty_progress_step == 0 or file_idx == total_files:
-                            print(f"  {progress_line}")
+                            print(f"  {progress_line}", flush=True)
                     else:
                         print(f"\r  {progress_line}", end="", flush=True)
 
