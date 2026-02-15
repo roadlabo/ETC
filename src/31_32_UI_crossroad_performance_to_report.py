@@ -742,9 +742,31 @@ class MainWindow(QMainWindow):
         self._set_text_item(row, COL_STATUS, status)
 
     def _extract_last_error_line(self) -> str:
+        # 1) 最優先：明示的な [ERROR]
         for line in reversed(self._recent_process_lines):
             if "[ERROR]" in line:
                 return line
+
+        # 2) 次点：代表的な例外行（最後の1行が原因のことが多い）
+        keywords = [
+            "Traceback (most recent call last):",
+            "ModuleNotFoundError",
+            "ImportError",
+            "FileNotFoundError",
+            "PermissionError",
+            "ValueError",
+            "KeyError",
+            "RuntimeError",
+        ]
+        for line in reversed(self._recent_process_lines):
+            if any(k in line for k in keywords):
+                return line
+
+        # 3) それでも無ければ「最後の非空行」
+        for line in reversed(self._recent_process_lines):
+            if line.strip():
+                return line.strip()
+
         return ""
 
     def _update_table_progress(self, text: str) -> None:

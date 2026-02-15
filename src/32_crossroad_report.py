@@ -1464,4 +1464,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        import traceback
+
+        print("[ERROR] unhandled exception in 32_crossroad_report.py")
+        print(f"[ERROR] {exc}")
+        traceback.print_exc()
+        raise
