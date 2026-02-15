@@ -2,6 +2,7 @@ import os
 import sys
 import re
 import argparse
+import traceback
 from datetime import date, datetime
 from pathlib import Path
 
@@ -71,7 +72,11 @@ else:
     FigureCanvas = _DummyType
     Figure = _DummyType
 from openpyxl import Workbook
-from openpyxl.drawing.image import Image as XLImage
+try:
+    from openpyxl.drawing.image import Image as XLImage
+except Exception as _exc:
+    XLImage = None
+    print(f"[WARN] openpyxl image feature disabled (Pillow missing?): {_exc}")
 from openpyxl.styles import Alignment, Font, Side, Border
 from openpyxl.worksheet.page import PageMargins
 
@@ -1179,7 +1184,9 @@ class CrossroadReport(QMainWindow):
                 bottom=medium,
             )
 
-    def _create_resized_image(self) -> XLImage | None:
+    def _create_resized_image(self) -> "XLImage | None":
+        if XLImage is None:
+            return None
         if not self.image_path.exists():
             return None
         image = XLImage(str(self.image_path))
@@ -1395,6 +1402,7 @@ def run_batch(jobs: list[dict]) -> int:
 
         except Exception as exc:
             print(f"  [ERROR] batch job failed: {exc}")
+            print(traceback.format_exc())
             failed += 1
             continue
 
