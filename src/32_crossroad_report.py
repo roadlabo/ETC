@@ -1165,8 +1165,7 @@ class CrossroadReport(QMainWindow):
         self._apply_row_bottom_border(ws, header_row, 1, max_col)
         return row_idx - 1
 
-    @staticmethod
-    def apply_table_borders(ws, min_row: int, min_col: int, max_row: int, max_col: int) -> None:
+    def apply_table_borders(self, ws, min_row: int, min_col: int, max_row: int, max_col: int) -> None:
         thin = Side(style="thin")
         medium = Side(style="medium")
         for row in range(min_row, max_row + 1):
