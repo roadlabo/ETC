@@ -680,11 +680,20 @@ class MainWindow(QMainWindow):
         self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
         self.proc.setProgram(sys.executable)
         self.proc.setArguments(["-u", *args])
+        self._log(f"[INFO] launch: {sys.executable} -u {' '.join(args)}")
         self.proc.readyReadStandardOutput.connect(self._on_proc_stdout)
         self.proc.readyReadStandardError.connect(self._on_proc_stderr)
         self.proc.errorOccurred.connect(self._on_proc_error)
         self.proc.finished.connect(self._on_finished)
+        self.proc.started.connect(lambda: self._log("[DEBUG] QProcess started"))
+        self.proc.stateChanged.connect(lambda st: self._log(f"[DEBUG] QProcess stateChanged: {st}"))
         self.proc.start()
+
+        if not self.proc.waitForStarted(3000):
+            self._log(f"[ERROR] QProcess failed to start: {self.proc.errorString()}")
+            self._set_status_for_current_row(f"{self.current_step} failed (start error)")
+            self._start_next_crossroad()
+            return
 
     def _on_proc_stdout(self) -> None:
         if not self.proc:
