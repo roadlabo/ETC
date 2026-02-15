@@ -718,6 +718,22 @@ class MainWindow(QMainWindow):
             self._start_step32(self.current_name)
             return
 
+        # 32が終わったら、reportが本当に生成されたか確認する
+        row = self._row_index_by_name(self.current_name)
+        out32_path = None
+        if row >= 0:
+            name_item = self.table.item(row, COL_NAME)
+            info = name_item.data(Qt.ItemDataRole.UserRole) if name_item else {}
+            info = info or {}
+            out32_path = info.get("out32")
+
+        if out32_path and not Path(out32_path).exists():
+            msg = f"32 failed: report not created: {out32_path}"
+            self._set_status_for_current_row(msg)
+            self._log(f"[ERROR] {msg}")
+            self._start_next_crossroad()
+            return
+
         self._set_status_for_current_row("完了")
         self._log(f"[DONE] {self.current_name}")
         self._start_next_crossroad()
