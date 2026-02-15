@@ -393,9 +393,8 @@ class MainWindow(QMainWindow):
         self.log_info(f"project set: {self.project_dir}")
         self.scan_crossroads()
 
-    def _report_output_exists(self, name: str) -> bool:
-        out32_dir = self.project_dir / FOLDER_32OUT
-        return any(out32_dir.glob(f"{name}_report.*"))
+    def _report_output_path(self, name: str) -> Path:
+        return self.project_dir / FOLDER_32OUT / f"{name}_report.xlsx"
 
     def scan_crossroads(self) -> None:
         self.table.setRowCount(0)
@@ -425,7 +424,7 @@ class MainWindow(QMainWindow):
             n_csv = len(list(s2_cross.glob("*.csv"))) if s2_cross.exists() else 0
             sum_s2 += n_csv
             out31 = out31_dir / f"{name}_performance.csv"
-            has32 = self._report_output_exists(name)
+            out32 = self._report_output_path(name)
 
             r = self.table.rowCount()
             self.table.insertRow(r)
@@ -436,12 +435,12 @@ class MainWindow(QMainWindow):
             self._set_text_item(r, COL_S2_DIR, "✔" if s2_cross.exists() else "×")
             self._set_text_item(r, COL_S2_CSV, "✔" if n_csv > 0 else "×")
             self._set_text_item(r, COL_OUT31, "✔" if out31.exists() else "×")
-            self._set_text_item(r, COL_OUT32, "✔" if has32 else "×")
+            self._set_text_item(r, COL_OUT32, "✔" if out32.exists() else "×")
             self._set_text_item(r, COL_STATUS, "")
             for col in [COL_DONE_FILES, COL_WEEKDAY, COL_SPLIT, COL_TARGET, COL_OK, COL_UNK, COL_NOTPASS]:
                 self._set_text_item(r, col, "0")
             self._set_text_item(r, COL_TOTAL_FILES, str(n_csv))
-            info = {"cross_csv": str(csv_path), "cross_jpg": str(jpg), "s2_dir": str(s2_cross), "out31": str(out31), "out32_dir": str(out32_dir), "name": name}
+            info = {"cross_csv": str(csv_path), "cross_jpg": str(jpg), "s2_dir": str(s2_cross), "out31": str(out31), "out32": str(out32), "name": name}
             self.table.item(r, COL_NAME).setData(Qt.ItemDataRole.UserRole, info)
 
         self.lbl_summary.setText(f"Crossroads: {len(csvs)} / S2 CSV total: {sum_s2}")
@@ -473,20 +472,6 @@ class MainWindow(QMainWindow):
         if row >= 0:
             self._set_text_item(row, COL_STATUS, status)
 
-    def _find_overwrite_targets(self, targets: list[str]) -> list[Path]:
-        files: list[Path] = []
-        for name in targets:
-            row = self._row_index_by_name(name)
-            if row < 0:
-                continue
-            info = self.table.item(row, COL_NAME).data(Qt.ItemDataRole.UserRole) or {}
-            out31 = Path(info["out31"])
-            if out31.exists():
-                files.append(out31)
-            out32_dir = Path(info["out32_dir"])
-            files.extend([p for p in out32_dir.glob(f"{name}_report.*") if p.exists()])
-        return files
-
     def start_batch(self) -> None:
         if not self.project_dir:
             QMessageBox.warning(self, "未設定", "①プロジェクトフォルダを選択してください。")
@@ -496,11 +481,31 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "対象なし", "実行対象の交差点が選択されていません。")
             return
 
-        exists = self._find_overwrite_targets(targets)
-        if exists:
-            res = QMessageBox.question(self, "上書き確認", "既に出力ファイル（CSV / XLSX 等）が存在します。上書きしますか？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel)
-            if res != QMessageBox.StandardButton.Yes:
-                self.log_info("キャンセルされました")
+        # 設計原則：
+        # ・出力ファイル名は完全固定
+        # ・完全一致のみが上書き対象
+        # ・拡張子一致や部分一致は絶対に行わない
+        # ・UI表示ロジックと同じ判定方法を使用する
+        performance_dir = self.project_dir / FOLDER_31OUT
+        report_dir = self.project_dir / FOLDER_32OUT
+        existing_targets: list[str] = []
+        for name in targets:
+            perf_path = performance_dir / f"{name}_performance.csv"
+            report_path = report_dir / f"{name}_report.xlsx"
+            if perf_path.exists() or report_path.exists():
+                existing_targets.append(name)
+
+        if existing_targets:
+            msg = "既に出力ファイルが存在する交差点があります。\n\n" + "\n".join(existing_targets) + "\n\n上書きしますか？"
+            reply = QMessageBox.question(
+                self,
+                "上書き確認",
+                msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                self.log_info("ユーザーによりキャンセルされました。")
                 return
 
         self.batch_started_at = datetime.now()
@@ -594,7 +599,7 @@ class MainWindow(QMainWindow):
             self._start_next_crossroad()
             return
         info = self.table.item(row, COL_NAME).data(Qt.ItemDataRole.UserRole) or {}
-        out32_candidates = list(Path(info["out32_dir"]).glob(f"{name}_report.*"))
+        out32 = Path(info["out32"])
         script32 = Path(__file__).resolve().parent / "32_crossroad_report.py"
         if not script32.exists():
             self.log_error(f"32 script not found: {script32}")
@@ -604,8 +609,8 @@ class MainWindow(QMainWindow):
         def _launch():
             self._launch_process([str(script32), "--project", str(self.project_dir), "--targets", name])
 
-        if out32_candidates:
-            self._ensure_file_unlock(out32_candidates[0], _launch)
+        if out32.exists():
+            self._ensure_file_unlock(out32, _launch)
         else:
             _launch()
 
@@ -649,7 +654,7 @@ class MainWindow(QMainWindow):
             return
         info = self.table.item(row, COL_NAME).data(Qt.ItemDataRole.UserRole) or {}
         self._set_text_item(row, COL_OUT31, "✔" if Path(info["out31"]).exists() else "×")
-        has_report = any(Path(info["out32_dir"]).glob(f"{name}_report.*"))
+        has_report = Path(info["out32"]).exists()
         self._set_text_item(row, COL_OUT32, "✔" if has_report else "×")
 
     def _extract_last_error_line(self) -> str:
@@ -688,7 +693,7 @@ class MainWindow(QMainWindow):
         self._update_row_outputs(self.current_name)
         row = self._row_index_by_name(self.current_name)
         info = self.table.item(row, COL_NAME).data(Qt.ItemDataRole.UserRole) or {}
-        if not any(Path(info["out32_dir"]).glob(f"{self.current_name}_report.*")):
+        if not Path(info["out32"]).exists():
             msg = f"32 failed: report not created: {self.current_name}"
             self._set_status_for_current_row(msg)
             self.log_error(msg)
