@@ -130,6 +130,8 @@ class MainWindow(QMainWindow):
 
         self.lbl_project = QLabel("Project: (未選択)")
         v.addWidget(self.lbl_project)
+        self.lbl_summary = QLabel("")
+        v.addWidget(self.lbl_summary)
 
         self.table = QTableWidget(0, 13)
         self.table.setColumnCount(13)
@@ -193,13 +195,13 @@ class MainWindow(QMainWindow):
         if not text or self._is_qt_font_warning(text):
             return
 
+        if "完了:" in text and "ファイル=" in text:
+            self._apply_done_summary(text)
+
         if from_carriage_return or text.startswith("進捗:") or "進捗:" in text:
             self.lbl_progress.setText(text)
             self._update_table_progress(text)
             return
-
-        if "完了:" in text and "ファイル=" in text:
-            self._apply_done_summary(text)
 
         self._recent_process_lines.append(text)
         if len(self._recent_process_lines) > 200:
@@ -213,8 +215,10 @@ class MainWindow(QMainWindow):
 
         if is_err:
             buf = self._stderr_buf + chunk
+            self._maybe_update_realtime_from_buffer(buf)
         else:
             buf = self._stdout_buf + chunk
+            self._maybe_update_realtime_from_buffer(buf)
 
         start = 0
         idx = 0
@@ -325,11 +329,14 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "注意", f"交差点CSVが見つかりません:\n{cross_dir}")
             return
 
+        sum_s2_csv = 0
         for csv_path in csvs:
             name = csv_path.stem
             jpg_path = cross_dir / f"{name}.jpg"
             s2_cross_dir = s2_dir / name
-            s2_has_csv = s2_cross_dir.exists() and any(s2_cross_dir.glob("*.csv"))
+            n_csv = len(list(s2_cross_dir.glob("*.csv"))) if s2_cross_dir.exists() else 0
+            sum_s2_csv += n_csv
+            s2_has_csv = n_csv > 0
             out31 = out31_dir / f"{name}_performance.csv"
             out32 = out32_dir / f"{name}_report.xlsx"
 
@@ -373,7 +380,10 @@ class MainWindow(QMainWindow):
             if name_item:
                 name_item.setData(Qt.ItemDataRole.UserRole, info)
 
+        self.lbl_summary.setText(f"Crossroads: {len(csvs)} / S2 CSV total: {sum_s2_csv}")
         self._log(f"[INFO] scanned: {len(csvs)} crossroads")
+        self._log(f"[INFO] s2 total csv files: {sum_s2_csv}")
+        self._log(f"[INFO] s2 avg per cross: {sum_s2_csv / len(csvs):.1f}")
 
     def _collect_targets(self) -> list[str]:
         targets: list[str] = []
@@ -566,13 +576,17 @@ class MainWindow(QMainWindow):
             self.table.setItem(row, COL_NOPASS, QTableWidgetItem(str(nop)))
 
     def _maybe_update_realtime_from_buffer(self, buf: str) -> None:
-        if "進捗:" not in buf:
+        idx = buf.rfind("進捗:")
+        if idx < 0:
             return
-        tail = buf[buf.rfind("進捗:") :].strip()
-        if not tail:
+        tail = buf[idx:]
+        if not tail.strip():
             return
-        self.lbl_progress.setText(tail)
-        self._update_table_progress(tail)
+        if not RE_PROGRESS.search(tail) and not RE_STATS.search(tail):
+            return
+        text = tail.strip()
+        self.lbl_progress.setText(text)
+        self._update_table_progress(text)
 
     def _apply_done_summary(self, text: str) -> None:
         if not self.current_name:
