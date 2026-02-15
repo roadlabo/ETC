@@ -1026,8 +1026,7 @@ class CrossroadReport(QMainWindow):
 
         return start_row + len(info_pairs)
 
-    @staticmethod
-    def _format_date_range(start_date: date | None, end_date: date | None) -> str:
+    def _format_date_range(self, start_date: date | None, end_date: date | None) -> str:
         if not start_date or not end_date:
             return ""
         if start_date == end_date:
