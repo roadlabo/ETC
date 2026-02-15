@@ -59,6 +59,26 @@ COL_OK = 14
 COL_UNK = 15
 COL_NOTPASS = 16
 
+CENTER_ALIGN_COLS = {
+    COL_RUN,
+    COL_CROSS_CSV,
+    COL_CROSS_JPG,
+    COL_S2_DIR,
+    COL_S2_CSV,
+    COL_OUT31,
+    COL_OUT32,
+}
+RIGHT_ALIGN_COLS = {
+    COL_DONE_FILES,
+    COL_TOTAL_FILES,
+    COL_WEEKDAY,
+    COL_SPLIT,
+    COL_TARGET,
+    COL_OK,
+    COL_UNK,
+    COL_NOTPASS,
+}
+
 RE_PROGRESS = re.compile(r"進捗:\s*(\d+)\s*/\s*(\d+)")
 RE_STATS = re.compile(
     r"曜日後:\s*(\d+).*?"
@@ -154,14 +174,14 @@ class MainWindow(QMainWindow):
         self.table.setColumnCount(17)
         self.table.setHorizontalHeaderLabels(
             [
-                "実行",
+                "✅ALL",
                 "交差点名",
                 "cross.csv",
                 "cross.jpg",
-                "第2スクリーニング(フォルダ)",
-                "第2スクリーニング(CSVあり)",
-                "31出力(performance.csv)",
-                "32出力(report.xlsx)",
+                "第2スクリーニング\n（フォルダ）",
+                "第2スクリーニング\n（CSV）",
+                "出力\n(performance.csv)",
+                "出力\n(report)",
                 "状態",
                 "分析済ファイル",
                 "対象ファイル",
@@ -173,7 +193,13 @@ class MainWindow(QMainWindow):
                 "交差点不通過",
             ]
         )
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.setStretchLastSection(False)
+        header.sectionClicked.connect(self._on_header_clicked)
+        self.table.setWordWrap(True)
+        self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(self.table.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(self.table.EditTrigger.NoEditTriggers)
@@ -309,6 +335,42 @@ class MainWindow(QMainWindow):
         self.chk_all.setCheckState(Qt.CheckState.Checked if all_checked else Qt.CheckState.Unchecked)
         self._weekday_updating = False
 
+    def _column_alignment(self, column: int) -> Qt.AlignmentFlag:
+        if column in CENTER_ALIGN_COLS:
+            return Qt.AlignmentFlag.AlignCenter
+        if column in RIGHT_ALIGN_COLS:
+            return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+
+    def _set_text_item(self, row: int, column: int, text: str) -> None:
+        item = QTableWidgetItem(text)
+        item.setTextAlignment(self._column_alignment(column))
+        self.table.setItem(row, column, item)
+
+    def _set_run_item(self, row: int, checked: bool) -> None:
+        item = QTableWidgetItem("")
+        item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+        item.setTextAlignment(self._column_alignment(COL_RUN))
+        self.table.setItem(row, COL_RUN, item)
+
+    def _on_header_clicked(self, index: int) -> None:
+        if index != COL_RUN:
+            return
+
+        all_checked = True
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, COL_RUN)
+            if not item or item.checkState() != Qt.CheckState.Checked:
+                all_checked = False
+                break
+
+        new_state = Qt.CheckState.Unchecked if all_checked else Qt.CheckState.Checked
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, COL_RUN)
+            if item:
+                item.setCheckState(new_state)
+
     def _selected_weekdays_for_cli(self) -> list[str]:
         if self.chk_all.isChecked():
             return []
@@ -373,26 +435,23 @@ class MainWindow(QMainWindow):
             r = self.table.rowCount()
             self.table.insertRow(r)
 
-            chk = QTableWidgetItem("")
-            chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-            chk.setCheckState(Qt.CheckState.Checked if default_run else Qt.CheckState.Unchecked)
-            self.table.setItem(r, COL_RUN, chk)
-            self.table.setItem(r, COL_NAME, QTableWidgetItem(name))
-            self.table.setItem(r, COL_CROSS_CSV, QTableWidgetItem("✔" if has_csv else "×"))
-            self.table.setItem(r, COL_CROSS_JPG, QTableWidgetItem("✔" if has_jpg else "×"))
-            self.table.setItem(r, COL_S2_DIR, QTableWidgetItem("✔" if has_s2_dir else "×"))
-            self.table.setItem(r, COL_S2_CSV, QTableWidgetItem("✔" if has_s2_csv else "×"))
-            self.table.setItem(r, COL_OUT31, QTableWidgetItem("✔" if has31 else "×"))
-            self.table.setItem(r, COL_OUT32, QTableWidgetItem("✔" if has32 else "×"))
-            self.table.setItem(r, COL_STATUS, QTableWidgetItem(""))
-            self.table.setItem(r, COL_DONE_FILES, QTableWidgetItem("0"))
-            self.table.setItem(r, COL_TOTAL_FILES, QTableWidgetItem(str(n_csv)))
-            self.table.setItem(r, COL_WEEKDAY, QTableWidgetItem("0"))
-            self.table.setItem(r, COL_SPLIT, QTableWidgetItem("0"))
-            self.table.setItem(r, COL_TARGET, QTableWidgetItem("0"))
-            self.table.setItem(r, COL_OK, QTableWidgetItem("0"))
-            self.table.setItem(r, COL_UNK, QTableWidgetItem("0"))
-            self.table.setItem(r, COL_NOTPASS, QTableWidgetItem("0"))
+            self._set_run_item(r, default_run)
+            self._set_text_item(r, COL_NAME, name)
+            self._set_text_item(r, COL_CROSS_CSV, "✔" if has_csv else "×")
+            self._set_text_item(r, COL_CROSS_JPG, "✔" if has_jpg else "×")
+            self._set_text_item(r, COL_S2_DIR, "✔" if has_s2_dir else "×")
+            self._set_text_item(r, COL_S2_CSV, "✔" if has_s2_csv else "×")
+            self._set_text_item(r, COL_OUT31, "✔" if has31 else "×")
+            self._set_text_item(r, COL_OUT32, "✔" if has32 else "×")
+            self._set_text_item(r, COL_STATUS, "")
+            self._set_text_item(r, COL_DONE_FILES, "0")
+            self._set_text_item(r, COL_TOTAL_FILES, str(n_csv))
+            self._set_text_item(r, COL_WEEKDAY, "0")
+            self._set_text_item(r, COL_SPLIT, "0")
+            self._set_text_item(r, COL_TARGET, "0")
+            self._set_text_item(r, COL_OK, "0")
+            self._set_text_item(r, COL_UNK, "0")
+            self._set_text_item(r, COL_NOTPASS, "0")
 
             info = {
                 "cross_csv": str(csv_path),
@@ -586,7 +645,7 @@ class MainWindow(QMainWindow):
         row = self._find_row_by_name(self.current_name)
         if row is None:
             return
-        self.table.setItem(row, COL_STATUS, QTableWidgetItem(status))
+        self._set_text_item(row, COL_STATUS, status)
 
     def _extract_last_error_line(self) -> str:
         for line in reversed(self._recent_process_lines):
@@ -605,8 +664,8 @@ class MainWindow(QMainWindow):
         if progress_match:
             done = int(progress_match.group(1))
             total = int(progress_match.group(2))
-            self.table.setItem(row, COL_DONE_FILES, QTableWidgetItem(str(done)))
-            self.table.setItem(row, COL_TOTAL_FILES, QTableWidgetItem(str(total)))
+            self._set_text_item(row, COL_DONE_FILES, str(done))
+            self._set_text_item(row, COL_TOTAL_FILES, str(total))
 
         stats_match = RE_STATS.search(text)
         if stats_match:
@@ -624,12 +683,12 @@ class MainWindow(QMainWindow):
                     f"for {self.current_name}"
                 )
 
-            self.table.setItem(row, COL_WEEKDAY, QTableWidgetItem(str(weekday)))
-            self.table.setItem(row, COL_SPLIT, QTableWidgetItem(str(split)))
-            self.table.setItem(row, COL_TARGET, QTableWidgetItem(str(target)))
-            self.table.setItem(row, COL_OK, QTableWidgetItem(str(ok)))
-            self.table.setItem(row, COL_UNK, QTableWidgetItem(str(unk)))
-            self.table.setItem(row, COL_NOTPASS, QTableWidgetItem(str(notpass)))
+            self._set_text_item(row, COL_WEEKDAY, str(weekday))
+            self._set_text_item(row, COL_SPLIT, str(split))
+            self._set_text_item(row, COL_TARGET, str(target))
+            self._set_text_item(row, COL_OK, str(ok))
+            self._set_text_item(row, COL_UNK, str(unk))
+            self._set_text_item(row, COL_NOTPASS, str(notpass))
 
     def _maybe_update_realtime_from_buffer(self, buf: str) -> None:
         idx = buf.rfind("進捗:")
@@ -670,14 +729,14 @@ class MainWindow(QMainWindow):
                 f"for {self.current_name}"
             )
 
-        self.table.setItem(row, COL_DONE_FILES, QTableWidgetItem(str(total_files)))
-        self.table.setItem(row, COL_TOTAL_FILES, QTableWidgetItem(str(total_files)))
-        self.table.setItem(row, COL_WEEKDAY, QTableWidgetItem(str(weekday)))
-        self.table.setItem(row, COL_SPLIT, QTableWidgetItem(str(split)))
-        self.table.setItem(row, COL_TARGET, QTableWidgetItem(str(target)))
-        self.table.setItem(row, COL_OK, QTableWidgetItem(str(ok)))
-        self.table.setItem(row, COL_UNK, QTableWidgetItem(str(unk)))
-        self.table.setItem(row, COL_NOTPASS, QTableWidgetItem(str(notpass)))
+        self._set_text_item(row, COL_DONE_FILES, str(total_files))
+        self._set_text_item(row, COL_TOTAL_FILES, str(total_files))
+        self._set_text_item(row, COL_WEEKDAY, str(weekday))
+        self._set_text_item(row, COL_SPLIT, str(split))
+        self._set_text_item(row, COL_TARGET, str(target))
+        self._set_text_item(row, COL_OK, str(ok))
+        self._set_text_item(row, COL_UNK, str(unk))
+        self._set_text_item(row, COL_NOTPASS, str(notpass))
 
 
 
