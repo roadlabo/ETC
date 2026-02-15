@@ -1030,9 +1030,9 @@ class CrossroadReport(QMainWindow):
     def _format_date_range(start_date: date | None, end_date: date | None) -> str:
         if not start_date or not end_date:
             return ""
-        start_text = f"{start_date.year}年{start_date.month}月{start_date.day}日"
-        end_text = f"{end_date.year}年{end_date.month}月{end_date.day}日"
-        return f"({start_text}～{end_text})"
+        if start_date == end_date:
+            return start_date.strftime("%Y-%m-%d")
+        return f"{start_date.strftime('%Y-%m-%d')}～{end_date.strftime('%Y-%m-%d')}"
 
     def _write_time_table_pdf_style(
         self, ws, combos: list[dict], title_row: int, header_row: int, data_row: int
