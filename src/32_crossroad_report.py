@@ -5,49 +5,84 @@ import argparse
 from datetime import date, datetime
 from pathlib import Path
 
-# --- Force Qt binding for matplotlib to PySide6 ---
-os.environ.setdefault("QT_API", "pyside6")
-os.environ.setdefault("MPLBACKEND", "QtAgg")
-
-from PySide6.QtCore import Qt, QDate
-from PySide6.QtGui import QColor, QPixmap, QTextCharFormat
-from PySide6.QtWidgets import (
-    QListWidget,
-    QListWidgetItem,
-    QApplication,
-    QCalendarWidget,
-    QFileDialog,
-    QGridLayout,
-    QLabel,
-    QMainWindow,
-    QMessageBox,
-    QPushButton,
-    QSplitter,
-    QTableWidget,
-    QTableWidgetItem,
-    QTextEdit,
-    QVBoxLayout,
-    QWidget,
-    QHBoxLayout,
-)
+# --- detect headless/batch intent early (avoid importing PySide6) ---
+HEADLESS_BATCH = ("--project" in sys.argv)  # batch mode when project is specified
 
 import pandas as pd
-import matplotlib.font_manager as font_manager
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
+
+if not HEADLESS_BATCH:
+    # GUI mode only
+    os.environ.setdefault("QT_API", "pyside6")
+    os.environ.setdefault("MPLBACKEND", "QtAgg")
+
+    from PySide6.QtCore import Qt, QDate
+    from PySide6.QtGui import QColor, QPixmap, QTextCharFormat
+    from PySide6.QtWidgets import (
+        QListWidget,
+        QListWidgetItem,
+        QApplication,
+        QCalendarWidget,
+        QFileDialog,
+        QGridLayout,
+        QLabel,
+        QMainWindow,
+        QMessageBox,
+        QPushButton,
+        QSplitter,
+        QTableWidget,
+        QTableWidgetItem,
+        QTextEdit,
+        QVBoxLayout,
+        QWidget,
+        QHBoxLayout,
+    )
+
+    import matplotlib.font_manager as font_manager
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+    from matplotlib.figure import Figure
+else:
+    # headless batch: no Qt, no matplotlib required
+    class _DummyType:
+        pass
+
+    Qt = None
+    QDate = None
+    QColor = _DummyType
+    QPixmap = _DummyType
+    QTextCharFormat = _DummyType
+    QListWidget = _DummyType
+    QListWidgetItem = _DummyType
+    QApplication = _DummyType
+    QCalendarWidget = _DummyType
+    QFileDialog = _DummyType
+    QGridLayout = _DummyType
+    QLabel = _DummyType
+    QMainWindow = object
+    QMessageBox = _DummyType
+    QPushButton = _DummyType
+    QSplitter = _DummyType
+    QTableWidget = _DummyType
+    QTableWidgetItem = _DummyType
+    QTextEdit = _DummyType
+    QVBoxLayout = _DummyType
+    QWidget = _DummyType
+    QHBoxLayout = _DummyType
+    FigureCanvas = _DummyType
+    Figure = _DummyType
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Font, Side, Border
 from openpyxl.worksheet.page import PageMargins
 
-preferred_fonts = ["Meiryo", "Yu Gothic", "MS Gothic"]
-installed_fonts = {f.name for f in font_manager.fontManager.ttflist}
-for font_name in preferred_fonts:
-    if font_name in installed_fonts:
-        plt.rcParams["font.family"] = font_name
-        break
-plt.rcParams["axes.unicode_minus"] = False
+if not HEADLESS_BATCH:
+    preferred_fonts = ["Meiryo", "Yu Gothic", "MS Gothic"]
+    installed_fonts = {f.name for f in font_manager.fontManager.ttflist}
+    for font_name in preferred_fonts:
+        if font_name in installed_fonts:
+            plt.rcParams["font.family"] = font_name
+            break
+    plt.rcParams["axes.unicode_minus"] = False
 
 # ============================================================
 # バッチ設定（ダイアログを使わず、ここに3ファイル1組を複数書く）
@@ -172,6 +207,19 @@ def hour_to_time_bin(hour: int) -> int:
         return 7
     idx = (hour - 1) // 3
     return max(0, min(idx, 6))
+
+
+def parse_operation_date(value: str):
+    text = str(value).strip()
+    if not text:
+        return None
+    digits = re.sub(r"\D", "", text)
+    if len(digits) != 8:
+        return None
+    try:
+        return datetime.strptime(digits, "%Y%m%d").date()
+    except ValueError:
+        return None
 
 
 class CrossroadReport(QMainWindow):
@@ -369,7 +417,7 @@ class CrossroadReport(QMainWindow):
                 self._show_error(f"必要な列が見つかりません: {', '.join(missing)}")
                 return False
 
-            date_series = self.performance_df[COL_DATE].astype(str).apply(self._parse_date)
+            date_series = self.performance_df[COL_DATE].astype(str).apply(parse_operation_date)
             in_branch = pd.to_numeric(self.performance_df[COL_IN_BRANCH], errors="coerce")
             out_branch = pd.to_numeric(self.performance_df[COL_OUT_BRANCH], errors="coerce")
             time_val = pd.to_numeric(self.performance_df[COL_TIME], errors="coerce")
@@ -679,18 +727,6 @@ class CrossroadReport(QMainWindow):
             self.detail_text.setPlainText("\n".join(detail_lines))
         except Exception as exc:
             self._show_error(f"詳細表示の更新に失敗しました: {exc}")
-
-    def _parse_date(self, value: str):
-        text = str(value).strip()
-        if not text:
-            return None
-        digits = re.sub(r"\D", "", text)
-        if len(digits) != 8:
-            return None
-        try:
-            return datetime.strptime(digits, "%Y%m%d").date()
-        except ValueError:
-            return None
 
     def _load_image(self) -> None:
         if not self.image_path.exists():
@@ -1162,6 +1198,125 @@ class CrossroadReport(QMainWindow):
         return image
 
 
+class _ExcelReportHelper:
+    def __init__(
+        self,
+        crossroad_path: Path,
+        image_path: Path,
+        performance_path: Path,
+        clean_df: pd.DataFrame,
+        unique_dates: list[date],
+    ) -> None:
+        self.crossroad_path = crossroad_path
+        self.image_path = image_path
+        self.performance_path = performance_path
+        self.clean_df = clean_df
+        self.unique_dates = unique_dates
+
+    def create(self, output_xlsx: Path) -> None:
+        self._create_excel_report(output_xlsx)
+
+
+def create_excel_report_headless(
+    crossroad_csv: Path,
+    crossroad_img: Path,
+    performance_csv: Path,
+    output_xlsx: Path,
+) -> None:
+    df_perf = pd.read_csv(performance_csv, encoding="shift_jis")
+
+    encodings = ["shift_jis", "cp932", "utf-8"]
+    df_cross = None
+    for enc in encodings:
+        try:
+            df_cross = pd.read_csv(crossroad_csv, encoding=enc)
+            break
+        except Exception:
+            continue
+    if df_cross is None:
+        raise RuntimeError("交差点定義ファイルの読み込みに失敗しました。")
+
+    required_cols = [
+        COL_FILE,
+        COL_DATE,
+        COL_VTYPE,
+        COL_USE,
+        COL_IN_BRANCH,
+        COL_OUT_BRANCH,
+        COL_DIST,
+        COL_TIME,
+        COL_T0,
+        COL_DELAY,
+        COL_TIME_VALID,
+        COL_TIME_REASON,
+        COL_TIME_PRIMARY,
+        COL_TIME_FALLBACK,
+    ]
+    missing = [c for c in required_cols if c not in df_perf.columns]
+    if missing:
+        raise RuntimeError(f"必要な列が見つかりません: {', '.join(missing)}")
+
+    date_series = df_perf[COL_DATE].astype(str).apply(parse_operation_date)
+    in_branch = pd.to_numeric(df_perf[COL_IN_BRANCH], errors="coerce")
+    out_branch = pd.to_numeric(df_perf[COL_OUT_BRANCH], errors="coerce")
+    time_val = pd.to_numeric(df_perf[COL_TIME], errors="coerce")
+    t0_val = pd.to_numeric(df_perf[COL_T0], errors="coerce")
+    delay_val = pd.to_numeric(df_perf[COL_DELAY], errors="coerce")
+    time_valid = pd.to_numeric(df_perf[COL_TIME_VALID], errors="coerce")
+
+    t_primary = df_perf[COL_TIME_FALLBACK].fillna("").astype(str).str.strip()
+    t_fallback = df_perf[COL_TIME_PRIMARY].fillna("").astype(str).str.strip()
+    time_series = t_primary.where(t_primary != "", t_fallback)
+
+    data = pd.DataFrame(
+        {
+            "date": date_series,
+            "in_b": in_branch,
+            "out_b": out_branch,
+            "time_s": time_val,
+            "t0_s": t0_val,
+            "delay_s": delay_val,
+            "time_valid": time_valid,
+            "time": time_series,
+        }
+    ).dropna(subset=["date", "in_b", "out_b"])
+
+    data["time_valid"] = data["time_valid"].fillna(0).astype(int)
+    data["in_b"] = data["in_b"].astype(int)
+    data["out_b"] = data["out_b"].astype(int)
+    unique_dates = sorted({d for d in data["date"]})
+
+    helper = _ExcelReportHelper(
+        crossroad_path=crossroad_csv,
+        image_path=crossroad_img,
+        performance_path=performance_csv,
+        clean_df=data,
+        unique_dates=unique_dates,
+    )
+    helper.crossroad_df = df_cross
+    helper.create(output_xlsx)
+
+
+for _name in [
+    "_create_excel_report",
+    "_configure_report_sheet",
+    "_collect_combination_data",
+    "_calc_delay_per_day_counts",
+    "_calc_time_per_day_counts",
+    "_populate_delay_data_sheet",
+    "_populate_time_data_sheet",
+    "_populate_report_sheet",
+    "_write_summary_block",
+    "_format_date_range",
+    "_write_time_table_pdf_style",
+    "_write_delay_table_pdf_style",
+    "apply_table_borders",
+    "_apply_row_bottom_border",
+    "_create_resized_image",
+]:
+    setattr(_ExcelReportHelper, _name, getattr(CrossroadReport, _name))
+
+
 def pick_three_files() -> tuple[Path, Path, Path] | None:
     while True:
         csv_path, _ = QFileDialog.getOpenFileName(
@@ -1194,7 +1349,7 @@ def pick_three_files() -> tuple[Path, Path, Path] | None:
         return Path(csv_path), Path(img_path), Path(perf_path)
 
 
-def run_batch(app: QApplication, jobs: list[dict]) -> None:
+def run_batch(jobs: list[dict]) -> None:
     global BATCH_MODE_ACTIVE
     BATCH_MODE_ACTIVE = True
 
@@ -1229,16 +1384,8 @@ def run_batch(app: QApplication, jobs: list[dict]) -> None:
 
             output_xlsx.parent.mkdir(parents=True, exist_ok=True)
 
-            report = CrossroadReport(crossroad_csv, crossroad_img, performance_csv)
-
-            if report.clean_df.empty:
-                print("  [SKIP] no usable records (clean_df is empty)")
-            else:
-                report._create_excel_report(output_xlsx)
-                print("  [OK] saved excel")
-
-            report.close()
-            app.processEvents()
+            create_excel_report_headless(crossroad_csv, crossroad_img, performance_csv, output_xlsx)
+            print("  [OK] saved excel")
 
         except Exception as exc:
             print(f"  [ERROR] batch job failed: {exc}")
@@ -1246,7 +1393,7 @@ def run_batch(app: QApplication, jobs: list[dict]) -> None:
 
     print("\n=== batch finished ===")
     BATCH_MODE_ACTIVE = False
-    app.quit()
+
 
 
 def _list_crossroad_names(cross_dir: Path) -> list[str]:
@@ -1293,16 +1440,17 @@ def main() -> None:
     parser.add_argument("--targets", nargs="*", help="交差点名（stem）")
     args = parser.parse_args()
 
-    app = QApplication(sys.argv)
     if args.project:
         jobs = build_jobs_from_project(Path(args.project).resolve(), args.targets)
-        run_batch(app, jobs)
+        run_batch(jobs)
         sys.exit(0)
 
     # バッチ優先：BATCH_JOBS があればダイアログ無しで順次処理して終了
     if BATCH_JOBS:
-        run_batch(app, BATCH_JOBS)
+        run_batch(BATCH_JOBS)
         sys.exit(0)
+
+    app = QApplication(sys.argv)
 
     # 従来GUI：ダイアログで3ファイルを選択
     picked = pick_three_files()
