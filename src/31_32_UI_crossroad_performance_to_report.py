@@ -453,14 +453,27 @@ class MainWindow(QMainWindow):
             info = info or {}
             cross_csv = info.get("cross_csv", "")
             s2_dir = info.get("s2_dir", "")
-            log_line = f"[INFO] map: {self.current_name} | cross={cross_csv} | s2={s2_dir}"
+            # --- [INFO] 表示（ユーザー向けに分かりやすい1行） ---
+            cross_file = Path(cross_csv).name if cross_csv else ""
+            map_img = self.current_name
+            if not map_img.lower().endswith(".jpg"):
+                map_img = f"{map_img}.jpg"
+
+            n_csv = 0
             try:
                 s2 = Path(s2_dir)
                 n_csv = len(list(s2.glob("*.csv"))) if s2.exists() else 0
-                log_line = f"{log_line} | s2_csv_count={n_csv}"
             except Exception:
-                pass
+                n_csv = 0
+
+            log_line = (
+                f"[INFO] 地図画像：{map_img}"
+                f"｜交差点ファイル：{cross_file}"
+                f"｜第2スクリーニング後CSVフォルダ：{s2_dir}"
+                f"｜第2スクリーニングファイル数：{n_csv:,}"
+            )
             self._log(log_line)
+            # --- end ---
 
         self._start_step31(self.current_name)
 
