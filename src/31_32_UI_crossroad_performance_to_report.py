@@ -5,8 +5,8 @@ from pathlib import Path
 
 os.environ.setdefault("QT_LOGGING_RULES", "qt.text.font.db=false")
 
-from PyQt6.QtCore import Qt, QProcess
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, QProcess, QRect, pyqtSignal
+from PyQt6.QtGui import QFont, QPainter
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -22,6 +22,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QHeaderView,
+    QStyle,
+    QStyleOptionButton,
 )
 
 APP_TITLE = "31+32 交差点performance→report（一括実行）"
@@ -95,6 +97,75 @@ RE_DONE = re.compile(
     r"不明=(\d+).*?"
     r"不通過=(\d+)"
 )
+
+
+class RunHeaderView(QHeaderView):
+    toggle_all_requested = pyqtSignal(bool)  # True=check all, False=uncheck all
+
+    def __init__(self, orientation, parent=None, run_col=0):
+        super().__init__(orientation, parent)
+        self.run_col = run_col
+        self._state = Qt.CheckState.Unchecked
+        self.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setSectionsClickable(True)
+
+    def set_run_state(self, state: Qt.CheckState):
+        self._state = state
+        self.viewport().update()
+
+    def _checkbox_rect(self, rect: QRect) -> QRect:
+        cb_w = 16
+        cb_h = 16
+        x = rect.center().x() - (cb_w // 2) - 18
+        y = rect.center().y() + 6
+        return QRect(x, y, cb_w, cb_h)
+
+    def paintSection(self, painter: QPainter, rect: QRect, logicalIndex: int):
+        super().paintSection(painter, rect, logicalIndex)
+
+        if logicalIndex != self.run_col:
+            return
+
+        painter.save()
+        painter.drawText(rect.adjusted(2, 2, -2, -2), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, "分析対象")
+
+        opt = QStyleOptionButton()
+        opt.state = QStyle.StateFlag.State_Enabled
+        if self._state == Qt.CheckState.Checked:
+            opt.state |= QStyle.StateFlag.State_On
+        elif self._state == Qt.CheckState.PartiallyChecked:
+            opt.state |= QStyle.StateFlag.State_NoChange
+        else:
+            opt.state |= QStyle.StateFlag.State_Off
+
+        cb_rect = self._checkbox_rect(rect)
+        opt.rect = cb_rect
+        self.style().drawControl(QStyle.ControlElement.CE_CheckBox, opt, painter, self)
+
+        all_rect = QRect(
+            cb_rect.right() + 4,
+            cb_rect.top() - 1,
+            rect.right() - cb_rect.right() - 6,
+            cb_rect.height() + 2,
+        )
+        painter.drawText(all_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "ALL")
+        painter.restore()
+
+    def _section_rect(self, logical_index: int) -> QRect:
+        x = self.sectionViewportPosition(logical_index)
+        return QRect(x, 0, self.sectionSize(logical_index), self.height())
+
+    def mousePressEvent(self, event):
+        pos = event.pos()
+        idx = self.logicalIndexAt(pos)
+        if idx == self.run_col:
+            sec_rect = self._section_rect(idx)
+            if self._checkbox_rect(sec_rect).contains(pos) or sec_rect.contains(pos):
+                request_check = self._state != Qt.CheckState.Checked
+                self.toggle_all_requested.emit(request_check)
+                event.accept()
+                return
+        super().mousePressEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -174,18 +245,18 @@ class MainWindow(QMainWindow):
         self.table.setColumnCount(17)
         self.table.setHorizontalHeaderLabels(
             [
-                "✅ALL",
+                "",
                 "交差点名",
-                "cross.csv",
-                "cross.jpg",
-                "第2スクリーニング\n（フォルダ）",
-                "第2スクリーニング\n（CSV）",
+                "交差点CSV",
+                "交差点jpg",
+                "第2スクリーニング\n(フォルダ)",
+                "第2スクリーニング\n(CSV)",
                 "出力\n(performance.csv)",
                 "出力\n(report)",
                 "状態",
-                "分析済ファイル",
-                "対象ファイル",
-                "曜日フィルター後",
+                "分析済み\nファイル数",
+                "対象\nファイル数",
+                "曜日フィルター後\nファイル数",
                 "トリップ分割数",
                 "対象トリップ数",
                 "枝判定成功",
@@ -193,11 +264,14 @@ class MainWindow(QMainWindow):
                 "交差点不通過",
             ]
         )
+        run_header = RunHeaderView(Qt.Orientation.Horizontal, self.table, run_col=COL_RUN)
+        self.table.setHorizontalHeader(run_header)
+        run_header.toggle_all_requested.connect(self._toggle_all_runs_from_header)
+        self._run_header = run_header
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.setStretchLastSection(False)
-        header.sectionClicked.connect(self._on_header_clicked)
+        header.setMinimumSectionSize(80)
         self.table.setWordWrap(True)
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
@@ -348,28 +422,46 @@ class MainWindow(QMainWindow):
         self.table.setItem(row, column, item)
 
     def _set_run_item(self, row: int, checked: bool) -> None:
-        item = QTableWidgetItem("")
-        item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-        item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
-        item.setTextAlignment(self._column_alignment(COL_RUN))
-        self.table.setItem(row, COL_RUN, item)
+        cb = QCheckBox()
+        cb.setChecked(checked)
+        cb.stateChanged.connect(self._sync_run_header_state)
 
-    def _on_header_clicked(self, index: int) -> None:
-        if index != COL_RUN:
-            return
+        cell = QWidget()
+        lay = QHBoxLayout(cell)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(cb)
+        self.table.setCellWidget(row, COL_RUN, cell)
 
-        all_checked = True
+    def _toggle_all_runs_from_header(self, check_all: bool):
         for row in range(self.table.rowCount()):
-            item = self.table.item(row, COL_RUN)
-            if not item or item.checkState() != Qt.CheckState.Checked:
-                all_checked = False
-                break
+            cell = self.table.cellWidget(row, COL_RUN)
+            cb = cell.findChild(QCheckBox) if cell else None
+            if cb:
+                cb.setChecked(check_all)
+        self._sync_run_header_state()
 
-        new_state = Qt.CheckState.Unchecked if all_checked else Qt.CheckState.Checked
+    def _sync_run_header_state(self):
+        total = 0
+        checked = 0
         for row in range(self.table.rowCount()):
-            item = self.table.item(row, COL_RUN)
-            if item:
-                item.setCheckState(new_state)
+            cell = self.table.cellWidget(row, COL_RUN)
+            cb = cell.findChild(QCheckBox) if cell else None
+            if not cb:
+                continue
+            total += 1
+            if cb.isChecked():
+                checked += 1
+
+        if total == 0 or checked == 0:
+            state = Qt.CheckState.Unchecked
+        elif checked == total:
+            state = Qt.CheckState.Checked
+        else:
+            state = Qt.CheckState.PartiallyChecked
+
+        if hasattr(self, "_run_header"):
+            self._run_header.set_run_state(state)
 
     def _selected_weekdays_for_cli(self) -> list[str]:
         if self.chk_all.isChecked():
@@ -468,13 +560,15 @@ class MainWindow(QMainWindow):
         self._log(f"[INFO] scanned: {len(csvs)} crossroads")
         self._log(f"[INFO] s2 total csv files: {sum_s2_csv}")
         self._log(f"[INFO] s2 avg per cross: {sum_s2_csv / len(csvs):.1f}")
+        self._sync_run_header_state()
 
     def _collect_targets(self) -> list[str]:
         targets: list[str] = []
         for r in range(self.table.rowCount()):
-            chk = self.table.item(r, COL_RUN)
+            cell = self.table.cellWidget(r, COL_RUN)
+            chk = cell.findChild(QCheckBox) if cell else None
             name_item = self.table.item(r, COL_NAME)
-            if chk and name_item and chk.checkState() == Qt.CheckState.Checked:
+            if chk and name_item and chk.isChecked():
                 targets.append(name_item.text())
         return targets
 
