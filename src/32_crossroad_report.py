@@ -1349,12 +1349,16 @@ def pick_three_files() -> tuple[Path, Path, Path] | None:
         return Path(csv_path), Path(img_path), Path(perf_path)
 
 
-def run_batch(jobs: list[dict]) -> None:
+def run_batch(jobs: list[dict]) -> int:
     global BATCH_MODE_ACTIVE
     BATCH_MODE_ACTIVE = True
 
     print("=== 32_crossroad_report (batch mode) ===")
     print(f"jobs: {len(jobs)}")
+
+    ok = 0
+    skipped = 0
+    failed = 0
 
     for idx, job in enumerate(jobs, start=1):
         try:
@@ -1380,19 +1384,34 @@ def run_batch(jobs: list[dict]) -> None:
                 print("  [SKIP] missing files:")
                 for m in missing:
                     print(f"    - {m}")
+                skipped += 1
                 continue
 
             output_xlsx.parent.mkdir(parents=True, exist_ok=True)
 
             create_excel_report_headless(crossroad_csv, crossroad_img, performance_csv, output_xlsx)
             print("  [OK] saved excel")
+            ok += 1
 
         except Exception as exc:
             print(f"  [ERROR] batch job failed: {exc}")
+            failed += 1
             continue
 
     print("\n=== batch finished ===")
+    print(f"summary: ok={ok}, skipped={skipped}, failed={failed}, jobs={len(jobs)}")
     BATCH_MODE_ACTIVE = False
+
+    if len(jobs) == 0:
+        print("[ERROR] no jobs to process")
+        return 2
+    if failed > 0:
+        print("[ERROR] batch finished with failures")
+        return 1
+    if ok == 0:
+        print("[ERROR] batch finished with no successful reports")
+        return 1
+    return 0
 
 
 
@@ -1442,13 +1461,13 @@ def main() -> None:
 
     if args.project:
         jobs = build_jobs_from_project(Path(args.project).resolve(), args.targets)
-        run_batch(jobs)
-        sys.exit(0)
+        code = run_batch(jobs)
+        sys.exit(code)
 
     # バッチ優先：BATCH_JOBS があればダイアログ無しで順次処理して終了
     if BATCH_JOBS:
-        run_batch(BATCH_JOBS)
-        sys.exit(0)
+        code = run_batch(BATCH_JOBS)
+        sys.exit(code)
 
     app = QApplication(sys.argv)
 
