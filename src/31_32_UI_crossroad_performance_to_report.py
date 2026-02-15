@@ -677,19 +677,26 @@ class MainWindow(QMainWindow):
         self._stdout_buf = ""
         self._stderr_buf = ""
         self._recent_process_lines = []
-        self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
         self.proc.setProgram(sys.executable)
         self.proc.setArguments(["-u", *args])
-        self.proc.readyReadStandardOutput.connect(self._on_proc_output)
+        self.proc.readyReadStandardOutput.connect(self._on_proc_stdout)
+        self.proc.readyReadStandardError.connect(self._on_proc_stderr)
         self.proc.errorOccurred.connect(self._on_proc_error)
         self.proc.finished.connect(self._on_finished)
         self.proc.start()
 
-    def _on_proc_output(self) -> None:
+    def _on_proc_stdout(self) -> None:
         if not self.proc:
             return
-        chunk = bytes(self.proc.readAllStandardOutput()).decode("utf-8", errors="replace")
+        chunk = self._decode_qbytearray(self.proc.readAllStandardOutput())
         self._append_stream_chunk(chunk, is_err=False)
+
+    def _on_proc_stderr(self) -> None:
+        if not self.proc:
+            return
+        chunk = self._decode_qbytearray(self.proc.readAllStandardError())
+        self._append_stream_chunk(chunk, is_err=True)
 
     def _on_proc_error(self, err) -> None:
         if not self.proc:
