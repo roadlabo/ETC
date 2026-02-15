@@ -54,14 +54,10 @@ COL_DONE_FILES = 9
 COL_TOTAL_FILES = 10
 COL_HIT = 11
 COL_NOPASS = 12
-COL_NG_DETAIL = 13
 
-_RE_PROGRESS = re.compile(r"進捗:\s*(\d+)\s*/\s*(\d+)")
-_RE_STATS = re.compile(r"HIT:\s*(\d+).*?該当なし:\s*(\d+)")
-_RE_DONE = re.compile(
-    r"完了:\s*ファイル=(\d+).*?HIT=(\d+).*?該当なし=(\d+).*?"
-    r"所要時間NG\(時刻欠損\)=(\d+).*?所要時間NG\(区間範囲外\)=(\d+).*?所要時間NG\(線分取得不可\)=(\d+)"
-)
+RE_PROGRESS = re.compile(r"進捗:\s*(\d+)\s*/\s*(\d+)")
+RE_STATS = re.compile(r"HIT:\s*(\d+).*?該当なし:\s*(\d+)")
+RE_DONE = re.compile(r"完了:\s*ファイル=(\d+).*?HIT=(\d+).*?該当なし=(\d+)")
 
 
 class MainWindow(QMainWindow):
@@ -135,8 +131,8 @@ class MainWindow(QMainWindow):
         self.lbl_project = QLabel("Project: (未選択)")
         v.addWidget(self.lbl_project)
 
-        self.table = QTableWidget(0, 14)
-        self.table.setColumnCount(14)
+        self.table = QTableWidget(0, 13)
+        self.table.setColumnCount(13)
         self.table.setHorizontalHeaderLabels(
             [
                 "実行",
@@ -152,7 +148,6 @@ class MainWindow(QMainWindow):
                 "対象ファイル",
                 "HIT",
                 "該当なし",
-                "NG(欠損/範囲外/線分不可)",
             ]
         )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -235,8 +230,10 @@ class MainWindow(QMainWindow):
 
         if is_err:
             self._stderr_buf = buf[start:]
+            self._maybe_update_realtime_from_buffer(self._stderr_buf)
         else:
             self._stdout_buf = buf[start:]
+            self._maybe_update_realtime_from_buffer(self._stdout_buf)
 
     def _flush_process_buffers(self) -> None:
         if self._stdout_buf:
@@ -360,11 +357,10 @@ class MainWindow(QMainWindow):
             self.table.setItem(r, COL_OUT31, QTableWidgetItem("✔" if has31 else "×"))
             self.table.setItem(r, COL_OUT32, QTableWidgetItem("✔" if has32 else "×"))
             self.table.setItem(r, COL_STATUS, QTableWidgetItem(""))
-            self.table.setItem(r, COL_DONE_FILES, QTableWidgetItem(""))
-            self.table.setItem(r, COL_TOTAL_FILES, QTableWidgetItem(""))
-            self.table.setItem(r, COL_HIT, QTableWidgetItem(""))
-            self.table.setItem(r, COL_NOPASS, QTableWidgetItem(""))
-            self.table.setItem(r, COL_NG_DETAIL, QTableWidgetItem(""))
+            self.table.setItem(r, COL_DONE_FILES, QTableWidgetItem("0"))
+            self.table.setItem(r, COL_TOTAL_FILES, QTableWidgetItem("0"))
+            self.table.setItem(r, COL_HIT, QTableWidgetItem("0"))
+            self.table.setItem(r, COL_NOPASS, QTableWidgetItem("0"))
 
             info = {
                 "cross_csv": str(csv_path),
@@ -413,7 +409,9 @@ class MainWindow(QMainWindow):
     def _start_next_crossroad(self) -> None:
         if not self.queue:
             self._log("[INFO] 全件処理完了")
-            self.scan_crossroads()
+            self.current_name = None
+            self.current_step = ""
+            self.lbl_progress.setText("")
             self._set_run_controls_enabled(True)
             return
 
@@ -426,14 +424,16 @@ class MainWindow(QMainWindow):
             name_item = self.table.item(row, COL_NAME)
             info = name_item.data(Qt.ItemDataRole.UserRole) if name_item else {}
             info = info or {}
-            self._log(f"[INFO] cross_csv: {info.get('cross_csv', '')}")
-            self._log(f"[INFO] s2_dir  : {info.get('s2_dir', '')}")
+            cross_csv = info.get("cross_csv", "")
+            s2_dir = info.get("s2_dir", "")
+            log_line = f"[INFO] map: {self.current_name} | cross={cross_csv} | s2={s2_dir}"
             try:
-                s2 = Path(info.get("s2_dir", ""))
+                s2 = Path(s2_dir)
                 n_csv = len(list(s2.glob("*.csv"))) if s2.exists() else 0
-                self._log(f"[INFO] s2_csv_count: {n_csv}")
+                log_line = f"{log_line} | s2_csv_count={n_csv}"
             except Exception:
                 pass
+            self._log(log_line)
 
         self._start_step31(self.current_name)
 
@@ -510,7 +510,6 @@ class MainWindow(QMainWindow):
             return
 
         if self.current_step == "31":
-            self._apply_31_summary_to_current_row()
             self._set_status_for_current_row("31 OK")
             self.current_step = "32"
             self._start_step32(self.current_name)
@@ -545,37 +544,6 @@ class MainWindow(QMainWindow):
                 return line
         return ""
 
-    def _apply_31_summary_to_current_row(self) -> None:
-        if self.current_name is None:
-            return
-        row = self._find_row_by_name(self.current_name)
-        if row is None:
-            return
-
-        summary_line = ""
-        for line in reversed(self._recent_process_lines):
-            if "[SUMMARY31]" in line or "完了:" in line:
-                summary_line = line
-                break
-        if not summary_line:
-            return
-
-        trip = self._extract_summary_value(summary_line, "対象トリップ")
-        hit = self._extract_summary_value(summary_line, "HIT")
-        nopass = self._extract_summary_value(summary_line, "該当なし")
-        ng_missing = self._extract_summary_value(summary_line, "所要時間NG(時刻欠損)")
-        ng_range = self._extract_summary_value(summary_line, "所要時間NG(区間範囲外)")
-        ng_segment = self._extract_summary_value(summary_line, "所要時間NG(線分取得不可)")
-
-        ng_total = ""
-        if all(v != "" for v in (ng_missing, ng_range, ng_segment)):
-            ng_total = str(int(ng_missing) + int(ng_range) + int(ng_segment))
-
-        self.table.setItem(row, COL_TOTAL_FILES, QTableWidgetItem(trip))
-        self.table.setItem(row, COL_HIT, QTableWidgetItem(hit))
-        self.table.setItem(row, COL_NOPASS, QTableWidgetItem(nopass))
-        self.table.setItem(row, COL_NG_DETAIL, QTableWidgetItem(ng_total))
-
     def _update_table_progress(self, text: str) -> None:
         if not self.current_name:
             return
@@ -583,19 +551,28 @@ class MainWindow(QMainWindow):
         if row < 0:
             return
 
-        progress_match = _RE_PROGRESS.search(text)
+        progress_match = RE_PROGRESS.search(text)
         if progress_match:
             done = int(progress_match.group(1))
             total = int(progress_match.group(2))
             self.table.setItem(row, COL_DONE_FILES, QTableWidgetItem(str(done)))
             self.table.setItem(row, COL_TOTAL_FILES, QTableWidgetItem(str(total)))
 
-        stats_match = _RE_STATS.search(text)
+        stats_match = RE_STATS.search(text)
         if stats_match:
             hit = int(stats_match.group(1))
             nop = int(stats_match.group(2))
             self.table.setItem(row, COL_HIT, QTableWidgetItem(str(hit)))
             self.table.setItem(row, COL_NOPASS, QTableWidgetItem(str(nop)))
+
+    def _maybe_update_realtime_from_buffer(self, buf: str) -> None:
+        if "進捗:" not in buf:
+            return
+        tail = buf[buf.rfind("進捗:") :].strip()
+        if not tail:
+            return
+        self.lbl_progress.setText(tail)
+        self._update_table_progress(tail)
 
     def _apply_done_summary(self, text: str) -> None:
         if not self.current_name:
@@ -604,30 +581,18 @@ class MainWindow(QMainWindow):
         if row < 0:
             return
 
-        match = _RE_DONE.search(text)
+        match = RE_DONE.search(text)
         if not match:
             return
 
         total_files = int(match.group(1))
         hit = int(match.group(2))
         nop = int(match.group(3))
-        bad = int(match.group(4))
-        oor = int(match.group(5))
-        nos = int(match.group(6))
 
+        self.table.setItem(row, COL_DONE_FILES, QTableWidgetItem(str(total_files)))
         self.table.setItem(row, COL_TOTAL_FILES, QTableWidgetItem(str(total_files)))
         self.table.setItem(row, COL_HIT, QTableWidgetItem(str(hit)))
         self.table.setItem(row, COL_NOPASS, QTableWidgetItem(str(nop)))
-        self.table.setItem(row, COL_NG_DETAIL, QTableWidgetItem(f"{bad}/{oor}/{nos}"))
-
-    def _extract_summary_value(self, line: str, key: str) -> str:
-        m = re.search(rf"{re.escape(key)}\s*=\s*(\d+)", line)
-        if m:
-            return m.group(1)
-        m = re.search(rf"{re.escape(key)}\s*[:：]\s*(\d+)", line)
-        if m:
-            return m.group(1)
-        return ""
 
 
 
