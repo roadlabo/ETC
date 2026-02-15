@@ -52,12 +52,25 @@ COL_OUT32 = 7
 COL_STATUS = 8
 COL_DONE_FILES = 9
 COL_TOTAL_FILES = 10
-COL_HIT = 11
-COL_NOPASS = 12
+COL_TRIPS_AFTER_DOW = 11
+COL_BRANCH_OK = 12
+COL_BRANCH_UNKNOWN = 13
+COL_CROSS_NOTPASS = 14
 
 RE_PROGRESS = re.compile(r"進捗:\s*(\d+)\s*/\s*(\d+)")
-RE_STATS = re.compile(r"HIT:\s*(\d+).*?該当なし:\s*(\d+)")
-RE_DONE = re.compile(r"完了:\s*ファイル=(\d+).*?HIT=(\d+).*?該当なし=(\d+)")
+RE_STATS = re.compile(
+    r"対象トリップ:\s*(\d+).*?"
+    r"枝判定成功:\s*(\d+).*?"
+    r"枝不明:\s*(\d+).*?"
+    r"交差点不通過:\s*(\d+)"
+)
+RE_DONE = re.compile(
+    r"完了:\s*ファイル=(\d+).*?"
+    r"対象トリップ=(\d+).*?"
+    r"枝判定成功=(\d+).*?"
+    r"枝不明=(\d+).*?"
+    r"交差点不通過=(\d+)"
+)
 
 
 class MainWindow(QMainWindow):
@@ -133,8 +146,8 @@ class MainWindow(QMainWindow):
         self.lbl_summary = QLabel("")
         v.addWidget(self.lbl_summary)
 
-        self.table = QTableWidget(0, 13)
-        self.table.setColumnCount(13)
+        self.table = QTableWidget(0, 15)
+        self.table.setColumnCount(15)
         self.table.setHorizontalHeaderLabels(
             [
                 "実行",
@@ -148,8 +161,10 @@ class MainWindow(QMainWindow):
                 "状態",
                 "分析済ファイル",
                 "対象ファイル",
-                "HIT",
-                "該当なし",
+                "曜日フィルター後(トリップ)",
+                "枝判定成功",
+                "枝不明",
+                "交差点不通過",
             ]
         )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -366,8 +381,10 @@ class MainWindow(QMainWindow):
             self.table.setItem(r, COL_STATUS, QTableWidgetItem(""))
             self.table.setItem(r, COL_DONE_FILES, QTableWidgetItem("0"))
             self.table.setItem(r, COL_TOTAL_FILES, QTableWidgetItem(str(n_csv)))
-            self.table.setItem(r, COL_HIT, QTableWidgetItem("0"))
-            self.table.setItem(r, COL_NOPASS, QTableWidgetItem("0"))
+            self.table.setItem(r, COL_TRIPS_AFTER_DOW, QTableWidgetItem("0"))
+            self.table.setItem(r, COL_BRANCH_OK, QTableWidgetItem("0"))
+            self.table.setItem(r, COL_BRANCH_UNKNOWN, QTableWidgetItem("0"))
+            self.table.setItem(r, COL_CROSS_NOTPASS, QTableWidgetItem("0"))
 
             info = {
                 "cross_csv": str(csv_path),
@@ -572,10 +589,14 @@ class MainWindow(QMainWindow):
 
         stats_match = RE_STATS.search(text)
         if stats_match:
-            hit = int(stats_match.group(1))
-            nop = int(stats_match.group(2))
-            self.table.setItem(row, COL_HIT, QTableWidgetItem(str(hit)))
-            self.table.setItem(row, COL_NOPASS, QTableWidgetItem(str(nop)))
+            total_trips = int(stats_match.group(1))
+            branch_ok = int(stats_match.group(2))
+            branch_unknown = int(stats_match.group(3))
+            cross_notpass = int(stats_match.group(4))
+            self.table.setItem(row, COL_TRIPS_AFTER_DOW, QTableWidgetItem(str(total_trips)))
+            self.table.setItem(row, COL_BRANCH_OK, QTableWidgetItem(str(branch_ok)))
+            self.table.setItem(row, COL_BRANCH_UNKNOWN, QTableWidgetItem(str(branch_unknown)))
+            self.table.setItem(row, COL_CROSS_NOTPASS, QTableWidgetItem(str(cross_notpass)))
 
     def _maybe_update_realtime_from_buffer(self, buf: str) -> None:
         idx = buf.rfind("進捗:")
@@ -602,13 +623,17 @@ class MainWindow(QMainWindow):
             return
 
         total_files = int(match.group(1))
-        hit = int(match.group(2))
-        nop = int(match.group(3))
+        total_trips = int(match.group(2))
+        branch_ok = int(match.group(3))
+        branch_unknown = int(match.group(4))
+        cross_notpass = int(match.group(5))
 
         self.table.setItem(row, COL_DONE_FILES, QTableWidgetItem(str(total_files)))
         self.table.setItem(row, COL_TOTAL_FILES, QTableWidgetItem(str(total_files)))
-        self.table.setItem(row, COL_HIT, QTableWidgetItem(str(hit)))
-        self.table.setItem(row, COL_NOPASS, QTableWidgetItem(str(nop)))
+        self.table.setItem(row, COL_TRIPS_AFTER_DOW, QTableWidgetItem(str(total_trips)))
+        self.table.setItem(row, COL_BRANCH_OK, QTableWidgetItem(str(branch_ok)))
+        self.table.setItem(row, COL_BRANCH_UNKNOWN, QTableWidgetItem(str(branch_unknown)))
+        self.table.setItem(row, COL_CROSS_NOTPASS, QTableWidgetItem(str(cross_notpass)))
 
 
 
