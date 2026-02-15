@@ -52,24 +52,28 @@ COL_OUT32 = 7
 COL_STATUS = 8
 COL_DONE_FILES = 9
 COL_TOTAL_FILES = 10
-COL_TRIPS_AFTER_DOW = 11
-COL_BRANCH_OK = 12
-COL_BRANCH_UNKNOWN = 13
-COL_CROSS_NOTPASS = 14
+COL_WEEKDAY = 11
+COL_SPLIT = 12
+COL_TARGET = 13
+COL_OK = 14
+COL_UNK = 15
+COL_NOTPASS = 16
 
 RE_PROGRESS = re.compile(r"進捗:\s*(\d+)\s*/\s*(\d+)")
 RE_STATS = re.compile(
-    r"対象トリップ:\s*(\d+).*?"
-    r"枝判定成功:\s*(\d+).*?"
-    r"枝不明:\s*(\d+).*?"
-    r"交差点不通過:\s*(\d+)"
+    r"曜日後:\s*(\d+).*?"
+    r"行数:\s*(\d+).*?"
+    r"成功:\s*(\d+).*?"
+    r"不明:\s*(\d+).*?"
+    r"不通過:\s*(\d+)"
 )
 RE_DONE = re.compile(
     r"完了:\s*ファイル=(\d+).*?"
-    r"対象トリップ=(\d+).*?"
-    r"枝判定成功=(\d+).*?"
-    r"枝不明=(\d+).*?"
-    r"交差点不通過=(\d+)"
+    r"曜日後=(\d+).*?"
+    r"行数=(\d+).*?"
+    r"成功=(\d+).*?"
+    r"不明=(\d+).*?"
+    r"不通過=(\d+)"
 )
 
 
@@ -146,8 +150,8 @@ class MainWindow(QMainWindow):
         self.lbl_summary = QLabel("")
         v.addWidget(self.lbl_summary)
 
-        self.table = QTableWidget(0, 15)
-        self.table.setColumnCount(15)
+        self.table = QTableWidget(0, 17)
+        self.table.setColumnCount(17)
         self.table.setHorizontalHeaderLabels(
             [
                 "実行",
@@ -161,7 +165,9 @@ class MainWindow(QMainWindow):
                 "状態",
                 "分析済ファイル",
                 "対象ファイル",
-                "曜日フィルター後(トリップ)",
+                "曜日フィルター後",
+                "トリップ分割数",
+                "対象トリップ数",
                 "枝判定成功",
                 "枝不明",
                 "交差点不通過",
@@ -381,10 +387,12 @@ class MainWindow(QMainWindow):
             self.table.setItem(r, COL_STATUS, QTableWidgetItem(""))
             self.table.setItem(r, COL_DONE_FILES, QTableWidgetItem("0"))
             self.table.setItem(r, COL_TOTAL_FILES, QTableWidgetItem(str(n_csv)))
-            self.table.setItem(r, COL_TRIPS_AFTER_DOW, QTableWidgetItem("0"))
-            self.table.setItem(r, COL_BRANCH_OK, QTableWidgetItem("0"))
-            self.table.setItem(r, COL_BRANCH_UNKNOWN, QTableWidgetItem("0"))
-            self.table.setItem(r, COL_CROSS_NOTPASS, QTableWidgetItem("0"))
+            self.table.setItem(r, COL_WEEKDAY, QTableWidgetItem("0"))
+            self.table.setItem(r, COL_SPLIT, QTableWidgetItem("0"))
+            self.table.setItem(r, COL_TARGET, QTableWidgetItem("0"))
+            self.table.setItem(r, COL_OK, QTableWidgetItem("0"))
+            self.table.setItem(r, COL_UNK, QTableWidgetItem("0"))
+            self.table.setItem(r, COL_NOTPASS, QTableWidgetItem("0"))
 
             info = {
                 "cross_csv": str(csv_path),
@@ -602,14 +610,26 @@ class MainWindow(QMainWindow):
 
         stats_match = RE_STATS.search(text)
         if stats_match:
-            total_trips = int(stats_match.group(1))
-            branch_ok = int(stats_match.group(2))
-            branch_unknown = int(stats_match.group(3))
-            cross_notpass = int(stats_match.group(4))
-            self.table.setItem(row, COL_TRIPS_AFTER_DOW, QTableWidgetItem(str(total_trips)))
-            self.table.setItem(row, COL_BRANCH_OK, QTableWidgetItem(str(branch_ok)))
-            self.table.setItem(row, COL_BRANCH_UNKNOWN, QTableWidgetItem(str(branch_unknown)))
-            self.table.setItem(row, COL_CROSS_NOTPASS, QTableWidgetItem(str(cross_notpass)))
+            weekday = int(stats_match.group(1))
+            rows = int(stats_match.group(2))
+            ok = int(stats_match.group(3))
+            unk = int(stats_match.group(4))
+            notpass = int(stats_match.group(5))
+            target = rows + notpass
+            split = rows + notpass - weekday
+
+            if ok + unk != rows:
+                self._log(
+                    f"[WARN] rows mismatch: ok({ok}) + unk({unk}) != rows({rows}) "
+                    f"for {self.current_name}"
+                )
+
+            self.table.setItem(row, COL_WEEKDAY, QTableWidgetItem(str(weekday)))
+            self.table.setItem(row, COL_SPLIT, QTableWidgetItem(str(split)))
+            self.table.setItem(row, COL_TARGET, QTableWidgetItem(str(target)))
+            self.table.setItem(row, COL_OK, QTableWidgetItem(str(ok)))
+            self.table.setItem(row, COL_UNK, QTableWidgetItem(str(unk)))
+            self.table.setItem(row, COL_NOTPASS, QTableWidgetItem(str(notpass)))
 
     def _maybe_update_realtime_from_buffer(self, buf: str) -> None:
         idx = buf.rfind("進捗:")
@@ -636,17 +656,28 @@ class MainWindow(QMainWindow):
             return
 
         total_files = int(match.group(1))
-        total_trips = int(match.group(2))
-        branch_ok = int(match.group(3))
-        branch_unknown = int(match.group(4))
-        cross_notpass = int(match.group(5))
+        weekday = int(match.group(2))
+        rows = int(match.group(3))
+        ok = int(match.group(4))
+        unk = int(match.group(5))
+        notpass = int(match.group(6))
+        target = rows + notpass
+        split = rows + notpass - weekday
+
+        if ok + unk != rows:
+            self._log(
+                f"[WARN] rows mismatch(done): ok({ok}) + unk({unk}) != rows({rows}) "
+                f"for {self.current_name}"
+            )
 
         self.table.setItem(row, COL_DONE_FILES, QTableWidgetItem(str(total_files)))
         self.table.setItem(row, COL_TOTAL_FILES, QTableWidgetItem(str(total_files)))
-        self.table.setItem(row, COL_TRIPS_AFTER_DOW, QTableWidgetItem(str(total_trips)))
-        self.table.setItem(row, COL_BRANCH_OK, QTableWidgetItem(str(branch_ok)))
-        self.table.setItem(row, COL_BRANCH_UNKNOWN, QTableWidgetItem(str(branch_unknown)))
-        self.table.setItem(row, COL_CROSS_NOTPASS, QTableWidgetItem(str(cross_notpass)))
+        self.table.setItem(row, COL_WEEKDAY, QTableWidgetItem(str(weekday)))
+        self.table.setItem(row, COL_SPLIT, QTableWidgetItem(str(split)))
+        self.table.setItem(row, COL_TARGET, QTableWidgetItem(str(target)))
+        self.table.setItem(row, COL_OK, QTableWidgetItem(str(ok)))
+        self.table.setItem(row, COL_UNK, QTableWidgetItem(str(unk)))
+        self.table.setItem(row, COL_NOTPASS, QTableWidgetItem(str(notpass)))
 
 
 
