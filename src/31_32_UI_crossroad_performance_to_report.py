@@ -677,27 +677,31 @@ class MainWindow(QMainWindow):
         self._stdout_buf = ""
         self._stderr_buf = ""
         self._recent_process_lines = []
+        self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.proc.setProgram(sys.executable)
         self.proc.setArguments(["-u", *args])
-        self.proc.readyReadStandardOutput.connect(self._on_stdout)
-        self.proc.readyReadStandardError.connect(self._on_stderr)
+        self.proc.readyReadStandardOutput.connect(self._on_proc_output)
+        self.proc.errorOccurred.connect(self._on_proc_error)
         self.proc.finished.connect(self._on_finished)
         self.proc.start()
 
-    def _on_stdout(self) -> None:
+    def _on_proc_output(self) -> None:
         if not self.proc:
             return
-        chunk = self._decode_qbytearray(self.proc.readAllStandardOutput())
+        chunk = bytes(self.proc.readAllStandardOutput()).decode("utf-8", errors="replace")
         self._append_stream_chunk(chunk, is_err=False)
 
-    def _on_stderr(self) -> None:
+    def _on_proc_error(self, err) -> None:
         if not self.proc:
             return
-        chunk = self._decode_qbytearray(self.proc.readAllStandardError())
-        self._append_stream_chunk(chunk, is_err=True)
+        self._log(f"[ERROR] QProcess errorOccurred: {err} / {self.proc.errorString()}")
 
-    def _on_finished(self, code: int, _status) -> None:
+    def _on_finished(self, code: int, status) -> None:
         self._flush_process_buffers()
+        self._log(f"[DEBUG] finished: exitCode={code}, exitStatus={status}")
+        self._log("[DEBUG] tail lines:")
+        for line in self._recent_process_lines[-30:]:
+            self._log(f"  {line}")
         self.lbl_progress.setText("")
         if self.current_name is None:
             self._start_next_crossroad()
