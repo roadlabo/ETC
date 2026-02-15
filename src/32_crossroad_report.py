@@ -11,6 +11,15 @@ HEADLESS_BATCH = ("--project" in sys.argv)  # batch mode when project is specifi
 
 import pandas as pd
 
+print(
+    "[BOOT] 32 start "
+    f"py={sys.executable} "
+    f"ver={sys.version.split()[0]} "
+    f"cwd={os.getcwd()} "
+    f"argv={' '.join(sys.argv)}",
+    flush=True,
+)
+
 if not HEADLESS_BATCH:
     # GUI mode only
     os.environ.setdefault("QT_API", "pyside6")
