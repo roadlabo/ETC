@@ -547,9 +547,20 @@ def _build_config_from_project(project_dir: Path, targets: list[str] | None) -> 
         if not trip_folder.exists():
             print(f"[SKIP] {name}: 第2スクリーニングフォルダなし: {trip_folder}")
             continue
-        if not any(trip_folder.glob("*.csv")):
+        s2_csv_count = len(list(trip_folder.glob("*.csv")))
+        if s2_csv_count == 0:
             print(f"[SKIP] {name}: 第2スクリーニングCSVなし: {trip_folder}")
             continue
+
+        map_image_name = f"{name}.jpg"
+        cross_filename = crossroad_file.name
+        formatted_count = f"{s2_csv_count:,}"
+        print(
+            f"[INFO] 地図画像：{map_image_name}｜交差点ファイル：{cross_filename}｜"
+            f"第2スクリーニング後CSVフォルダ：{trip_folder}｜"
+            f"第2スクリーニングファイル数：{formatted_count}"
+        )
+
         config.append({"trip_folder": str(trip_folder), "crossroad_file": str(crossroad_file)})
     return config, out_dir
 
@@ -663,8 +674,9 @@ def main() -> None:
 
             # カウンタ類
             total_trips = 0
-            hit_trips = 0
-            nopass_trips = 0
+            branch_ok_trips = 0
+            branch_unknown_trips = 0
+            cross_notpass_trips = 0
             bad_time_trips = 0
             out_of_range_trips = 0
             time_ok_trips = 0
@@ -754,15 +766,15 @@ def main() -> None:
 
                         if len(points) < 2:
                             bad_points += 1
-                            nopass_trips += 1
+                            cross_notpass_trips += 1
                             continue
 
                         events = find_crossing_events(points, cross.center_lat, cross.center_lon)
                         if not events:
-                            nopass_trips += 1
+                            cross_notpass_trips += 1
                             continue
 
-                        hit_trips += 1
+                        any_branch_ok = False
 
                         # --------- ここから：通過イベントごとに必ず1行出す ---------
                         for pass_no, (ev_s, ev_e) in enumerate(events, start=1):
@@ -970,6 +982,9 @@ def main() -> None:
 
                             angle_method_str = "/".join(angle_method)
 
+                            if in_branch or out_branch:
+                                any_branch_ok = True
+
                             # 最近接線分の診断情報（可能な範囲で記録）
                             if seg_i is not None:
                                 seg_d = f"{seg_d_f:.3f}"
@@ -1119,6 +1134,11 @@ def main() -> None:
                                 key = (str(in_branch), str(out_branch))
                                 elapsed_map.setdefault(key, []).append(float(elapsed))
 
+                        if any_branch_ok:
+                            branch_ok_trips += 1
+                        else:
+                            branch_unknown_trips += 1
+
                     # ----------- 進捗表示（1行上書き） -----------
                     progress = file_idx / total_files * 100.0
                     elapsed_cfg = time.time() - cfg_start
@@ -1126,8 +1146,10 @@ def main() -> None:
                     progress_line = (
                         f"進捗: {file_idx:4d}/{total_files:4d} "
                         f"({progress:5.1f}%)  "
-                        f"対象トリップ: {total_trips:6d}  HIT: {hit_trips:6d}  "
-                        f"該当なし: {nopass_trips:6d}  "
+                        f"対象トリップ: {total_trips:6d}  "
+                        f"枝判定成功: {branch_ok_trips:6d}  "
+                        f"枝不明: {branch_unknown_trips:6d}  "
+                        f"交差点不通過: {cross_notpass_trips:6d}  "
                         f"経過時間: {elapsed_cfg/60:5.1f}分"
                     )
                     if non_tty_mode:
@@ -1198,7 +1220,7 @@ def main() -> None:
         print(f"  セット終了時間: {cfg_end_str}")
         print(
             f"  完了: ファイル={total_files}, 対象トリップ={total_trips}, "
-            f"HIT={hit_trips}, 該当なし={nopass_trips}, "
+            f"枝判定成功={branch_ok_trips}, 枝不明={branch_unknown_trips}, 交差点不通過={cross_notpass_trips}, "
             f"所要時間OK={time_ok_trips}, 所要時間NG={time_ng_trips}, "
             f"所要時間NG(時刻欠損)={bad_time_trips}, 所要時間NG(区間範囲外)={out_of_range_trips}, "
             f"所要時間NG(線分取得不可)={no_segment_trips}, "
@@ -1206,7 +1228,8 @@ def main() -> None:
             f"所要時間={cfg_minutes:5.1f}分"
         )
         print(
-            f"  [SUMMARY31] 対象トリップ={total_trips}, HIT={hit_trips}, 該当なし={nopass_trips}, "
+            f"  [SUMMARY31] 対象トリップ={total_trips}, 枝判定成功={branch_ok_trips}, "
+            f"枝不明={branch_unknown_trips}, 交差点不通過={cross_notpass_trips}, "
             f"所要時間NG(時刻欠損)={bad_time_trips}, 所要時間NG(区間範囲外)={out_of_range_trips}, "
             f"所要時間NG(線分取得不可)={no_segment_trips}, "
             f"weekday_skip={weekday_skip}, bad_date={bad_date}, bad_points={bad_points}"
