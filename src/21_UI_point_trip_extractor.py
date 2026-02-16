@@ -51,6 +51,14 @@ def resolve_project_paths(project_dir: Path) -> tuple[Path, Path]:
     return project_dir / FOLDER_CROSS, project_dir / FOLDER_OUT
 
 
+def format_hhmmss(total_sec: float) -> str:
+    sec = int(total_sec + 0.5)
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    s = sec % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
 class RunHeaderView(QHeaderView):
     toggle_all_requested = pyqtSignal(bool)
 
@@ -401,7 +409,7 @@ class MainWindow(QMainWindow):
             [
                 f"開始: {started_at}",
                 f"終了: {ended_at}",
-                f"総所要時間(秒): {total_sec:.3f}",
+                f"総所要時間: {format_hhmmss(total_sec)}",
                 "",
                 "[UI表]",
                 *self._table_dump_lines(),
@@ -524,6 +532,8 @@ class MainWindow(QMainWindow):
             row = self._row_index_by_name(name)
             if row >= 0:
                 self._set_text_item(row, COL_HIT_TRIPS, count)
+            # NOTE: HIT途中経過はログに不要（表更新だけ行い、ログには流さない）
+            return
 
         if from_cr and RE_FILE_DONE.search(text):
             return
@@ -584,8 +594,10 @@ class MainWindow(QMainWindow):
         self.btn_run.setEnabled(True)
         self.batch_ended_at = datetime.now()
         total_sec = perf_counter() - self.batch_start_perf if self.batch_start_perf else 0.0
+        hms = format_hhmmss(total_sec)
+        self.log_info(f"総所要時間: {hms}")
         self._write_batch_log_file(total_sec)
-        self.scan_crossroads()
+        # NOTE: 解析結果表示（HIT数など）を保持するため、解析終了時の自動再スキャンは行わない
 
 
 def main():
