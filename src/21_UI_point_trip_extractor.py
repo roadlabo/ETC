@@ -1,5 +1,7 @@
 import sys
+from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 
 from PyQt6.QtCore import Qt, QProcess
 from PyQt6.QtGui import QFont
@@ -29,6 +31,10 @@ class MainWindow(QMainWindow):
         self.input_dir: Path | None = None
 
         self.proc: QProcess | None = None
+        self.log_lines: list[str] = []
+        self.batch_started_at: datetime | None = None
+        self.batch_ended_at: datetime | None = None
+        self.batch_start_perf: float | None = None
 
         self._build_ui()
         self._log("[INFO] ①②を選択 → 実行、の流れです。")
@@ -86,6 +92,7 @@ class MainWindow(QMainWindow):
 
     def _log(self, s: str):
         self.log.appendPlainText(s)
+        self.log_lines.append(s)
 
     def select_project(self):
         d = QFileDialog.getExistingDirectory(self, "プロジェクトフォルダを選択", str(Path.cwd()))
@@ -164,6 +171,69 @@ class MainWindow(QMainWindow):
                 targets.append(name)
         return targets
 
+    def _table_dump_lines(self) -> list[str]:
+        lines: list[str] = []
+
+        headers = []
+        for c in range(self.table.columnCount()):
+            header_item = self.table.horizontalHeaderItem(c)
+            headers.append(header_item.text() if header_item else "")
+        lines.append("\t".join(headers))
+
+        for r in range(self.table.rowCount()):
+            row_values: list[str] = []
+            for c in range(self.table.columnCount()):
+                item = self.table.item(r, c)
+                if c == 0:
+                    run_flag = (
+                        "1"
+                        if item and item.checkState() == Qt.CheckState.Checked
+                        else "0"
+                    )
+                    row_values.append(f"RUN={run_flag}")
+                else:
+                    row_values.append(item.text() if item else "")
+            lines.append("\t".join(row_values))
+
+        return lines
+
+    def _write_batch_log_file(self, total_sec: float) -> None:
+        if not self.project_dir:
+            return
+
+        _cross_dir, out_dir = resolve_project_paths(self.project_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_path = out_dir / f"21_batch_log_{stamp}.txt"
+
+        started_at = self.batch_started_at.isoformat(sep=" ", timespec="seconds") if self.batch_started_at else ""
+        ended_at = self.batch_ended_at.isoformat(sep=" ", timespec="seconds") if self.batch_ended_at else ""
+
+        lines: list[str] = [
+            f"Project: {self.project_dir}",
+        ]
+
+        if self.input_dir:
+            lines.append(f"Input: {self.input_dir}")
+
+        lines.extend(
+            [
+                f"開始: {started_at}",
+                f"終了: {ended_at}",
+                f"総所要時間(秒): {total_sec:.3f}",
+                "",
+                "[UI表]",
+                *self._table_dump_lines(),
+                "",
+                "[実行ログ]",
+                *self.log_lines,
+            ]
+        )
+
+        log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._log(f"[INFO] batch log saved: {log_path}")
+
     def run_screening(self):
         if not self.project_dir:
             QMessageBox.warning(self, "未設定", "①プロジェクトフォルダを選択してください。")
@@ -188,6 +258,11 @@ class MainWindow(QMainWindow):
         if self.proc:
             self.proc.kill()
             self.proc = None
+
+        self.log_lines = []
+        self.batch_started_at = datetime.now()
+        self.batch_start_perf = perf_counter()
+        self.batch_ended_at = None
 
         self.btn_run.setEnabled(False)
 
@@ -227,6 +302,9 @@ class MainWindow(QMainWindow):
     def _on_finished(self, code: int, _status):
         self._log(f"[INFO] process finished: code={code}")
         self.btn_run.setEnabled(True)
+        self.batch_ended_at = datetime.now()
+        total_sec = perf_counter() - self.batch_start_perf if self.batch_start_perf else 0.0
+        self._write_batch_log_file(total_sec)
         # 出力フォルダの状態を反映
         self.scan_crossroads()
 
