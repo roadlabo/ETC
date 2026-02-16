@@ -179,13 +179,18 @@ class MainWindow(QMainWindow):
 
         radius_row = QHBoxLayout()
         radius_prefix = QLabel("第1スクリーニング後のCSVのうち、半径")
+        radius_l_bracket = QLabel("【")
         self.spin_radius = QSpinBox()
         self.spin_radius.setRange(5, 200)
         self.spin_radius.setValue(30)
-        self.spin_radius.setSuffix(" m")
+        radius_r_bracket = QLabel("】")
+        radius_unit = QLabel("m")
         radius_suffix = QLabel("以内を通過するトリップを抜き出し、トリップ毎にCSVファイルを生成します。")
         radius_row.addWidget(radius_prefix)
+        radius_row.addWidget(radius_l_bracket)
         radius_row.addWidget(self.spin_radius)
+        radius_row.addWidget(radius_r_bracket)
+        radius_row.addWidget(radius_unit)
         radius_row.addWidget(radius_suffix)
         radius_row.addStretch(1)
         v.addLayout(radius_row)
@@ -475,7 +480,9 @@ class MainWindow(QMainWindow):
         self.btn_run.setEnabled(False)
 
         self.log_info("①プロジェクト選択 → ②第1スクリーニング選択 → 21【分析スタート】")
-        self.log_info(f"start: targets={len(targets)} radius={self.spin_radius.value()}m")
+        self.log_info(
+            f"start: targets={','.join(targets)} radius={self.spin_radius.value()}m"
+        )
 
         self.proc = QProcess(self)
         self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)

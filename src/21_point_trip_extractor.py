@@ -24,7 +24,7 @@ from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 FOLDER_CROSS = "11_交差点(Point)データ"
 FOLDER_OUT = "20_第２スクリーニング"
 
-DEFAULT_RADIUS_M = 30.0  # 交差点中心からの判定距離[m]（デフォルト）
+DEFAULT_THRESH_M = 30.0  # 交差点中心からの判定距離[m]（デフォルト）
 MIN_HITS = 1         # HITとみなす最小ヒット数（点＋線分の合計）
 DRY_RUN = False
 VERBOSE = False
@@ -613,8 +613,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--radius-m",
         type=float,
-        default=DEFAULT_RADIUS_M,
-        help=f"交差点中心からの判定半径[m]（デフォルト: {DEFAULT_RADIUS_M}）",
+        default=DEFAULT_THRESH_M,
+        help=f"交差点中心からの判定半径[m]（デフォルト: {DEFAULT_THRESH_M}）",
     )
     parser.add_argument("--dry-run", action="store_true", help="一覧表示のみ（処理しない）")
     return parser.parse_args(list(argv) if argv is not None else None)
