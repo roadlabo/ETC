@@ -191,11 +191,11 @@ class MainWindow(QMainWindow):
         run_header.toggle_all_requested.connect(self._toggle_all_runs_from_header)
         self._run_header = run_header
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(self.table.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(self.table.EditTrigger.NoEditTriggers)
+        self._apply_column_widths()
         v.addWidget(self.table, stretch=3)
 
         self.lbl_progress = QLabel("")
@@ -207,6 +207,33 @@ class MainWindow(QMainWindow):
         self.log.setMaximumBlockCount(5000)
         v.addWidget(self.lbl_progress)
         v.addWidget(self.log, stretch=2)
+
+    def _apply_column_widths(self) -> None:
+        header = self.table.horizontalHeader()
+
+        header.setStretchLastSection(False)
+
+        header.setSectionResizeMode(COL_RUN, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(COL_RUN, 70)
+
+        for c in [COL_CROSS_CSV, COL_CROSS_JPG, COL_S2_DIR, COL_S2_CSV, COL_OUT31, COL_OUT32]:
+            header.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
+            self.table.setColumnWidth(c, 60)
+
+        for c in [COL_DONE_FILES, COL_TOTAL_FILES, COL_WEEKDAY, COL_SPLIT, COL_TARGET, COL_OK, COL_UNK, COL_NOTPASS]:
+            header.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
+            self.table.setColumnWidth(c, 86)
+
+        header.setSectionResizeMode(COL_STATUS, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(COL_STATUS, 210)
+
+        header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
+        header.setTextElideMode(Qt.TextElideMode.ElideRight)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "table"):
+            self._apply_column_widths()
 
     def _timestamp(self) -> str:
         return datetime.now().strftime("%Y/%m/%d %H:%M:%S")
