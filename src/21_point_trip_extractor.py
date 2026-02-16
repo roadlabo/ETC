@@ -735,6 +735,9 @@ def run_second_screening(
     last_len = 0
 
     for idx, trip_path in enumerate(trip_files, 1):
+        if idx == 1:
+            for cp in crossroads:
+                print(f"[INFO] 交差点開始: {cp.name}", flush=True)
         cand, matched = process_file_for_all_crossroads(
             trip_path,
             crossroads,
@@ -748,6 +751,9 @@ def run_second_screening(
         )
         total_candidate += cand
         total_matched += matched
+        print(f"進捗: {idx}/{total_files}", end="\r", flush=True)
+        for cp in crossroads:
+            print(f"HIT: {cp.name} {hits_per_cross[cp.name]}", flush=True)
 
         elapsed = time.time() - overall_start
         percent = (idx / total_files) * 100 if total_files else 100.0
@@ -770,6 +776,7 @@ def run_second_screening(
         last_len = _update_progress(line, last_len)
 
     _clear_progress(last_len)
+    print(f"進捗: {total_files}/{total_files}", flush=True)
 
     total_elapsed = time.time() - overall_start
     print(f"TOTAL 所要時間: {format_hms(total_elapsed)}")
