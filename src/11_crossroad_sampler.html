@@ -27,6 +27,7 @@
       font-size: 13px;
     }
     .toolbar button { margin-right: 6px; }
+    html.embed .toolbar { display: none; }
   </style>
 </head>
 
@@ -49,6 +50,23 @@
   </div>
 
   <script>
+    if (new URLSearchParams(location.search).get("embed") === "1") {
+      document.documentElement.classList.add("embed");
+    }
+
+    let bridge = null;
+    function setupBridge() {
+      if (typeof QWebChannel === "undefined" || !window.qt || !qt.webChannelTransport) {
+        return;
+      }
+      new QWebChannel(qt.webChannelTransport, function(channel) {
+        bridge = channel.objects.bridge;
+        if (bridge && bridge.jsReady) {
+          bridge.jsReady();
+        }
+      });
+    }
+
     var map = L.map('map', { preferCanvas: true }).setView([35.069095, 134.004512], 16);
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -136,6 +154,54 @@
       });
     }
 
+    function buildCsvText() {
+      let rows = ["crossroad_id,center_lon,center_lat,branch_no,branch_name,dir_deg"];
+      let lon = centerLatLng.lng.toFixed(8);
+      let lat = centerLatLng.lat.toFixed(8);
+
+      for (let i = 0; i < branchMarkers.length; i++) {
+        let p = branchMarkers[i].getLatLng();
+        let deg = bearing(centerLatLng.lat, centerLatLng.lng, p.lat, p.lng).toFixed(2);
+        rows.push("001," + lon + "," + lat + "," + (i + 1) + ",," + deg);
+      }
+      return rows.join("\r\n");
+    }
+
+    function beginSaveFromPy(baseName) {
+      if (!centerLatLng) {
+        alert("先に中心を指定してください");
+        return;
+      }
+      if (branchMarkers.length === 0) {
+        alert("方向を追加してください");
+        return;
+      }
+
+      if (!bridge || !bridge.requestSave) {
+        alert("ブリッジ未接続");
+        return;
+      }
+
+      var mapDiv = document.getElementById("map");
+      if (!window.html2canvas || !mapDiv) {
+        alert("画像の生成に失敗しました");
+        return;
+      }
+
+      html2canvas(mapDiv, { useCORS: true, backgroundColor: null, logging: false }).then(function(canvas) {
+        const jpgDataUrl = canvas.toDataURL("image/jpeg", 0.9);
+        const payload = {
+          base_name: baseName,
+          csv_text: buildCsvText(),
+          jpg_data_url: jpgDataUrl
+        };
+        bridge.requestSave(JSON.stringify(payload));
+      }).catch(function(err) {
+        console.error('地図キャプチャ中にエラーが発生しました', err);
+        alert("画像の生成に失敗しました");
+      });
+    }
+
     // CSV保存
     function saveCsv() {
       if (!centerLatLng) {
@@ -150,17 +216,9 @@
       var nameInput = document.getElementById("outputName");
       var baseName = (nameInput && nameInput.value.trim()) || "crossroad001";
 
-      let rows = ["crossroad_id,center_lon,center_lat,branch_no,branch_name,dir_deg"];
-      let lon = centerLatLng.lng.toFixed(8);
-      let lat = centerLatLng.lat.toFixed(8);
+      let csvText = buildCsvText();
 
-      for (let i = 0; i < branchMarkers.length; i++) {
-        let p = branchMarkers[i].getLatLng();
-        let deg = bearing(centerLatLng.lat, centerLatLng.lng, p.lat, p.lng).toFixed(2);
-        rows.push("001," + lon + "," + lat + "," + (i + 1) + ",," + deg);
-      }
-
-      let blob = new Blob([rows.join("\r\n")], { type: "text/csv" });
+      let blob = new Blob([csvText], { type: "text/csv" });
       let url = URL.createObjectURL(blob);
       let a = document.createElement("a");
       a.href = url;
@@ -185,6 +243,9 @@
       branchMarkers = [];
       branchLines = [];
     }
+
+    document.addEventListener("DOMContentLoaded", setupBridge);
   </script>
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 </body>
 </html>
