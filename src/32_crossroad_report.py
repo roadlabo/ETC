@@ -201,6 +201,7 @@ class _ExcelReportHelper:
                     "in_b": int(in_b),
                     "out_b": int(out_b),
                     "count_total": count_total,
+                    "ok_count": ok_count,
                     "daily_count": daily_count,
                     "avg_delay": avg_delay,
                     "total_delay": total_delay,
@@ -306,7 +307,9 @@ class _ExcelReportHelper:
                 cell.number_format = "0.0"
 
     def _populate_report_sheet(self, ws, combos: list[dict]) -> None:
-        title_cell = ws.cell(row=1, column=1, value="ETC2.0 交差点パフォーマンス調査")
+        cross_name = self.crossroad_path.stem
+        title_text = f"ETC2.0 交差点パフォーマンス調査：{cross_name}"
+        title_cell = ws.cell(row=1, column=1, value=title_text)
         title_cell.font = Font(size=16, bold=True)
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=11)
         title_cell.alignment = Alignment(horizontal="center")
@@ -350,14 +353,12 @@ class _ExcelReportHelper:
         total_records = len(self.clean_df)
         ok_records = int(self.clean_df["time_valid"].sum()) if not self.clean_df.empty else 0
         ng_records = total_records - ok_records
+        date_range = self._format_date_range(start_date, end_date)
+        total_days_text = f"{len(self.unique_dates)}日（{date_range}）" if date_range else f"{len(self.unique_dates)}日"
         info_pairs = [
             ("交差点定義ファイル", self.crossroad_path.name, None),
             ("パフォーマンスCSV", self.performance_path.name, None),
-            (
-                "総日数",
-                f"{len(self.unique_dates)}日 {self._format_date_range(start_date, end_date)}".strip(),
-                None,
-            ),
+            ("総日数", total_days_text, None),
             ("対象曜日", weekdays, None),
             ("総レコード数（通過）（台）", total_records, None),
             ("所要時間算出 OK/NG（台）", f"{ok_records} / {ng_records}", None),
@@ -378,8 +379,8 @@ class _ExcelReportHelper:
         if not start_date or not end_date:
             return ""
         if start_date == end_date:
-            return start_date.strftime("%Y-%m-%d")
-        return f"{start_date.strftime('%Y-%m-%d')}～{end_date.strftime('%Y-%m-%d')}"
+            return start_date.strftime("%Y年%m月%d日")
+        return f"{start_date.strftime('%Y年%m月%d日')}～{end_date.strftime('%Y年%m月%d日')}"
 
     def _write_time_table_pdf_style(
         self, ws, combos: list[dict], title_row: int, header_row: int, data_row: int
@@ -508,10 +509,30 @@ class _ExcelReportHelper:
                     cell.number_format = "0.0"
             row_idx += 1
 
-        last_row = row_idx - 1
-        self.apply_table_borders(ws, title_row, 1, last_row, max_col)
+        total_row = row_idx
+        total_daily_delay_min = sum(c["daily_total_delay"] for c in combos) / 60.0
+        total_ok = sum(c.get("ok_count", 0) for c in combos)
+        total_delay_s = sum(c.get("total_delay", 0.0) for c in combos)
+        total_avg_delay = (total_delay_s / total_ok) if total_ok else 0.0
+        total_bins = [sum(c["delay_per_day"][i] for c in combos) for i in range(len(DELAY_LABELS))]
+
+        total_values = [
+            "合計",
+            round(total_daily_delay_min, 1),
+            round(total_avg_delay, 1),
+            *[round(v, 1) for v in total_bins],
+        ]
+        for col, val in enumerate(total_values, start=1):
+            cell = ws.cell(row=total_row, column=col, value=val)
+            cell.alignment = Alignment(horizontal="center" if col == 1 else "right", vertical="center")
+            if col >= 2:
+                cell.number_format = "0.0"
+        ws.row_dimensions[total_row].height = 18
+
+        self.apply_table_borders(ws, title_row, 1, total_row, max_col)
         self._apply_row_bottom_border(ws, header_row, 1, max_col)
-        return row_idx - 1
+        self._apply_row_bottom_border(ws, total_row, 1, max_col)
+        return total_row
 
     @staticmethod
     def apply_table_borders(ws, min_row: int, min_col: int, max_row: int, max_col: int) -> None:
