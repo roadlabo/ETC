@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QStyle,
     QStyleOptionButton,
     QTableWidget,
@@ -175,6 +176,19 @@ class MainWindow(QMainWindow):
         top.addWidget(arrow2)
         top.addWidget(self.btn_run)
         top.addStretch(1)
+
+        radius_row = QHBoxLayout()
+        radius_prefix = QLabel("第1スクリーニング後のCSVのうち、半径")
+        self.spin_radius = QSpinBox()
+        self.spin_radius.setRange(5, 200)
+        self.spin_radius.setValue(30)
+        self.spin_radius.setSuffix(" m")
+        radius_suffix = QLabel("以内を通過するトリップを抜き出し、トリップ毎にCSVファイルを生成します。")
+        radius_row.addWidget(radius_prefix)
+        radius_row.addWidget(self.spin_radius)
+        radius_row.addWidget(radius_suffix)
+        radius_row.addStretch(1)
+        v.addLayout(radius_row)
 
         self.lbl_project = QLabel("Project: (未選択)")
         self.lbl_input = QLabel("Input(第1): (未選択)")
@@ -461,7 +475,7 @@ class MainWindow(QMainWindow):
         self.btn_run.setEnabled(False)
 
         self.log_info("①プロジェクト選択 → ②第1スクリーニング選択 → 21【分析スタート】")
-        self.log_info(f"start: targets={len(targets)}")
+        self.log_info(f"start: targets={len(targets)} radius={self.spin_radius.value()}m")
 
         self.proc = QProcess(self)
         self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
@@ -475,6 +489,8 @@ class MainWindow(QMainWindow):
             str(self.input_dir),
             "--targets",
             *targets,
+            "--radius-m",
+            str(self.spin_radius.value()),
         ])
 
         self.proc.readyReadStandardOutput.connect(self._on_stdout)
