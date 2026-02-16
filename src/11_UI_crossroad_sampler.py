@@ -5,6 +5,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, Qt, QUrl, QUrlQuery, pyqtSignal, pyqtSlot
 from PyQt6.QtWebChannel import QWebChannel
+from PyQt6.QtWebEngineCore import QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import (
     QApplication,
@@ -150,6 +151,10 @@ class MainWindow(QMainWindow):
         right.addWidget(self.lbl_guide)
 
         self.web = QWebEngineView()
+        # --- allow file:// HTML to load https resources (Leaflet/OSM tiles) ---
+        s = self.web.settings()
+        s.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
+        s.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
         right.addWidget(self.web, stretch=1)
 
     def _setup_web_channel(self) -> None:
