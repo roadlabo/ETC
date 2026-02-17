@@ -50,13 +50,6 @@
       display: none !important;
     }
 
-    /* ===== 涙マーク（5倍級）: divIcon内SVG ===== */
-    .branch-pin{
-      width: 60px;
-      height: 90px;
-      pointer-events: none;
-      display: block;
-    }
   </style>
 
   <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
@@ -107,93 +100,84 @@
 
     var centerMarker = null;
     var centerLatLng = null;
-    var branchMarkers = [];
-    var branchLines = [];
+    var CENTER_RING_RADIUS_PX = 18;
+    var branchPoints = [];
     var branchLabels = [];
+    var branchLines = [];
     var canvasRenderer = L.canvas();
-
-    // ===== 5倍級：涙マーク（SVG） =====
-    var branchIcon = L.divIcon({
-      className: "",
-      html: `
-        <svg class="branch-pin" viewBox="0 0 64 96" xmlns="http://www.w3.org/2000/svg">
-          <path d="M32 0C19 0 8 11 8 24c0 21 24 72 24 72s24-51 24-72C56 11 45 0 32 0z"
-                fill="#2A73FF" stroke="white" stroke-width="4"/>
-          <circle cx="32" cy="26" r="10" fill="white" opacity="0.85"/>
-        </svg>
-      `,
-      iconSize: [60, 90],
-      iconAnchor: [30, 90]
-    });
 
     // 左クリック
     map.on('click', function(e) {
       if (!centerMarker) {
         centerLatLng = e.latlng;
-        centerMarker = L.marker(e.latlng).addTo(map).bindPopup("Centre").openPopup();
+        centerMarker = L.circleMarker(e.latlng, {
+          radius: CENTER_RING_RADIUS_PX,
+          color: "#ff0000",
+          weight: 6,
+          fill: true,
+          fillColor: "#ff0000",
+          fillOpacity: 0.0
+        }).addTo(map);
       } else {
-        // branchMarkers.length + 1 を 1,2,3,... の枝番号として振る
-        var no = branchMarkers.length + 1;
-        var m = L.marker(e.latlng, { icon: branchIcon }).addTo(map).bindPopup("方向 " + no);
-        branchMarkers.push(m);
+        // ===== 枝追加 =====
+        var no = branchPoints.length + 1;
 
-        // ===== 枝方向の「外側」に数字を出す（pxオフセット方式） =====
+        // 枝先座標を保存（CSVのdir_deg算出に使う）
+        branchPoints.push(e.latlng);
 
-        // いったん「枝先の座標」を画面ピクセルへ
-        var pEnd = map.latLngToLayerPoint(e.latlng);
+        // --- 青線：中心リングの内側は描かず、リング外周から描く（px計算） ---
         var pCenter = map.latLngToLayerPoint(centerLatLng);
+        var pEnd = map.latLngToLayerPoint(e.latlng);
 
-        // 中心→枝先ベクトル（px）
         var vx = pEnd.x - pCenter.x;
         var vy = pEnd.y - pCenter.y;
-
-        // 正規化
         var vlen = Math.sqrt(vx*vx + vy*vy);
         if (vlen === 0) vlen = 1;
         vx /= vlen;
         vy /= vlen;
 
-        // 「マークより外側」へ押し出す量（px）
-        // ※文字が大きいので 90〜140px が目安。まず 110px 推奨
+        // リング外周の開始点（中心から半径分だけ外）
+        var pStart = L.point(
+          pCenter.x + vx * CENTER_RING_RADIUS_PX,
+          pCenter.y + vy * CENTER_RING_RADIUS_PX
+        );
+
+        var startLatLng = map.layerPointToLatLng(pStart);
+
+        // 線を描画（リング外から枝先まで）
+        var poly = L.polyline([startLatLng, e.latlng], { weight: 4, renderer: canvasRenderer }).addTo(map);
+        branchLines.push(poly);
+
+        // --- 数字：枝方向のさらに外側へ（中心→枝先方向へpush） ---
         var pushPx = 110;
-
-        // 枝先からさらに外側のピクセル位置
         var pLabel = L.point(pEnd.x + vx * pushPx, pEnd.y + vy * pushPx);
-
-        // LatLngに戻す
         var labelLatLng = map.layerPointToLatLng(pLabel);
 
-        // 数字の見た目サイズ（CSSと合わせる：100px）
-        var labelW = 140;   // ラベル想定幅（px）※調整可
-        var labelH = 140;   // ラベル想定高さ（px）※調整可
+        // 数字ラベルは「中心基準（iconAnchor中央）」で置く
+        var labelW = 140, labelH = 140;
 
-        // DivIconで数字
         var labelIcon = L.divIcon({
-            className: "",
-            html: `<div class="branch-no-label">${no}</div>`,
-            iconSize: [labelW, labelH],
-            iconAnchor: [Math.round(labelW/2), Math.round(labelH/2)]  // ★中心合わせ
+          className: "",
+          html: `<div class="branch-no-label">${no}</div>`,
+          iconSize: [labelW, labelH],
+          iconAnchor: [Math.round(labelW/2), Math.round(labelH/2)]
         });
 
-        // 数字マーカー（操作不要）
-        var labelMarker = L.marker(labelLatLng, {
-            icon: labelIcon,
-            interactive: false,
-            keyboard: false
-        }).addTo(map);
-        branchLabels.push(labelMarker);
-
-        var poly = L.polyline([centerLatLng, e.latlng], { weight: 4, renderer: canvasRenderer }).addTo(map);
-        branchLines.push(poly);
+        var lm = L.marker(labelLatLng, { icon: labelIcon, interactive: false, keyboard: false }).addTo(map);
+        branchLabels.push(lm);
       }
     });
 
     // 右クリックで直前削除
     map.on('contextmenu', function(e) {
-      if (branchMarkers.length > 0) {
-        map.removeLayer(branchMarkers.pop());
-        map.removeLayer(branchLabels.pop());
-        map.removeLayer(branchLines.pop());
+      if (branchPoints.length > 0) {
+        branchPoints.pop();
+
+        var lm = branchLabels.pop();
+        if (lm) map.removeLayer(lm);
+
+        var ln = branchLines.pop();
+        if (ln) map.removeLayer(ln);
       }
     });
 
@@ -251,8 +235,8 @@
       let lon = centerLatLng.lng.toFixed(8);
       let lat = centerLatLng.lat.toFixed(8);
 
-      for (let i = 0; i < branchMarkers.length; i++) {
-        let p = branchMarkers[i].getLatLng();
+      for (let i = 0; i < branchPoints.length; i++) {
+        let p = branchPoints[i];
         let deg = bearing(centerLatLng.lat, centerLatLng.lng, p.lat, p.lng).toFixed(2);
         rows.push("001," + lon + "," + lat + "," + (i + 1) + ",," + deg);
       }
@@ -264,7 +248,7 @@
         alert("先に中心を指定してください");
         return;
       }
-      if (branchMarkers.length === 0) {
+      if (branchPoints.length === 0) {
         alert("方向を追加してください");
         return;
       }
@@ -300,7 +284,7 @@
         alert("先に中心を指定してください");
         return;
       }
-      if (branchMarkers.length === 0) {
+      if (branchPoints.length === 0) {
         alert("方向を追加してください");
         return;
       }
@@ -329,11 +313,10 @@
       }
       centerLatLng = null;
 
-      for (let m of branchMarkers) map.removeLayer(m);
       for (let l of branchLabels) map.removeLayer(l);
       for (let l of branchLines) map.removeLayer(l);
 
-      branchMarkers = [];
+      branchPoints = [];
       branchLabels = [];
       branchLines = [];
     }
