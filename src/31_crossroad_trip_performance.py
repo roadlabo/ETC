@@ -606,6 +606,8 @@ def _resolve_target_weekdays(weekdays: list[str] | None, weekday_legacy: str | N
 
 
 def main() -> None:
+    global CROSSROAD_HIT_DIST_M, CROSSROAD_SEG_HIT_DIST_M
+
     parser = argparse.ArgumentParser(description="交差点通過性能算出スクリプト")
     parser.add_argument("--project", type=str, help="プロジェクトフォルダ")
     parser.add_argument("--weekdays", nargs="*", help="ALL または 月火水木金土日 / MON..SUN の複数指定")
@@ -622,7 +624,11 @@ def main() -> None:
         default=200,
         help="non-tty時の進捗出力間隔（例: 1=毎ファイル, 10=10ファイルごと）",
     )
+    parser.add_argument("--radius-m", type=float, default=30.0, help="交差点中心からのHIT半径(m)")
     args = parser.parse_args()
+
+    CROSSROAD_HIT_DIST_M = args.radius_m
+    CROSSROAD_SEG_HIT_DIST_M = args.radius_m
 
     run_config = CONFIG
     output_base_dir = Path(OUTPUT_BASE_DIR)
@@ -639,6 +645,7 @@ def main() -> None:
     print(f"開始時間: {start_all_str}")
     print(f"出力フォルダ: {output_base_dir}")
     print(f"設定セット数: {len(run_config)}")
+    print(f"[INFO] radius_m={args.radius_m}")
     if target_weekdays:
         print(f"対象曜日: {', '.join(target_weekdays)}")
     else:

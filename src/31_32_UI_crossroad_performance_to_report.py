@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QStyle,
     QStyleOptionButton,
     QTableWidget,
@@ -183,6 +184,24 @@ class MainWindow(QMainWindow):
         top.addWidget(QLabel(" → "))
         top.addWidget(self.btn_run)
         top.addStretch(1)
+
+        radius_row = QHBoxLayout()
+        radius_prefix = QLabel("第2スクリーニング後のCSVのうち、半径")
+        radius_l_bracket = QLabel("【")
+        self.spin_radius = QSpinBox()
+        self.spin_radius.setRange(5, 200)
+        self.spin_radius.setValue(30)
+        radius_r_bracket = QLabel("】")
+        radius_unit = QLabel("m")
+        radius_suffix = QLabel("以内を通過するトリップを分析対象とします。")
+        radius_row.addWidget(radius_prefix)
+        radius_row.addWidget(radius_l_bracket)
+        radius_row.addWidget(self.spin_radius)
+        radius_row.addWidget(radius_r_bracket)
+        radius_row.addWidget(radius_unit)
+        radius_row.addWidget(radius_suffix)
+        radius_row.addStretch(1)
+        v.addLayout(radius_row)
 
         self.lbl_project = QLabel("Project: (未選択)")
         self.lbl_summary = QLabel("")
@@ -539,6 +558,7 @@ class MainWindow(QMainWindow):
         self.queue = targets
         self.log_info("========================================")
         self.log_info(f"weekdays: {self._selected_weekdays_for_log()}")
+        self.log_info(f"radius: {self.spin_radius.value()}m")
         self.log_info(f"start: targets={len(targets)}")
         self.log_info("========================================")
         self._set_run_controls_enabled(False)
@@ -610,7 +630,17 @@ class MainWindow(QMainWindow):
             return
 
         def _launch():
-            args = [str(script31), "--project", str(self.project_dir), "--targets", name, "--progress-step", "1"]
+            args = [
+                str(script31),
+                "--project",
+                str(self.project_dir),
+                "--targets",
+                name,
+                "--progress-step",
+                "1",
+                "--radius-m",
+                str(self.spin_radius.value()),
+            ]
             selected = self._selected_weekdays_for_cli()
             if selected:
                 args.extend(["--weekdays", *selected])
