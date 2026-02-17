@@ -77,19 +77,23 @@ CROSSROAD_MIN_HITS = 1
 EARTH_RADIUS_M = 6_371_000.0
 
 # ============================================================
-# 枝判定（流入/流出）角度の安定化設定
-#  - 中心点の前後「2点」から走行方向を作り、枝(dir_deg)へマッチングする
-#  - in:  (center-20m -> center-5m) の走行方向を推定し、180度反転して "center->branch" に合わせる
-#  - out: (center+5m -> center+20m) の走行方向を推定し、そのまま "center->branch" として使う
-#  ※時間算出区間(-100m〜+20m)とは別物。角度は中心近傍(±20m)で安定化させる。
+# 枝判定（流入/流出）角度の安定化設定（3段階判定）
+#  - 角度算出は中心点からの道なり距離で「near/far」を取り、2点から進行方向を推定
+#  - IN:  (center-far -> center-near) の進行方位を求め、180°反転して center->branch に合わせる
+#  - OUT: (center+near -> center+far) の進行方位を求め、そのまま center->branch として使う
+#
+# 判定ステップ：
+#   第1判定：20-50m  / 閾値30°
+#   第2判定：20-70m  / 閾値35°
+#   第3判定：20-100m / 閾値40°
+#   その他：枝不明
 # ============================================================
-DIR_IN_FAR_M = 20.0
-DIR_IN_NEAR_M = 5.0
-DIR_OUT_NEAR_M = 5.0
-DIR_OUT_FAR_M = 20.0
-DIR_EXTEND_STEP_M = 10.0  # 未確定時に FAR をこの刻みで外側へ伸ばして再判定
-DIR_EXTEND_MAX_TRIES = 50  # 念のための安全弁（実際はデータ範囲外で止まる想定）
-BRANCH_MAX_ANGLE_DIFF_DEG = 35.0  # これを超えたら枝番は未確定（空欄）
+BRANCH_JUDGE_STEPS = [
+    {"near": 20.0, "far": 50.0, "th": 30.0},
+    {"near": 20.0, "far": 70.0, "th": 35.0},
+    {"near": 20.0, "far": 100.0, "th": 40.0},
+]
+BRANCH_ANGLE_MAX_DEG = 40.0  # 出力上の「最大許容」を明示したい場合の上限（実質は最終th）
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -860,126 +864,52 @@ def main() -> None:
                                 idx_a = min(len(points) - 1, idx_center + 1)
 
                             # ============================================================
-                            # 枝判定角度：中心前後の「2点」から走行方向を推定して安定化
+                            # 枝判定角度：3段階判定（20-50m / 20-70m / 20-100m）
                             # ============================================================
-                            def _infer_branch_with_extend_in(center_pos_val: float):
-                                # まず従来の near は固定、far を 10m 刻みで伸ばす
-                                base_near = DIR_IN_NEAR_M
-                                far = DIR_IN_FAR_M
-                                tries = 0
-                                while tries < DIR_EXTEND_MAX_TRIES:
-                                    p_far = interpolate_point_at_distance(points, cumdist, center_pos_val - far)
-                                    p_near = interpolate_point_at_distance(points, cumdist, center_pos_val - base_near)
-                                    if not p_far or not p_near:
-                                        # データが無くなった（範囲外）→ ここで初めて不明
-                                        return None, "", float("inf"), f"IN:interp2pt_extend_end({far:.0f}-{base_near:.0f})"
+                            def _infer_branch_3step(center_pos_val: float, is_in: bool):
+                                """
+                                Returns:
+                                  angle_deg: Optional[float]
+                                  branch_no: str
+                                  diff_deg: float
+                                  method: str
+                                """
+                                if center_pos_val is None:
+                                    return None, "", float("inf"), ("IN:NO_CENTER" if is_in else "OUT:NO_CENTER")
 
-                                    approach_bearing = bearing_deg(p_far[0], p_far[1], p_near[0], p_near[1])
-                                    in_angle_try = (approach_bearing + 180.0) % 360.0  # center->branch へ
-                                    br, diff = find_nearest_branch_with_diff(in_angle_try, cross.branches)
-                                    if diff <= BRANCH_MAX_ANGLE_DIFF_DEG:
-                                        return in_angle_try, br, diff, f"IN:interp2pt({far:.0f}-{base_near:.0f})"
+                                for step in BRANCH_JUDGE_STEPS:
+                                    near = step["near"]
+                                    far = step["far"]
+                                    th = step["th"]
 
-                                    # 未確定→外側へ伸ばす
-                                    far += DIR_EXTEND_STEP_M
-                                    tries += 1
+                                    if is_in:
+                                        p_far = interpolate_point_at_distance(points, cumdist, center_pos_val - far)
+                                        p_near = interpolate_point_at_distance(points, cumdist, center_pos_val - near)
+                                        if not p_far or not p_near:
+                                            return None, "", float("inf"), "IN:OUT_OF_RANGE"
 
-                                # 安全弁（通常ここには来ない）
-                                return None, "", float("inf"), "IN:interp2pt_extend_maxtries"
+                                        approach_bearing = bearing_deg(p_far[0], p_far[1], p_near[0], p_near[1])
+                                        angle_try = (approach_bearing + 180.0) % 360.0
+                                        br, diff = find_nearest_branch_with_diff(angle_try, cross.branches)
+                                        if diff <= th:
+                                            return angle_try, br, diff, f"IN:{int(near)}-{int(far)}m"
+                                    else:
+                                        p_near = interpolate_point_at_distance(points, cumdist, center_pos_val + near)
+                                        p_far = interpolate_point_at_distance(points, cumdist, center_pos_val + far)
+                                        if not p_near or not p_far:
+                                            return None, "", float("inf"), "OUT:OUT_OF_RANGE"
 
-                            def _infer_branch_with_extend_out(center_pos_val: float):
-                                base_near = DIR_OUT_NEAR_M
-                                far = DIR_OUT_FAR_M
-                                tries = 0
-                                while tries < DIR_EXTEND_MAX_TRIES:
-                                    p_near = interpolate_point_at_distance(points, cumdist, center_pos_val + base_near)
-                                    p_far = interpolate_point_at_distance(points, cumdist, center_pos_val + far)
-                                    if not p_near or not p_far:
-                                        return None, "", float("inf"), f"OUT:interp2pt_extend_end({base_near:.0f}-{far:.0f})"
+                                        angle_try = bearing_deg(p_near[0], p_near[1], p_far[0], p_far[1])
+                                        br, diff = find_nearest_branch_with_diff(angle_try, cross.branches)
+                                        if diff <= th:
+                                            return angle_try, br, diff, f"OUT:{int(near)}-{int(far)}m"
 
-                                    out_angle_try = bearing_deg(p_near[0], p_near[1], p_far[0], p_far[1])
-                                    br, diff = find_nearest_branch_with_diff(out_angle_try, cross.branches)
-                                    if diff <= BRANCH_MAX_ANGLE_DIFF_DEG:
-                                        return out_angle_try, br, diff, f"OUT:interp2pt({base_near:.0f}-{far:.0f})"
+                                return None, "", float("inf"), ("IN:UNKNOWN" if is_in else "OUT:UNKNOWN")
 
-                                    far += DIR_EXTEND_STEP_M
-                                    tries += 1
-
-                                return None, "", float("inf"), "OUT:interp2pt_extend_maxtries"
-
-                            angle_method = []
-                            # ※ center_pos_val_dir は「指定中心点に対するトリップ最近接点」（線分上）を優先する
                             center_pos_val = center_pos_val_dir
-
-                            # ---- IN ----
-                            if center_pos_val is not None:
-                                p_in_far = interpolate_point_at_distance(points, cumdist, center_pos_val - DIR_IN_FAR_M)
-                                p_in_near = interpolate_point_at_distance(points, cumdist, center_pos_val - DIR_IN_NEAR_M)
-                            else:
-                                p_in_far = None
-                                p_in_near = None
-
-                            if p_in_far and p_in_near and center_pos_val is not None:
-                                # まず従来の1回判定
-                                approach_bearing = bearing_deg(p_in_far[0], p_in_far[1], p_in_near[0], p_in_near[1])
-                                in_angle = (approach_bearing + 180.0) % 360.0
-                                in_branch_raw, in_diff = find_nearest_branch_with_diff(in_angle, cross.branches)
-
-                                if in_diff <= BRANCH_MAX_ANGLE_DIFF_DEG:
-                                    in_branch = in_branch_raw
-                                    angle_method.append("IN:interp2pt")
-                                else:
-                                    # 未確定→10m刻みで far を伸ばしてHITまで繰り返す
-                                    in_angle2, in_branch2, in_diff2, m = _infer_branch_with_extend_in(center_pos_val)
-                                    angle_method.append(m)
-                                    if in_angle2 is not None and in_diff2 <= BRANCH_MAX_ANGLE_DIFF_DEG:
-                                        in_angle, in_branch, in_diff = in_angle2, in_branch2, in_diff2
-                                    else:
-                                        in_branch = ""
-                                        in_diff = in_diff2 if in_diff2 != float("inf") else in_diff
-                            else:
-                                # もともと補間2点が取れない → 従来fallback
-                                idx_center_fallback = idx_center if idx_center is not None else idx_b
-                                idx_in = max(0, idx_center_fallback - 2)
-                                in_angle = bearing_deg(points[idx_center_fallback][0], points[idx_center_fallback][1],
-                                                       points[idx_in][0], points[idx_in][1])
-                                in_branch_raw, in_diff = find_nearest_branch_with_diff(in_angle, cross.branches)
-                                in_branch = in_branch_raw if in_diff <= BRANCH_MAX_ANGLE_DIFF_DEG else ""
-                                angle_method.append("IN:fallback_idx-2")
-
-                            # ---- OUT ----
-                            if center_pos_val is not None:
-                                p_out_near = interpolate_point_at_distance(points, cumdist, center_pos_val + DIR_OUT_NEAR_M)
-                                p_out_far = interpolate_point_at_distance(points, cumdist, center_pos_val + DIR_OUT_FAR_M)
-                            else:
-                                p_out_near = None
-                                p_out_far = None
-
-                            if p_out_near and p_out_far and center_pos_val is not None:
-                                out_angle = bearing_deg(p_out_near[0], p_out_near[1], p_out_far[0], p_out_far[1])
-                                out_branch_raw, out_diff = find_nearest_branch_with_diff(out_angle, cross.branches)
-
-                                if out_diff <= BRANCH_MAX_ANGLE_DIFF_DEG:
-                                    out_branch = out_branch_raw
-                                    angle_method.append("OUT:interp2pt")
-                                else:
-                                    out_angle2, out_branch2, out_diff2, m = _infer_branch_with_extend_out(center_pos_val)
-                                    angle_method.append(m)
-                                    if out_angle2 is not None and out_diff2 <= BRANCH_MAX_ANGLE_DIFF_DEG:
-                                        out_angle, out_branch, out_diff = out_angle2, out_branch2, out_diff2
-                                    else:
-                                        out_branch = ""
-                                        out_diff = out_diff2 if out_diff2 != float("inf") else out_diff
-                            else:
-                                idx_center_fallback = idx_center if idx_center is not None else idx_a
-                                idx_out = min(len(points) - 1, idx_center_fallback + 2)
-                                out_angle = bearing_deg(points[idx_center_fallback][0], points[idx_center_fallback][1],
-                                                        points[idx_out][0], points[idx_out][1])
-                                out_branch_raw, out_diff = find_nearest_branch_with_diff(out_angle, cross.branches)
-                                out_branch = out_branch_raw if out_diff <= BRANCH_MAX_ANGLE_DIFF_DEG else ""
-                                angle_method.append("OUT:fallback_idx+2")
-
-                            angle_method_str = "/".join(angle_method)
+                            in_angle, in_branch, in_diff, in_method = _infer_branch_3step(center_pos_val, is_in=True)
+                            out_angle, out_branch, out_diff, out_method = _infer_branch_3step(center_pos_val, is_in=False)
+                            angle_method_str = f"{in_method}/{out_method}"
 
                             # 最近接線分の診断情報（可能な範囲で記録）
                             if seg_i is not None:
@@ -1082,6 +1012,11 @@ def main() -> None:
                                 lon_raw, lat_raw, gps_raw = _fmt_pt(idx_raw)
                                 raw_cols.extend([lon_raw, lat_raw, gps_raw])
 
+                            in_diff_s = "" if (in_branch == "" or in_diff == float("inf")) else f"{in_diff:.3f}"
+                            out_diff_s = "" if (out_branch == "" or out_diff == float("inf")) else f"{out_diff:.3f}"
+                            in_angle_s = "" if (in_angle is None or in_branch == "") else f"{in_angle:.3f}"
+                            out_angle_s = "" if (out_angle is None or out_branch == "") else f"{out_angle:.3f}"
+
                             row_out = [
                                 crossroad_path.name,
                                 cross.cross_id,
@@ -1094,10 +1029,10 @@ def main() -> None:
                                 vehicle_use,
                                 str(in_branch),
                                 str(out_branch),
-                                f"{in_angle:.1f}" if pd.notna(in_angle) else "",
-                                f"{out_angle:.1f}" if pd.notna(out_angle) else "",
-                                f"{in_diff:.1f}" if in_diff != float("inf") else "",
-                                f"{out_diff:.1f}" if out_diff != float("inf") else "",
+                                in_angle_s,
+                                out_angle_s,
+                                in_diff_s,
+                                out_diff_s,
                                 angle_method_str,
                                 f"{dist_m:.3f}",
                                 f"{elapsed:.3f}" if elapsed is not None else "",
