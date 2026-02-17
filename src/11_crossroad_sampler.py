@@ -40,6 +40,15 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
       font-size: 13px;
     }}
     .toolbar button {{ margin-right: 6px; }}
+    /* --- 枝番号（数字ラベル）の大きさ調整 --- */
+    .big-branch-label {{
+      font-size: 40px;
+      font-weight: bold;
+      color: #da3e3e;
+      text-shadow: 2px 2px 4px white;
+      background: rgba(255,255,255,0);
+      border: none;
+    }}
   </style>
 </head>
 
@@ -75,6 +84,14 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
     var branchLines = [];
     var canvasRenderer = L.canvas();
 
+    // --- 枝マーク用 カスタムアイコン定義 ---
+    const branchIcon = L.icon({{
+      iconUrl: '../leaflet/images/marker-icon.png',
+      iconSize: [60, 90],
+      iconAnchor: [30, 90],
+      popupAnchor: [0, -90]
+    }});
+
     // 左クリック
     map.on('click', function(e) {{
       if (!centerMarker) {{
@@ -83,11 +100,15 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
       }} else {{
         // branchMarkers.length + 1 を 1,2,3,... の枝番号として振る
         var no = branchMarkers.length + 1;
-        var m = L.marker(e.latlng).addTo(map).bindPopup(\"方向 \" + no);
+        var m = L.marker(e.latlng, {{ icon: branchIcon }}).addTo(map).bindPopup(\"方向 \" + no);
+        m.bindTooltip(String(no), {{
+          permanent: true,
+          direction: \"center\",
+          className: \"big-branch-label\"
+        }});
         branchMarkers.push(m);
 
         var poly = L.polyline([centerLatLng, e.latlng], {{ weight: 4, renderer: canvasRenderer }}).addTo(map);
-        poly.bindTooltip(String(no), {{ permanent: true, direction: \"center\" }});
         branchLines.push(poly);
       }}
     }});
