@@ -107,7 +107,8 @@
     var CENTER_RING_WEIGHT = 10;
 
     var BRANCH_LINE_WEIGHT = 8;
-    var LABEL_PUSH_PX = 130;
+    var LABEL_PUSH_PX = 80;
+    var LABEL_SIDE_PX = 28;
     var branchPoints = [];
     var branchLabels = [];
     var branchLines = [];
@@ -140,9 +141,13 @@
           line.setLatLngs([startLL, endLL]);
         }
 
+        // 数字位置：枝先から外側へ（push）＋枝線から横に逃がす（side）
+        var nx = -vy;   // 法線ベクトル（左90度）
+        var ny =  vx;
+
         var pLabel = L.point(
-          pEnd.x + vx * LABEL_PUSH_PX,
-          pEnd.y + vy * LABEL_PUSH_PX
+          pEnd.x + vx * LABEL_PUSH_PX + nx * LABEL_SIDE_PX,
+          pEnd.y + vy * LABEL_PUSH_PX + ny * LABEL_SIDE_PX
         );
         var labelLL = map.layerPointToLatLng(pLabel);
 
