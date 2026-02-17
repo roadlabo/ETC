@@ -93,6 +93,13 @@
 
     var map = L.map('map', { preferCanvas: true }).setView([35.069095, 134.004512], 16);
 
+    // 描画順制御：枝線は下、数字は上
+    map.createPane("branchPane");
+    map.getPane("branchPane").style.zIndex = 420;
+
+    map.createPane("labelPane");
+    map.getPane("labelPane").style.zIndex = 650;
+
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '© OpenStreetMap contributors'
@@ -107,8 +114,9 @@
     var CENTER_RING_WEIGHT = 10;
 
     var BRANCH_LINE_WEIGHT = 8;
+    var BRANCH_END_SCALE = 2.0;
     var LABEL_PUSH_PX = 80;
-    var LABEL_SIDE_PX = 28;
+    var LABEL_SIDE_PX = 0;
     var branchPoints = [];
     var branchMarkers = [];
     var branchLines = [];
@@ -136,18 +144,22 @@
         );
         var startLL = map.layerPointToLatLng(pStart);
 
+        // 描画用：終点を2倍に延長
+        var pEndDraw = L.point(
+          pCenter.x + (pEnd.x - pCenter.x) * BRANCH_END_SCALE,
+          pCenter.y + (pEnd.y - pCenter.y) * BRANCH_END_SCALE
+        );
+        var endDrawLL = map.layerPointToLatLng(pEndDraw);
+
         var line = branchLines[i];
         if (line) {
-          line.setLatLngs([startLL, endLL]);
+          line.setLatLngs([startLL, endDrawLL]);
         }
 
-        // 数字位置：枝先から外側へ（push）＋枝線から横に逃がす（side）
-        var nx = -vy;   // 法線ベクトル（左90度）
-        var ny =  vx;
-
+        // 数字位置：延長終点からさらに外側へ（延長線上＝pushのみ）
         var pLabel = L.point(
-          pEnd.x + vx * LABEL_PUSH_PX + nx * LABEL_SIDE_PX,
-          pEnd.y + vy * LABEL_PUSH_PX + ny * LABEL_SIDE_PX
+          pEndDraw.x + vx * LABEL_PUSH_PX,
+          pEndDraw.y + vy * LABEL_PUSH_PX
         );
         var labelLL = map.layerPointToLatLng(pLabel);
 
@@ -297,7 +309,15 @@
 
       var startLatLng = map.layerPointToLatLng(pStart);
 
-      var poly = L.polyline([startLatLng, endLatLng], {
+      // 描画用：クリック方向を2倍に延長した終点
+      var pEndDraw = L.point(
+        pCenter.x + (pEnd.x - pCenter.x) * BRANCH_END_SCALE,
+        pCenter.y + (pEnd.y - pCenter.y) * BRANCH_END_SCALE
+      );
+      var endDrawLatLng = map.layerPointToLatLng(pEndDraw);
+
+      var poly = L.polyline([startLatLng, endDrawLatLng], {
+        pane: "branchPane",
         weight: BRANCH_LINE_WEIGHT,
         color: COLOR_LINE,
         opacity: 1.0,
@@ -305,7 +325,10 @@
       }).addTo(map);
       branchLines.push(poly);
 
-      var pLabel = L.point(pEnd.x + vx * LABEL_PUSH_PX, pEnd.y + vy * LABEL_PUSH_PX);
+      var pLabel = L.point(
+        pEndDraw.x + vx * LABEL_PUSH_PX,
+        pEndDraw.y + vy * LABEL_PUSH_PX
+      );
       var labelLatLng = map.layerPointToLatLng(pLabel);
 
       var labelW = 140, labelH = 140;
@@ -316,7 +339,12 @@
         iconAnchor: [Math.round(labelW / 2), Math.round(labelH / 2)]
       });
 
-      var m = L.marker(labelLatLng, { icon: labelIcon, interactive: false, keyboard: false }).addTo(map);
+      var m = L.marker(labelLatLng, {
+        pane: "labelPane",
+        icon: labelIcon,
+        interactive: false,
+        keyboard: false
+      }).addTo(map);
       branchMarkers.push(m);
       updateBranches();
     }
@@ -355,7 +383,7 @@
         var dirDeg = parseFloat(cols[5]);
         if (!Number.isFinite(dirDeg)) continue;
 
-        var dest = destinationPoint(lat, lon, dirDeg, 60);
+        var dest = destinationPoint(lat, lon, dirDeg, 120);
         addBranchFromLatLng(L.latLng(dest.lat, dest.lon));
       }
     }
