@@ -38,7 +38,7 @@
       justify-content: center;
       font-size: 100px;
       font-weight: 900;
-      color: #111;
+      color: #ff0000;
       text-shadow: 3px 3px 8px rgba(255,255,255,0.98);
       background: transparent !important;
       border: 0 !important;
@@ -100,11 +100,60 @@
 
     var centerMarker = null;
     var centerLatLng = null;
-    var CENTER_RING_RADIUS_PX = 18;
+    var COLOR_MAIN = "#ff0000";
+
+    var CENTER_RING_RADIUS_PX = 22;
+    var CENTER_RING_WEIGHT = 10;
+
+    var BRANCH_LINE_WEIGHT = 8;
+    var LABEL_PUSH_PX = 130;
     var branchPoints = [];
     var branchLabels = [];
     var branchLines = [];
     var canvasRenderer = L.canvas();
+
+    function updateBranches() {
+      if (!centerLatLng) return;
+
+      var pCenter = map.latLngToLayerPoint(centerLatLng);
+
+      for (var i = 0; i < branchPoints.length; i++) {
+        var endLL = branchPoints[i];
+
+        var pEnd = map.latLngToLayerPoint(endLL);
+        var vx = pEnd.x - pCenter.x;
+        var vy = pEnd.y - pCenter.y;
+        var vlen = Math.sqrt(vx * vx + vy * vy);
+        if (vlen === 0) vlen = 1;
+        vx /= vlen;
+        vy /= vlen;
+
+        var pStart = L.point(
+          pCenter.x + vx * CENTER_RING_RADIUS_PX,
+          pCenter.y + vy * CENTER_RING_RADIUS_PX
+        );
+        var startLL = map.layerPointToLatLng(pStart);
+
+        var line = branchLines[i];
+        if (line) {
+          line.setLatLngs([startLL, endLL]);
+        }
+
+        var pLabel = L.point(
+          pEnd.x + vx * LABEL_PUSH_PX,
+          pEnd.y + vy * LABEL_PUSH_PX
+        );
+        var labelLL = map.layerPointToLatLng(pLabel);
+
+        var lab = branchLabels[i];
+        if (lab) {
+          lab.setLatLng(labelLL);
+        }
+      }
+    }
+
+    map.on("zoomend", updateBranches);
+    map.on("moveend", updateBranches);
 
     // 左クリック
     map.on('click', function(e) {
@@ -112,10 +161,10 @@
         centerLatLng = e.latlng;
         centerMarker = L.circleMarker(e.latlng, {
           radius: CENTER_RING_RADIUS_PX,
-          color: "#ff0000",
-          weight: 6,
+          color: COLOR_MAIN,
+          weight: CENTER_RING_WEIGHT,
           fill: true,
-          fillColor: "#ff0000",
+          fillColor: COLOR_MAIN,
           fillOpacity: 0.0
         }).addTo(map);
       } else {
@@ -145,12 +194,16 @@
         var startLatLng = map.layerPointToLatLng(pStart);
 
         // 線を描画（リング外から枝先まで）
-        var poly = L.polyline([startLatLng, e.latlng], { weight: 4, renderer: canvasRenderer }).addTo(map);
+        var poly = L.polyline([startLatLng, e.latlng], {
+          weight: BRANCH_LINE_WEIGHT,
+          color: COLOR_MAIN,
+          opacity: 1.0,
+          renderer: canvasRenderer
+        }).addTo(map);
         branchLines.push(poly);
 
         // --- 数字：枝方向のさらに外側へ（中心→枝先方向へpush） ---
-        var pushPx = 110;
-        var pLabel = L.point(pEnd.x + vx * pushPx, pEnd.y + vy * pushPx);
+        var pLabel = L.point(pEnd.x + vx * LABEL_PUSH_PX, pEnd.y + vy * LABEL_PUSH_PX);
         var labelLatLng = map.layerPointToLatLng(pLabel);
 
         // 数字ラベルは「中心基準（iconAnchor中央）」で置く
@@ -165,6 +218,8 @@
 
         var lm = L.marker(labelLatLng, { icon: labelIcon, interactive: false, keyboard: false }).addTo(map);
         branchLabels.push(lm);
+
+        updateBranches();
       }
     });
 
@@ -178,6 +233,8 @@
 
         var ln = branchLines.pop();
         if (ln) map.removeLayer(ln);
+
+        updateBranches();
       }
     });
 
@@ -319,6 +376,8 @@
       branchPoints = [];
       branchLabels = [];
       branchLines = [];
+
+      updateBranches();
     }
 
     document.addEventListener("DOMContentLoaded", setupBridge);
