@@ -40,14 +40,26 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
       font-size: 13px;
     }}
     .toolbar button {{ margin-right: 6px; }}
-    /* --- 枝番号（数字ラベル）の大きさ調整 --- */
-    .big-branch-label {{
-      font-size: 40px;
-      font-weight: bold;
-      color: #da3e3e;
-      text-shadow: 2px 2px 4px white;
-      background: rgba(255,255,255,0);
+    /* --- 枝番号（枝先表示・大きめ） --- */
+    .branch-no-label {{
+      font-size: 28px;
+      font-weight: 800;
+      color: #111;
+      text-shadow: 2px 2px 4px rgba(255,255,255,0.95);
+      background: rgba(255,255,255,0.0);
       border: none;
+      box-shadow: none;
+      padding: 0;
+    }}
+
+    /* Leaflet標準tooltipの「白い箱」と「三角」を消す */
+    .leaflet-tooltip.branch-no-label {{
+      background: transparent !important;
+      border: 0 !important;
+      box-shadow: none !important;
+    }}
+    .leaflet-tooltip.branch-no-label::before {{
+      display: none !important;
     }}
   </style>
 </head>
@@ -103,8 +115,10 @@ HTML_TEMPLATE = f"""<!DOCTYPE html>
         var m = L.marker(e.latlng, {{ icon: branchIcon }}).addTo(map).bindPopup(\"方向 \" + no);
         m.bindTooltip(String(no), {{
           permanent: true,
-          direction: \"center\",
-          className: \"big-branch-label\"
+          direction: \"top\",
+          offset: [0, -40],
+          className: \"branch-no-label\",
+          opacity: 1
         }});
         branchMarkers.push(m);
 
