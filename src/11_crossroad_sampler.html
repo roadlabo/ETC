@@ -31,7 +31,7 @@
 
     /* ===== 枝先番号（5倍級） ===== */
     .branch-no-label{
-      font-size: 150px;
+      font-size: 100px;
       font-weight: 900;
       color: #111;
       text-shadow: 3px 3px 8px rgba(255,255,255,0.98);
@@ -132,38 +132,44 @@
         var m = L.marker(e.latlng, { icon: branchIcon }).addTo(map).bindPopup("方向 " + no);
         branchMarkers.push(m);
 
-        // ===== 枝方向のさらに先に数字を出す =====
+        // ===== 枝方向の「外側」に数字を出す（pxオフセット方式） =====
 
-        // 中心→枝先の方向ベクトル
-        var dx = e.latlng.lng - centerLatLng.lng;
-        var dy = e.latlng.lat - centerLatLng.lat;
+        // いったん「枝先の座標」を画面ピクセルへ
+        var pEnd = map.latLngToLayerPoint(e.latlng);
+        var pCenter = map.latLngToLayerPoint(centerLatLng);
 
-        // ベクトル長
-        var len = Math.sqrt(dx*dx + dy*dy);
-        if(len === 0) len = 1;
+        // 中心→枝先ベクトル（px）
+        var vx = pEnd.x - pCenter.x;
+        var vy = pEnd.y - pCenter.y;
 
         // 正規化
-        dx /= len;
-        dy /= len;
+        var vlen = Math.sqrt(vx*vx + vy*vy);
+        if (vlen === 0) vlen = 1;
+        vx /= vlen;
+        vy /= vlen;
 
-        // マークよりさらに前に 0.00015 度分延長（必要なら微調整）
-        var extend = 0.00015;
+        // 「マークより外側」へ押し出す量（px）
+        // ※文字が大きいので 90〜140px が目安。まず 110px 推奨
+        var pushPx = 110;
 
-        var labelLatLng = L.latLng(
-            e.latlng.lat + dy * extend,
-            e.latlng.lng + dx * extend
-        );
+        // 枝先からさらに外側のピクセル位置
+        var pLabel = L.point(pEnd.x + vx * pushPx, pEnd.y + vy * pushPx);
 
-        // そこに数字を描画（DivIcon使用）
+        // LatLngに戻す
+        var labelLatLng = map.layerPointToLatLng(pLabel);
+
+        // DivIconで数字
         var labelIcon = L.divIcon({
             className: "",
             html: `<div class="branch-no-label">${no}</div>`,
             iconSize: null
         });
 
+        // 数字マーカー（操作不要）
         var labelMarker = L.marker(labelLatLng, {
             icon: labelIcon,
-            interactive: false
+            interactive: false,
+            keyboard: false
         }).addTo(map);
         branchLabels.push(labelMarker);
 
