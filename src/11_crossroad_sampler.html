@@ -110,7 +110,7 @@
     var LABEL_PUSH_PX = 80;
     var LABEL_SIDE_PX = 28;
     var branchPoints = [];
-    var branchLabels = [];
+    var branchMarkers = [];
     var branchLines = [];
     var canvasRenderer = L.canvas();
 
@@ -151,7 +151,7 @@
         );
         var labelLL = map.layerPointToLatLng(pLabel);
 
-        var lab = branchLabels[i];
+        var lab = branchMarkers[i];
         if (lab) {
           lab.setLatLng(labelLL);
         }
@@ -174,58 +174,7 @@
           fillOpacity: 0.0
         }).addTo(map);
       } else {
-        // ===== 枝追加 =====
-        var no = branchPoints.length + 1;
-
-        // 枝先座標を保存（CSVのdir_deg算出に使う）
-        branchPoints.push(e.latlng);
-
-        // --- 青線：中心リングの内側は描かず、リング外周から描く（px計算） ---
-        var pCenter = map.latLngToLayerPoint(centerLatLng);
-        var pEnd = map.latLngToLayerPoint(e.latlng);
-
-        var vx = pEnd.x - pCenter.x;
-        var vy = pEnd.y - pCenter.y;
-        var vlen = Math.sqrt(vx*vx + vy*vy);
-        if (vlen === 0) vlen = 1;
-        vx /= vlen;
-        vy /= vlen;
-
-        // リング外周の開始点（中心から半径分だけ外）
-        var pStart = L.point(
-          pCenter.x + vx * CENTER_RING_RADIUS_PX,
-          pCenter.y + vy * CENTER_RING_RADIUS_PX
-        );
-
-        var startLatLng = map.layerPointToLatLng(pStart);
-
-        // 線を描画（リング外から枝先まで）
-        var poly = L.polyline([startLatLng, e.latlng], {
-          weight: BRANCH_LINE_WEIGHT,
-          color: COLOR_LINE,
-          opacity: 1.0,
-          renderer: canvasRenderer
-        }).addTo(map);
-        branchLines.push(poly);
-
-        // --- 数字：枝方向のさらに外側へ（中心→枝先方向へpush） ---
-        var pLabel = L.point(pEnd.x + vx * LABEL_PUSH_PX, pEnd.y + vy * LABEL_PUSH_PX);
-        var labelLatLng = map.layerPointToLatLng(pLabel);
-
-        // 数字ラベルは「中心基準（iconAnchor中央）」で置く
-        var labelW = 140, labelH = 140;
-
-        var labelIcon = L.divIcon({
-          className: "",
-          html: `<div class="branch-no-label">${no}</div>`,
-          iconSize: [labelW, labelH],
-          iconAnchor: [Math.round(labelW/2), Math.round(labelH/2)]
-        });
-
-        var lm = L.marker(labelLatLng, { icon: labelIcon, interactive: false, keyboard: false }).addTo(map);
-        branchLabels.push(lm);
-
-        updateBranches();
+        addBranchFromLatLng(e.latlng);
       }
     });
 
@@ -234,8 +183,8 @@
       if (branchPoints.length > 0) {
         branchPoints.pop();
 
-        var lm = branchLabels.pop();
-        if (lm) map.removeLayer(lm);
+        var m = branchMarkers.pop();
+        if (m) map.removeLayer(m);
 
         var ln = branchLines.pop();
         if (ln) map.removeLayer(ln);
@@ -306,7 +255,112 @@
       return rows.join("\r\n");
     }
 
-    function beginSaveFromPy(baseName) {
+
+
+    function destinationPoint(lat, lon, bearingDeg, distanceM) {
+      var R = 6378137;
+      var toRad = function(d) { return d * Math.PI / 180; };
+      var toDeg = function(r) { return r * 180 / Math.PI; };
+
+      var angDist = distanceM / R;
+      var brng = toRad(bearingDeg);
+      var lat1 = toRad(lat);
+      var lon1 = toRad(lon);
+
+      var lat2 = Math.asin(Math.sin(lat1) * Math.cos(angDist) + Math.cos(lat1) * Math.sin(angDist) * Math.cos(brng));
+      var lon2 = lon1 + Math.atan2(
+        Math.sin(brng) * Math.sin(angDist) * Math.cos(lat1),
+        Math.cos(angDist) - Math.sin(lat1) * Math.sin(lat2)
+      );
+
+      return { lat: toDeg(lat2), lon: toDeg(lon2) };
+    }
+
+    function addBranchFromLatLng(endLatLng) {
+      var no = branchPoints.length + 1;
+      branchPoints.push(endLatLng);
+
+      var pCenter = map.latLngToLayerPoint(centerLatLng);
+      var pEnd = map.latLngToLayerPoint(endLatLng);
+
+      var vx = pEnd.x - pCenter.x;
+      var vy = pEnd.y - pCenter.y;
+      var vlen = Math.sqrt(vx * vx + vy * vy);
+      if (vlen === 0) vlen = 1;
+      vx /= vlen;
+      vy /= vlen;
+
+      var pStart = L.point(
+        pCenter.x + vx * CENTER_RING_RADIUS_PX,
+        pCenter.y + vy * CENTER_RING_RADIUS_PX
+      );
+
+      var startLatLng = map.layerPointToLatLng(pStart);
+
+      var poly = L.polyline([startLatLng, endLatLng], {
+        weight: BRANCH_LINE_WEIGHT,
+        color: COLOR_LINE,
+        opacity: 1.0,
+        renderer: canvasRenderer
+      }).addTo(map);
+      branchLines.push(poly);
+
+      var pLabel = L.point(pEnd.x + vx * LABEL_PUSH_PX, pEnd.y + vy * LABEL_PUSH_PX);
+      var labelLatLng = map.layerPointToLatLng(pLabel);
+
+      var labelW = 140, labelH = 140;
+      var labelIcon = L.divIcon({
+        className: "",
+        html: `<div class="branch-no-label">${no}</div>`,
+        iconSize: [labelW, labelH],
+        iconAnchor: [Math.round(labelW / 2), Math.round(labelH / 2)]
+      });
+
+      var m = L.marker(labelLatLng, { icon: labelIcon, interactive: false, keyboard: false }).addTo(map);
+      branchMarkers.push(m);
+      updateBranches();
+    }
+
+    function loadFromCsvText(csvText) {
+      clearAll();
+      if (!csvText) return;
+
+      var lines = String(csvText).split(/\r?\n/).filter(function(line) {
+        return line.trim() !== "";
+      });
+      if (lines.length <= 1) return;
+
+      var first = lines[1].split(",");
+      if (first.length < 6) return;
+
+      var lon = parseFloat(first[1]);
+      var lat = parseFloat(first[2]);
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)) return;
+
+      centerLatLng = L.latLng(lat, lon);
+      centerMarker = L.circleMarker(centerLatLng, {
+        radius: CENTER_RING_RADIUS_PX,
+        color: COLOR_CENTER,
+        weight: CENTER_RING_WEIGHT,
+        fill: true,
+        fillColor: COLOR_CENTER,
+        fillOpacity: 0.0
+      }).addTo(map);
+
+      map.setView([lat, lon], 16);
+
+      for (var i = 1; i < lines.length; i++) {
+        var cols = lines[i].split(",");
+        if (cols.length < 6) continue;
+        var dirDeg = parseFloat(cols[5]);
+        if (!Number.isFinite(dirDeg)) continue;
+
+        var dest = destinationPoint(lat, lon, dirDeg, 60);
+        addBranchFromLatLng(L.latLng(dest.lat, dest.lon));
+      }
+    }
+
+    function beginSaveFromPy(baseName, overwrite) {
       if (!centerLatLng) {
         alert("先に中心を指定してください");
         return;
@@ -331,6 +385,7 @@
         const jpgDataUrl = canvas.toDataURL("image/jpeg", 0.9);
         const payload = {
           base_name: baseName,
+          overwrite: !!overwrite,
           csv_text: buildCsvText(),
           jpg_data_url: jpgDataUrl
         };
@@ -376,11 +431,11 @@
       }
       centerLatLng = null;
 
-      for (let l of branchLabels) map.removeLayer(l);
+      for (let l of branchMarkers) map.removeLayer(l);
       for (let l of branchLines) map.removeLayer(l);
 
       branchPoints = [];
-      branchLabels = [];
+      branchMarkers = [];
       branchLines = [];
 
       updateBranches();
