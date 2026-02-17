@@ -141,6 +141,11 @@ class MainWindow(QMainWindow):
         self._waiting_lock_path: Path | None = None
 
         self._build_ui()
+        self.log_info("＊＊＊枝判定基準＊＊＊")
+        self.log_info("第1判定：20-50mで角度算出　基準値との誤差30°")
+        self.log_info("第2判定：20-70mで角度算出　基準値との誤差35°")
+        self.log_info("第3判定：20-100mで角度算出　基準値との誤差40°")
+        self.log_info("その他：枝不明")
         self.log_info("①プロジェクト選択 → ②曜日選択 → 31→32一括実行【分析スタート】")
 
     def _build_ui(self) -> None:
@@ -210,30 +215,23 @@ class MainWindow(QMainWindow):
 
     def _apply_column_widths(self) -> None:
         header = self.table.horizontalHeader()
-
         header.setStretchLastSection(False)
 
-        header.setSectionResizeMode(COL_RUN, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(COL_RUN, 70)
+        fixed = QHeaderView.ResizeMode.Fixed
+        for c in range(self.table.columnCount()):
+            header.setSectionResizeMode(c, fixed)
+
+        self.table.setColumnWidth(COL_RUN, 60)
+        self.table.setColumnWidth(COL_NAME, 220)
 
         for c in [COL_CROSS_CSV, COL_CROSS_JPG, COL_S2_DIR, COL_S2_CSV, COL_OUT31, COL_OUT32]:
-            header.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
-            self.table.setColumnWidth(c, 60)
+            self.table.setColumnWidth(c, 52)
 
         for c in [COL_DONE_FILES, COL_TOTAL_FILES, COL_WEEKDAY, COL_SPLIT, COL_TARGET, COL_OK, COL_UNK, COL_NOTPASS]:
-            header.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
-            self.table.setColumnWidth(c, 86)
+            self.table.setColumnWidth(c, 72)
 
-        header.setSectionResizeMode(COL_STATUS, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(COL_STATUS, 210)
-
-        header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(COL_STATUS, 170)
         header.setTextElideMode(Qt.TextElideMode.ElideRight)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if hasattr(self, "table"):
-            self._apply_column_widths()
 
     def _timestamp(self) -> str:
         return datetime.now().strftime("%Y/%m/%d %H:%M:%S")
