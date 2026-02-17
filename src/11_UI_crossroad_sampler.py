@@ -54,6 +54,7 @@ class Bridge(QObject):
             return
 
         base_name = str(payload.get("base_name", "")).strip()
+        overwrite = bool(payload.get("overwrite", False))
         csv_text = payload.get("csv_text", "")
         jpg_data_url = payload.get("jpg_data_url", "")
 
@@ -66,7 +67,7 @@ class Bridge(QObject):
 
         csv_path = self.window.cross_dir / f"{base_name}.csv"
         jpg_path = self.window.cross_dir / f"{base_name}.jpg"
-        if csv_path.exists() or jpg_path.exists():
+        if (not overwrite) and (csv_path.exists() or jpg_path.exists()):
             self.error.emit(DUPLICATE_MSG)
             return
 
@@ -89,6 +90,7 @@ class MainWindow(QMainWindow):
 
         self.project_dir: Path | None = None
         self.cross_dir: Path | None = None
+        self.editing_name: str | None = None
         self.html_path = Path(__file__).resolve().parent / "11_crossroad_sampler.html"
 
         self._build_ui()
@@ -120,10 +122,13 @@ class MainWindow(QMainWindow):
         left.addWidget(self.table, stretch=1)
 
         row = QHBoxLayout()
+        self.btn_edit = QPushButton("編集")
+        self.btn_edit.clicked.connect(self.edit_selected)
         self.btn_rename = QPushButton("リネーム")
         self.btn_rename.clicked.connect(self.rename_selected)
         self.btn_delete = QPushButton("削除")
         self.btn_delete.clicked.connect(self.delete_selected)
+        row.addWidget(self.btn_edit)
         row.addWidget(self.btn_rename)
         row.addWidget(self.btn_delete)
         left.addLayout(row)
@@ -230,16 +235,19 @@ class MainWindow(QMainWindow):
             self._show_error("出力ファイル名を入力してください。")
             return
 
+        overwrite = self.editing_name is not None and base_name == self.editing_name
+
         csv_path = self.cross_dir / f"{base_name}.csv"
         jpg_path = self.cross_dir / f"{base_name}.jpg"
-        if csv_path.exists() or jpg_path.exists():
+        if (not overwrite) and (csv_path.exists() or jpg_path.exists()):
             self._show_error(DUPLICATE_MSG)
             return
 
-        js = f"beginSaveFromPy({json.dumps(base_name)})"
+        js = f"beginSaveFromPy({json.dumps(base_name)}, {str(overwrite).lower()})"
         self.web.page().runJavaScript(js)
 
     def on_saved(self, base_name: str) -> None:
+        self.editing_name = None
         self.name_edit.clear()
         self.web.page().runJavaScript("clearAll()")
         self.scan_crossroads()
@@ -254,8 +262,35 @@ class MainWindow(QMainWindow):
         self._show_error(msg)
 
     def clear_clicked(self) -> None:
+        self.editing_name = None
         self.name_edit.clear()
         self.web.page().runJavaScript("clearAll()")
+
+    def edit_selected(self) -> None:
+        if not self.cross_dir:
+            self._show_error("先にプロジェクトを選択してください。")
+            return
+
+        name = self.selected_name()
+        if not name:
+            self._show_error("編集対象を選択してください。")
+            return
+
+        csv_path = self.cross_dir / f"{name}.csv"
+        if not csv_path.exists():
+            self._show_error("CSVファイルが見つかりません。")
+            return
+
+        try:
+            csv_text = csv_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            self._show_error(f"CSVの読み込みに失敗しました: {exc}")
+            return
+
+        self.editing_name = name
+        self.name_edit.setText(name)
+        js = f"loadFromCsvText({json.dumps(csv_text)})"
+        self.web.page().runJavaScript(js)
 
     def delete_selected(self) -> None:
         if not self.cross_dir:
