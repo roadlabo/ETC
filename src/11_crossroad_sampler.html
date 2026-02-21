@@ -186,7 +186,9 @@
           fillOpacity: 0.0
         }).addTo(map);
       } else {
-        addBranchFromLatLng(e.latlng);
+        var dirDeg = bearing(centerLatLng.lat, centerLatLng.lng, e.latlng.lat, e.latlng.lng);
+        var dest = destinationPoint(centerLatLng.lat, centerLatLng.lng, dirDeg, 120);
+        addBranchFromLatLng(L.latLng(dest.lat, dest.lon));
       }
     });
 
@@ -264,7 +266,7 @@
         let deg = bearing(centerLatLng.lat, centerLatLng.lng, p.lat, p.lng).toFixed(2);
         rows.push("001," + lon + "," + lat + "," + (i + 1) + ",," + deg);
       }
-      return rows.join("\r\n");
+      return rows.join("\n");
     }
 
 
@@ -409,19 +411,62 @@
         return;
       }
 
-      html2canvas(mapDiv, { useCORS: true, backgroundColor: null, logging: false }).then(function(canvas) {
-        const jpgDataUrl = canvas.toDataURL("image/jpeg", 0.9);
-        const payload = {
-          base_name: baseName,
-          overwrite: !!overwrite,
-          csv_text: buildCsvText(),
-          jpg_data_url: jpgDataUrl
-        };
-        bridge.requestSave(JSON.stringify(payload));
-      }).catch(function(err) {
-        console.error('地図キャプチャ中にエラーが発生しました', err);
-        alert("画像の生成に失敗しました");
+      var captureDone = false;
+      function captureAndSave() {
+        if (captureDone) return;
+        captureDone = true;
+        updateBranches();
+        html2canvas(mapDiv, { useCORS: true, backgroundColor: null, logging: false }).then(function(canvas) {
+          const jpgDataUrl = canvas.toDataURL("image/jpeg", 0.9);
+          const payload = {
+            base_name: baseName,
+            overwrite: !!overwrite,
+            csv_text: buildCsvText(),
+            jpg_data_url: jpgDataUrl
+          };
+          bridge.requestSave(JSON.stringify(payload));
+        }).catch(function(err) {
+          console.error('地図キャプチャ中にエラーが発生しました', err);
+          alert("画像の生成に失敗しました");
+        });
+      }
+
+      var pCenter = map.latLngToLayerPoint(centerLatLng);
+      var bounds = L.latLngBounds([centerLatLng]);
+      for (var i = 0; i < branchPoints.length; i++) {
+        var pEnd = map.latLngToLayerPoint(branchPoints[i]);
+        var dx = pEnd.x - pCenter.x;
+        var dy = pEnd.y - pCenter.y;
+        var len = Math.sqrt(dx * dx + dy * dy);
+        if (len === 0) len = 1;
+        var ux = dx / len;
+        var uy = dy / len;
+
+        var pEndDraw = L.point(
+          pCenter.x + dx * BRANCH_END_SCALE,
+          pCenter.y + dy * BRANCH_END_SCALE
+        );
+        var endDrawLL = map.layerPointToLatLng(pEndDraw);
+        bounds.extend(endDrawLL);
+
+        var pLabel = L.point(
+          pEndDraw.x + ux * LABEL_PUSH_PX,
+          pEndDraw.y + uy * LABEL_PUSH_PX
+        );
+        var labelLL = map.layerPointToLatLng(pLabel);
+        bounds.extend(labelLL);
+      }
+
+      map.once("moveend", function() {
+        updateBranches();
+        setTimeout(captureAndSave, 120);
       });
+
+      map.fitBounds(bounds.pad(0.15), { animate: false });
+      setTimeout(function() {
+        updateBranches();
+        captureAndSave();
+      }, 250);
     }
 
     // CSV保存
