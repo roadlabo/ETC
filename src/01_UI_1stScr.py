@@ -225,6 +225,7 @@ class MainWindow(QMainWindow):
         self._logo_opacity_effect: QGraphicsOpacityEffect | None = None
         self._logo_fade_anim: QPropertyAnimation | None = None
         self._splash_animating = False
+        self._logo_intro_done = False
         self._build_ui()
         self._set_style()
         self._init_logo_overlay()
@@ -402,6 +403,10 @@ class MainWindow(QMainWindow):
         # まず中央に配置して1秒停止
         self.splash.setGeometry(self._splash_rect(center=True))
 
+        # ★最大化リサイズで右上に飛ばされないよう、イントロ完了までガード
+        self._splash_animating = True
+        self._logo_intro_done = False
+
         QTimer.singleShot(1000, self._start_intro_animation)
 
     def _layout_splash(self, *, is_compact: bool) -> None:
@@ -448,6 +453,7 @@ class MainWindow(QMainWindow):
 
         self._layout_splash(is_compact=True)
         self._position_logo_overlay()
+        self._logo_intro_done = True
         self._pulse_logo_glow()
 
     def _pulse_logo_glow(self) -> None:
@@ -535,6 +541,12 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._refresh_about_text()
+
+        # ★イントロ完了までは常に中央キープ（最大化リサイズ対策）
+        if self.splash and not self._logo_intro_done:
+            self.splash.setGeometry(self._splash_rect(center=True))
+            return
+
         self._position_logo_overlay()
 
     def _refresh_about_text(self) -> None:
