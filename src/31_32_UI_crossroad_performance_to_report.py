@@ -298,6 +298,16 @@ class MainWindow(QMainWindow):
         top.addWidget(self.btn_run)
         top.addStretch(1)
 
+        # --- ソフト概要説明 ---
+        self.lbl_about = QLabel(
+            "本ソフトは、「11_交差点(Point)データ」と「20_第２スクリーニング」の様式1-2由来CSVスクリーニングデータを用い、複数交差点を一括解析するETC2.0交差点分析ツールです。\n"
+            "トリップを進入方向→退出方向別に分類し通過台数を集計するとともに、スムーズ通過時間との差からトリップ毎の遅れ時間を算出し、方向別および総遅れ時間（交差点負荷指標）を算出します。\n"
+            "その結果を1交差点につき1レポートとしてExcel形式で出力します（31→32連続実行）。"
+        )
+        self.lbl_about.setStyleSheet("color: #00aa55; font-size: 11px;")
+        self.lbl_about.setWordWrap(True)
+        v.addWidget(self.lbl_about)
+
         radius_row = QHBoxLayout()
         radius_prefix = QLabel("第2スクリーニング後のCSVのうち、半径")
         radius_l_bracket = QLabel("【")
