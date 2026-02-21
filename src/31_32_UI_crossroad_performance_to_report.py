@@ -472,7 +472,7 @@ class MainWindow(QMainWindow):
         box2 = StepBox("STEP 2  分析対象とする曜日を選択", wd_w)
         box2.setFixedWidth(400)
         box3 = StepBox("STEP 3  交差点通過判定半径（この半径以内を通過したらHIT）", rad_w)
-        box3.setFixedWidth(360)
+        box3.setFixedWidth(400)
         box4 = StepBox("STEP 4  実行", run_w)
         box4.setFixedWidth(260)
 
