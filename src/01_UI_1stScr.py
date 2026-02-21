@@ -413,14 +413,35 @@ class MainWindow(QMainWindow):
         # ★ここで最新のウィンドウサイズで終点を再計算
         end_rect = self._splash_rect(center=False)
 
-        anim = QPropertyAnimation(self.splash, b"geometry", self)
-        anim.setDuration(1200)
-        anim.setEasingCurve(QEasingCurve.Type.OutExpo)
-        anim.setStartValue(start_rect)
-        anim.setEndValue(end_rect)
-        anim.finished.connect(self._finish_intro_animation)
-        self._logo_intro_anim = anim
-        anim.start()
+        # --- 位置アニメ ---
+        geo_anim = QPropertyAnimation(self.splash, b"geometry", self)
+        geo_anim.setDuration(1200)
+        geo_anim.setEasingCurve(QEasingCurve.Type.OutExpo)
+        geo_anim.setStartValue(start_rect)
+        geo_anim.setEndValue(end_rect)
+        geo_anim.finished.connect(self._finish_intro_animation)
+        self._logo_intro_anim = geo_anim
+        geo_anim.start()
+
+        # --- サイズアニメ（大 → 小） ---
+        if self.splash_logo and self._pix_small:
+
+            start_size = self.splash_logo.size()
+            end_size = self._pix_small.size()
+
+            size_anim = QPropertyAnimation(self.splash_logo, b"minimumSize", self)
+            size_anim.setDuration(1200)
+            size_anim.setEasingCurve(QEasingCurve.Type.OutExpo)
+            size_anim.setStartValue(start_size)
+            size_anim.setEndValue(end_size)
+            size_anim.start()
+
+            # サイズ変化に合わせて splash のサイズも追従
+            def _sync_container() -> None:
+                if self.splash_logo and self.splash:
+                    self.splash.resize(self.splash_logo.size())
+
+            size_anim.valueChanged.connect(lambda _: _sync_container())
 
     def _finish_intro_animation(self) -> None:
         self._splash_animating = False
