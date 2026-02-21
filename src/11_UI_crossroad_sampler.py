@@ -24,6 +24,9 @@ from PyQt6.QtWidgets import (
     QWidget,
     QInputDialog,
     QGraphicsOpacityEffect,
+    QSplitter,
+    QSpacerItem,
+    QSizePolicy,
 )
 
 APP_TITLE = "11[UI] 交差点サンプラー"
@@ -213,17 +216,18 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         root = QWidget()
         self.setCentralWidget(root)
-        layout = QHBoxLayout(root)
+        main_hbox = QHBoxLayout(root)
 
-        left = QVBoxLayout()
-        layout.addLayout(left, stretch=1)
+        left_panel = QWidget()
+        left_vbox = QVBoxLayout(left_panel)
+        left_vbox.setContentsMargins(0, 0, 0, 0)
+        left_vbox.setSpacing(6)
 
         self.btn_project = QPushButton("① プロジェクト選択")
         self.btn_project.clicked.connect(self.select_project)
-        left.addWidget(self.btn_project)
+        self.btn_project.setFixedWidth(220)
 
         self.lbl_project = QLabel("Project: (未選択)")
-        left.addWidget(self.lbl_project)
 
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["交差点名", "CSV", "JPG"])
@@ -233,7 +237,7 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(self.table.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(self.table.EditTrigger.NoEditTriggers)
-        left.addWidget(self.table, stretch=1)
+        left_vbox.addWidget(self.table, stretch=1)
 
         row = QHBoxLayout()
         self.btn_edit = QPushButton("編集")
@@ -245,36 +249,66 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_edit)
         row.addWidget(self.btn_rename)
         row.addWidget(self.btn_delete)
-        left.addLayout(row)
+        left_vbox.addLayout(row, stretch=0)
 
-        right = QVBoxLayout()
-        layout.addLayout(right, stretch=2)
+        right_panel = QWidget()
+        right_vbox = QVBoxLayout(right_panel)
+        right_vbox.setContentsMargins(0, 0, 0, 0)
+        right_vbox.setSpacing(6)
 
-        top = QHBoxLayout()
-        right.addLayout(top)
-        top.addWidget(QLabel("出力ファイル名"))
+        header_panel = QWidget()
+        header_vbox = QVBoxLayout(header_panel)
+        header_vbox.setContentsMargins(0, 0, 0, 0)
+        header_vbox.setSpacing(2)
+        header_vbox.addWidget(self.btn_project, 0, Qt.AlignmentFlag.AlignLeft)
+        header_vbox.addWidget(self.lbl_project, 0, Qt.AlignmentFlag.AlignLeft)
+
+        self.lbl_guide = QLabel("② 地図上を左クリック：中心点・方向追加　右クリック：やり直し")
+        self.lbl_guide.setWordWrap(True)
+        header_vbox.addWidget(self.lbl_guide, 0, Qt.AlignmentFlag.AlignLeft)
+
+        row_out = QHBoxLayout()
+        row_out.addWidget(QLabel("③ 出力ファイル名"), 0)
 
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("例: crossroad001")
-        top.addWidget(self.name_edit, stretch=1)
+        row_out.addWidget(self.name_edit, stretch=1)
+        header_vbox.addLayout(row_out, stretch=0)
 
         self.btn_save = QPushButton("保存")
         self.btn_save.clicked.connect(self.save_clicked)
-        top.addWidget(self.btn_save)
 
         self.btn_clear = QPushButton("クリア")
         self.btn_clear.clicked.connect(self.clear_clicked)
-        top.addWidget(self.btn_clear)
 
-        self.lbl_guide = QLabel("左クリック：中心 / 方向追加　右クリック：やり直し")
-        right.addWidget(self.lbl_guide)
+        row_btns = QHBoxLayout()
+        row_btns.addWidget(self.btn_save)
+        row_btns.addWidget(self.btn_clear)
+        row_btns.addStretch(1)
+        header_vbox.addLayout(row_btns, stretch=0)
+
+        header_container = QWidget()
+        header_hbox = QHBoxLayout(header_container)
+        header_hbox.setContentsMargins(0, 0, 0, 0)
+        header_hbox.addWidget(header_panel, 1)
+        header_hbox.addSpacerItem(QSpacerItem(320, 1, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum))
+
+        right_vbox.addWidget(header_container, stretch=0)
 
         self.web = QWebEngineView()
         # --- allow file:// HTML to load https resources (Leaflet/OSM tiles) ---
         s = self.web.settings()
         s.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
         s.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
-        right.addWidget(self.web, stretch=1)
+        right_vbox.addWidget(self.web, stretch=1)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(left_panel)
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([420, 1400])
+        main_hbox.addWidget(splitter)
 
     def _setup_web_channel(self) -> None:
         self.channel = QWebChannel(self.web.page())
