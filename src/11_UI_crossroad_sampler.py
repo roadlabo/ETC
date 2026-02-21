@@ -3,9 +3,10 @@ import json
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, Qt, QUrl, QUrlQuery, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QPropertyAnimation, Qt, QTimer, QUrl, QUrlQuery, pyqtSignal, pyqtSlot
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWebEngineCore import QWebEngineSettings
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import (
     QApplication,
@@ -22,6 +23,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QInputDialog,
+    QGraphicsOpacityEffect,
 )
 
 APP_TITLE = "11[UI] 交差点サンプラー"
@@ -97,7 +99,89 @@ class MainWindow(QMainWindow):
         self.html_path = Path(__file__).resolve().parent / "11_crossroad_sampler.html"
 
         self._build_ui()
+        self._corner_logo_visible = False
+        self._pix_small = None
+        QTimer.singleShot(0, self._init_logo_overlay)
         self._setup_web_channel()
+
+    def _init_logo_overlay(self) -> None:
+        logo_path = Path(__file__).resolve().parent / "logo.png"
+        if not logo_path.exists():
+            return
+
+        pixmap = QPixmap(str(logo_path))
+        if pixmap.isNull():
+            return
+
+        pix_big = pixmap.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
+        self._pix_small = pixmap.scaledToHeight(110, Qt.TransformationMode.SmoothTransformation)
+
+        self.splash = QLabel(self)
+        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash.setStyleSheet("background: transparent;")
+        self.splash.setPixmap(pix_big)
+        self.splash.adjustSize()
+
+        x = (self.width() - self.splash.width()) // 2
+        y = (self.height() - self.splash.height()) // 2
+        self.splash.move(x, y)
+        self.splash.show()
+
+        effect = QGraphicsOpacityEffect(self.splash)
+        self.splash.setGraphicsEffect(effect)
+
+        fade_in = QPropertyAnimation(effect, b"opacity", self)
+        fade_in.setDuration(500)
+        fade_in.setStartValue(0.0)
+        fade_in.setEndValue(1.0)
+
+        def start_fade_out():
+            fade_out = QPropertyAnimation(effect, b"opacity", self)
+            fade_out.setDuration(500)
+            fade_out.setStartValue(1.0)
+            fade_out.setEndValue(0.0)
+
+            def show_corner_logo():
+                self.splash.deleteLater()
+                self._show_corner_logo()
+
+            fade_out.finished.connect(show_corner_logo)
+            fade_out.start()
+
+        fade_in.finished.connect(lambda: QTimer.singleShot(3000, start_fade_out))
+        fade_in.start()
+
+    def _show_corner_logo(self) -> None:
+        if not self._pix_small:
+            return
+
+        self.splash = QLabel(self)
+        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash.setStyleSheet("background: transparent;")
+        self.splash.setPixmap(self._pix_small)
+        self.splash.adjustSize()
+
+        margin = 18
+        x = self.width() - self.splash.width() - margin
+        y = margin
+        self.splash.move(x, y)
+        self.splash.show()
+
+        self._corner_logo_visible = True
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_refresh_about_text"):
+            try:
+                self._refresh_about_text()
+            except Exception:
+                pass
+
+        if getattr(self, "_corner_logo_visible", False):
+            margin = 18
+            x = self.width() - self.splash.width() - margin
+            y = margin
+            self.splash.move(x, y)
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -357,7 +441,7 @@ class MainWindow(QMainWindow):
 def main() -> None:
     app = QApplication(sys.argv)
     win = MainWindow()
-    win.show()
+    win.showFullScreen()
     sys.exit(app.exec())
 
 
