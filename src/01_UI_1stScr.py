@@ -33,6 +33,7 @@ spec = importlib.util.spec_from_file_location("split_mod", MODULE_PATH)
 if spec is None or spec.loader is None:
     raise RuntimeError("Cannot load splitter module")
 split_mod = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = split_mod
 spec.loader.exec_module(split_mod)
 SplitConfig = split_mod.SplitConfig
 run_split = split_mod.run_split
