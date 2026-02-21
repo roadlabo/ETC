@@ -7,7 +7,7 @@ from time import perf_counter
 
 os.environ.setdefault("QT_LOGGING_RULES", "qt.text.font.db=false")
 
-from PyQt6.QtCore import QProcess, QPropertyAnimation, QRect, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QProcess, QPropertyAnimation, QPoint, QRect, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetrics, QPainter, QPixmap, QColor, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -256,6 +256,9 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._force_layout_refresh)
         QTimer.singleShot(50, self._force_layout_refresh)
         QTimer.singleShot(150, self._force_layout_refresh)
+        QTimer.singleShot(0, self._update_flow_spacer_for_logo)
+        QTimer.singleShot(50, self._update_flow_spacer_for_logo)
+        QTimer.singleShot(150, self._update_flow_spacer_for_logo)
 
     def _init_logo_overlay(self) -> None:
         logo_path = Path(__file__).resolve().parent / "logo.png"
@@ -325,6 +328,8 @@ class MainWindow(QMainWindow):
 
         # ロゴ表示で右端条件が変わるので、ここでも再計算
         QTimer.singleShot(0, self._force_layout_refresh)
+        QTimer.singleShot(0, self._update_flow_spacer_for_logo)
+        QTimer.singleShot(50, self._update_flow_spacer_for_logo)
 
     def _logo_center_pos(self, w: int, h: int):
         r = self.rect()
@@ -361,6 +366,33 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _update_flow_spacer_for_logo(self) -> None:
+        """STEP4右端がロゴ左端より少し左になるように、flow右側スペーサ幅を更新する（flow座標系で計算）。"""
+        try:
+            if not hasattr(self, "_flow_spacer") or not self._flow_spacer:
+                return
+            if not hasattr(self, "flow") or not self.flow:
+                return
+
+            corner = getattr(self, "corner_logo", None)
+            if not corner or not corner.isVisible():
+                # ロゴが無い時のデフォルト（必要最小限）
+                self._flow_spacer.setFixedWidth(60)
+                return
+
+            # ロゴ左上のグローバル座標 → flowローカル座標へ変換
+            logo_global = corner.mapToGlobal(QPoint(0, 0))
+            logo_in_flow = self.flow.mapFromGlobal(logo_global)
+            logo_left_in_flow = logo_in_flow.x()
+
+            margin = 12  # “少し左”の量（好みで 8〜20）
+            # flow内で右側に確保すべき幅
+            reserve = max(0, self.flow.width() - (logo_left_in_flow - margin))
+            reserve = max(reserve, 60)  # 下限
+            self._flow_spacer.setFixedWidth(reserve)
+        except Exception:
+            pass
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "_refresh_about_text"):
@@ -387,21 +419,7 @@ class MainWindow(QMainWindow):
             self.flow.update()
 
         # 右スペーサ幅をロゴ位置に合わせて調整（STEP4右端がロゴ左端より少し左）
-        try:
-            if hasattr(self, "_flow_spacer") and self._flow_spacer:
-                corner = getattr(self, "corner_logo", None)
-                if corner and corner.isVisible():
-                    pad = getattr(self, "LOGO_CORNER_PAD", 8)
-                    dx = getattr(self, "LOGO_CORNER_DX", -10)
-                    logo_left = corner.x()
-                    margin = 12
-                    reserve = max(0, self.width() - (logo_left - margin))
-                    reserve = max(reserve, 60)
-                    self._flow_spacer.setFixedWidth(reserve)
-                else:
-                    self._flow_spacer.setFixedWidth(60)
-        except Exception:
-            pass
+        self._update_flow_spacer_for_logo()
 
         if getattr(self, "project_dir", None) and hasattr(self, "lbl_project"):
             name = self.project_dir.name
