@@ -9,12 +9,14 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from PyQt6.QtCore import QMargins, QPoint, QRect, QSize, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
+from PyQt6.QtCore import QMargins, QPoint, QRect, QSize, Qt, QThread, QTimer, QPropertyAnimation, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
     QGroupBox,
     QGridLayout,
     QHBoxLayout,
@@ -215,8 +217,13 @@ class MainWindow(QMainWindow):
         self.cards: dict[str, ZipCard] = {}
         self.current_zip = "-"
         self.current_sort_file = "-"
+        self.logo_label: QLabel | None = None
+        self.logo_container: QWidget | None = None
+        self._logo_shadow_effect: QGraphicsDropShadowEffect | None = None
+        self._logo_anim: QPropertyAnimation | None = None
         self._build_ui()
         self._set_style()
+        self._init_logo_overlay()
         self.anim_timer = QTimer(self)
         self.anim_timer.timeout.connect(self._tick_animation)
         self.anim_timer.start(120)
@@ -335,8 +342,71 @@ class MainWindow(QMainWindow):
             QGroupBox { border: 1px solid #1c4f33; border-radius: 4px; margin-top: 8px; padding-top: 12px; }
             QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; }
             QLabel#fieldHelp { color: #6bbf8a; }
+            QLabel#hudLogo { background: transparent; }
         """)
         self.setFont(QFont("Consolas", 10))
+
+    def _init_logo_overlay(self) -> None:
+        logo_path = Path(__file__).resolve().parent / "logo.png"
+        if not logo_path.exists():
+            return
+        pixmap = QPixmap(str(logo_path))
+        if pixmap.isNull():
+            return
+        scaled = pixmap.scaledToHeight(110, Qt.TransformationMode.SmoothTransformation)
+
+        self.logo_container = QWidget(self)
+        self.logo_container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.logo_container.setStyleSheet("background: transparent;")
+        self.logo_container.setFixedSize(scaled.size())
+
+        self.logo_label = QLabel(self.logo_container)
+        self.logo_label.setObjectName("hudLogo")
+        self.logo_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.logo_label.setStyleSheet("background: transparent;")
+        self.logo_label.setPixmap(scaled)
+        self.logo_label.resize(scaled.size())
+
+        self._logo_shadow_effect = QGraphicsDropShadowEffect(self.logo_container)
+        self._logo_shadow_effect.setBlurRadius(28)
+        self._logo_shadow_effect.setOffset(0, 0)
+        self._logo_shadow_effect.setColor(QColor(0, 255, 180, 140))
+        self.logo_container.setGraphicsEffect(self._logo_shadow_effect)
+
+        opacity = QGraphicsOpacityEffect(self.logo_label)
+        opacity.setOpacity(0.0)
+        self.logo_label.setGraphicsEffect(opacity)
+        self._logo_anim = QPropertyAnimation(opacity, b"opacity", self)
+        self._logo_anim.setDuration(650)
+        self._logo_anim.setStartValue(0.0)
+        self._logo_anim.setEndValue(1.0)
+        self._logo_anim.start()
+
+        self.logo_container.raise_()
+        self._position_logo_overlay()
+
+    def _position_logo_overlay(self) -> None:
+        if not self.logo_container:
+            return
+        margin = 18
+        x = self.width() - self.logo_container.width() - margin
+        y = margin
+        self.logo_container.move(max(0, x), max(0, y))
+
+    def _set_logo_glow(self, alpha: int, blur: int | None = None) -> None:
+        if not self._logo_shadow_effect:
+            return
+        if blur is not None:
+            self._logo_shadow_effect.setBlurRadius(blur)
+        self._logo_shadow_effect.setColor(QColor(0, 255, 180, alpha))
+
+    def _flash_logo_verify(self) -> None:
+        if not self._logo_shadow_effect:
+            return
+        self._set_logo_glow(220, 36)
+        flash_steps = [(90, 120), (180, 220), (270, 130), (360, 220)]
+        for delay, alpha in flash_steps:
+            QTimer.singleShot(delay, lambda a=alpha: self._set_logo_glow(a, 36))
 
     def _pick_dir(self, target: QLineEdit) -> None:
         d = QFileDialog.getExistingDirectory(self, "Select directory", target.text() or str(Path.cwd()))
@@ -349,6 +419,14 @@ class MainWindow(QMainWindow):
         for i, lb in enumerate(self.map_lines):
             lb.setStyleSheet("color:#a2f0be;font-weight:700;" if i <= active else "color:#2b6040;")
         self.tele["status"].setText(f"状態: {stage}")
+        if stage == "SCAN":
+            self._set_logo_glow(80, 24)
+        elif stage == "EXTRACT":
+            self._set_logo_glow(120, 28)
+        elif stage == "SORT":
+            self._set_logo_glow(170, 34)
+        elif stage == "VERIFY":
+            self._flash_logo_verify()
 
     def _append_log(self, msg: str) -> None:
         ts = time.strftime("%H:%M:%S")
@@ -376,6 +454,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._refresh_about_text()
+        self._position_logo_overlay()
 
     def _refresh_about_text(self) -> None:
         fm = QFontMetrics(self.about_text.font())
