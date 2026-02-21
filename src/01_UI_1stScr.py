@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
     QGroupBox,
     QGridLayout,
     QHBoxLayout,
@@ -221,6 +222,8 @@ class MainWindow(QMainWindow):
         self._pix_small: QPixmap | None = None
         self._logo_shadow_effect: QGraphicsDropShadowEffect | None = None
         self._logo_intro_anim: QPropertyAnimation | None = None
+        self._logo_opacity_effect: QGraphicsOpacityEffect | None = None
+        self._logo_fade_anim: QPropertyAnimation | None = None
         self._splash_animating = False
         self._build_ui()
         self._set_style()
@@ -371,13 +374,26 @@ class MainWindow(QMainWindow):
 
         self._layout_splash(is_compact=False)
 
-        self._logo_shadow_effect = QGraphicsDropShadowEffect(self.splash)
+        self._logo_shadow_effect = QGraphicsDropShadowEffect(self.splash_logo)
         self._logo_shadow_effect.setBlurRadius(28)
         self._logo_shadow_effect.setOffset(0, 0)
         self._logo_shadow_effect.setColor(QColor(0, 255, 180, 140))
-        self.splash.setGraphicsEffect(self._logo_shadow_effect)
+        self.splash_logo.setGraphicsEffect(self._logo_shadow_effect)
 
         self.splash.raise_()
+
+        # --- フェードイン（ほんの少し） ---
+        self._logo_opacity_effect = QGraphicsOpacityEffect(self.splash)
+        self._logo_opacity_effect.setOpacity(0.0)
+        self.splash.setGraphicsEffect(self._logo_opacity_effect)
+
+        fade = QPropertyAnimation(self._logo_opacity_effect, b"opacity", self)
+        fade.setDuration(260)
+        fade.setStartValue(0.0)
+        fade.setEndValue(1.0)
+        fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._logo_fade_anim = fade
+        fade.start()
 
         # 中央表示前に一度サイズ確定
         self.splash.adjustSize()
@@ -432,6 +448,14 @@ class MainWindow(QMainWindow):
 
         self._layout_splash(is_compact=True)
         self._position_logo_overlay()
+        self._pulse_logo_glow()
+
+    def _pulse_logo_glow(self) -> None:
+        if not self._logo_shadow_effect:
+            return
+        self._set_logo_glow(230, 42)
+        QTimer.singleShot(220, lambda: self._set_logo_glow(140, 28))
+        QTimer.singleShot(520, lambda: self._set_logo_glow(160, 30))
 
     def _splash_rect(self, *, center: bool) -> QRect:
         if not self.splash:
