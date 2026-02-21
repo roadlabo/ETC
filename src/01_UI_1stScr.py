@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGroupBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -226,6 +227,20 @@ class MainWindow(QMainWindow):
         root = QWidget(); self.setCentralWidget(root)
         outer = QVBoxLayout(root)
 
+        about_box = QGroupBox("本ソフトについて")
+        about_layout = QVBoxLayout(about_box)
+        about_text = QLabel(
+            "本ソフトは、ETC2.0プローブデータ（様式1-2出力）から、\n"
+            "指定した2次メッシュに該当するデータを抽出し、\n"
+            "運行ID（OPID）ごとにCSVファイルへ分割します。\n"
+            "さらに、各CSVの内容を時系列順に並べ替えます。\n"
+            "これにより、必要な運行データのみを整理・抽出でき、\n"
+            "後続の分析を効率的に実施することができます。"
+        )
+        about_text.setWordWrap(True)
+        about_layout.addWidget(about_text)
+        outer.addWidget(about_box)
+
         form = QFormLayout()
         self.input_dir = QLineEdit(); self.output_dir = QLineEdit(); self.term_name = QLineEdit("R7_2")
         self.inner_csv = QLineEdit("data.csv"); self.zip_keys = QLineEdit("523357,523347,523450,523440")
@@ -235,9 +250,67 @@ class MainWindow(QMainWindow):
         self.chunk_rows = QSpinBox(); self.chunk_rows.setRange(1000, 5_000_000); self.chunk_rows.setValue(200000)
         in_row = QHBoxLayout(); in_row.addWidget(self.input_dir); bi = QPushButton("..."); bi.clicked.connect(lambda: self._pick_dir(self.input_dir)); in_row.addWidget(bi)
         out_row = QHBoxLayout(); out_row.addWidget(self.output_dir); bo = QPushButton("..."); bo.clicked.connect(lambda: self._pick_dir(self.output_dir)); out_row.addWidget(bo)
-        form.addRow("INPUT_DIR", self._wrap(in_row)); form.addRow("OUTPUT_DIR", self._wrap(out_row)); form.addRow("TERM", self.term_name)
-        form.addRow("INNER_CSV", self.inner_csv); form.addRow("ZIP_KEYS", self.zip_keys); form.addRow("ENCODING", self.encoding)
-        form.addRow("DELIM", self.delim); form.addRow("DO_SORT", self.do_sort); form.addRow("TIMESTAMP_COL", self.timestamp_col); form.addRow("CHUNK_ROWS", self.chunk_rows)
+
+        self._add_form_row(
+            form,
+            "INPUT_DIR",
+            self._wrap(in_row),
+            "プローブデータ様式1-2の「OUT1-2」フォルダを指定します。\nこの中には日付ごとのZIPがあり、その中に data.csv が格納されています。",
+        )
+        self._add_form_row(
+            form,
+            "OUTPUT_DIR",
+            self._wrap(out_row),
+            "第1スクリーニング後の保存先です。\n後続分析のため、共通保存フォルダの使用を推奨します。",
+        )
+        self._add_form_row(
+            form,
+            "TERM",
+            self.term_name,
+            "出力ファイル名の先頭に付ける識別文字列です。\n例：R7_2 など、年月が分かるように設定してください。",
+        )
+        self._add_form_row(
+            form,
+            "INNER_CSV",
+            self.inner_csv,
+            "ZIP内の対象CSV名です。通常は data.csv 固定で変更不要です。",
+        )
+        self._add_form_row(
+            form,
+            "ZIP_KEYS",
+            self.zip_keys,
+            "抽出対象とする2次メッシュ番号をカンマ区切りで入力します。\n付属のメッシュ図を参照してください。",
+        )
+        self._add_form_row(
+            form,
+            "ENCODING",
+            self.encoding,
+            "文字コード設定です。通常は utf-8 のまま変更不要です。",
+        )
+        self._add_form_row(
+            form,
+            "DELIM",
+            self.delim,
+            "CSVの区切り文字です。通常は ,（カンマ）で変更不要です。",
+        )
+        self._add_form_row(
+            form,
+            "DO_SORT",
+            self.do_sort,
+            "抽出後に時系列ソートを実行する設定です。通常はONのまま使用してください。",
+        )
+        self._add_form_row(
+            form,
+            "TIMESTAMP_COL",
+            self.timestamp_col,
+            "時刻が記載されている列番号（0始まり）です。\n通常は 6 で変更不要です。",
+        )
+        self._add_form_row(
+            form,
+            "CHUNK_ROWS",
+            self.chunk_rows,
+            "並べ替え時に一度にメモリへ読み込む行数です。\nメモリ不足時のみ値を下げてください。",
+        )
         outer.addLayout(form)
 
         btns = QHBoxLayout(); self.btn_run = QPushButton("RUN"); self.btn_cancel = QPushButton("CANCEL"); self.btn_open = QPushButton("OPEN OUTPUT")
@@ -289,6 +362,18 @@ class MainWindow(QMainWindow):
     def _wrap(self, layout) -> QWidget:
         w = QWidget(); w.setLayout(layout); return w
 
+    def _add_form_row(self, form: QFormLayout, label: str, field: QWidget, help_text: str) -> None:
+        form.addRow(label, field)
+        help_label = QLabel(help_text)
+        help_label.setWordWrap(True)
+        help_label.setObjectName("fieldHelp")
+        help_label.setFont(QFont("Consolas", 9))
+        help_wrap = QWidget()
+        help_layout = QVBoxLayout(help_wrap)
+        help_layout.setContentsMargins(0, 0, 0, 8)
+        help_layout.addWidget(help_label)
+        form.addRow("", help_wrap)
+
     def _set_style(self) -> None:
         self.setStyleSheet("""
             QWidget { background: #050908; color: #79d58f; }
@@ -296,6 +381,9 @@ class MainWindow(QMainWindow):
             QPushButton { background: #112116; border: 1px solid #2a6b45; padding: 6px 10px; }
             QPushButton:hover { background: #18321f; }
             QFrame { border: 1px solid #1c4f33; border-radius: 4px; }
+            QGroupBox { border: 1px solid #1c4f33; border-radius: 4px; margin-top: 8px; padding-top: 12px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; }
+            QLabel#fieldHelp { color: #6bbf8a; }
         """)
         self.setFont(QFont("Consolas", 10))
 
