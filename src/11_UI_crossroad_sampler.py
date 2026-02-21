@@ -151,7 +151,7 @@ class MainWindow(QMainWindow):
         self.btn_save.clicked.connect(self.save_clicked)
         top.addWidget(self.btn_save)
 
-        self.btn_clear = QPushButton("全消去")
+        self.btn_clear = QPushButton("クリア")
         self.btn_clear.clicked.connect(self.clear_clicked)
         top.addWidget(self.btn_clear)
 
