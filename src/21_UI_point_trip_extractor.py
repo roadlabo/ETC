@@ -153,9 +153,21 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._corner_logo_visible = False
+        self.splash_logo: QLabel | None = None
         self._pix_small = None
         QTimer.singleShot(0, self._init_logo_overlay)
         self.log_info("①プロジェクト選択 → ②第1スクリーニング選択 → 21【分析スタート】")
+
+    def _center_splash_logo(self) -> None:
+        if not self.splash_logo:
+            return
+
+        parent_rect = self.rect()
+        logo_rect = self.splash_logo.rect()
+
+        x = (parent_rect.width() - logo_rect.width()) // 2
+        y = (parent_rect.height() - logo_rect.height()) // 2
+        self.splash_logo.move(x, y)
 
     def _init_logo_overlay(self) -> None:
         logo_path = Path(__file__).resolve().parent / "logo.png"
@@ -169,19 +181,16 @@ class MainWindow(QMainWindow):
         pix_big = pixmap.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
         self._pix_small = pixmap.scaledToHeight(110, Qt.TransformationMode.SmoothTransformation)
 
-        self.splash = QLabel(self)
-        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.splash.setStyleSheet("background: transparent;")
-        self.splash.setPixmap(pix_big)
-        self.splash.adjustSize()
+        self.splash_logo = QLabel(self)
+        self.splash_logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash_logo.setStyleSheet("background: transparent;")
+        self.splash_logo.setPixmap(pix_big)
+        self.splash_logo.adjustSize()
+        self._center_splash_logo()
+        self.splash_logo.show()
 
-        x = (self.width() - self.splash.width()) // 2
-        y = (self.height() - self.splash.height()) // 2
-        self.splash.move(x, y)
-        self.splash.show()
-
-        effect = QGraphicsOpacityEffect(self.splash)
-        self.splash.setGraphicsEffect(effect)
+        effect = QGraphicsOpacityEffect(self.splash_logo)
+        self.splash_logo.setGraphicsEffect(effect)
 
         fade_in = QPropertyAnimation(effect, b"opacity", self)
         fade_in.setDuration(500)
@@ -195,7 +204,9 @@ class MainWindow(QMainWindow):
             fade_out.setEndValue(0.0)
 
             def show_corner_logo():
-                self.splash.deleteLater()
+                if self.splash_logo:
+                    self.splash_logo.deleteLater()
+                    self.splash_logo = None
                 self._show_corner_logo()
 
             fade_out.finished.connect(show_corner_logo)
@@ -231,10 +242,18 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        if self.splash_logo and self.splash_logo.isVisible():
+            self._center_splash_logo()
+
         if getattr(self, "_corner_logo_visible", False):
             x = self.width() - self.splash.width() - CORNER_LOGO_MARGIN + abs(CORNER_LOGO_OFFSET_RIGHT)
             y = CORNER_LOGO_MARGIN + CORNER_LOGO_OFFSET_TOP
             self.splash.move(x, y)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.splash_logo:
+            self._center_splash_logo()
 
     def _build_ui(self):
         root = QWidget()
