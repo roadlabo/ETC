@@ -403,6 +403,9 @@ class MainWindow(QMainWindow):
 
         # まず中央に配置して1秒停止
         self.splash.setGeometry(self._splash_rect(center=True))
+        # ★遅延生成の場合、子Widgetは自動では表示されないことがあるので明示表示
+        self.splash.show()
+        self.splash.raise_()
 
         # ★最大化リサイズで右上に飛ばされないよう、イントロ完了までガード
         self._splash_animating = True
