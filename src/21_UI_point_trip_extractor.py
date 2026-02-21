@@ -29,6 +29,10 @@ from PyQt6.QtWidgets import (
 
 APP_TITLE = "21[UI] Point Trip Extractor（第2スクリーニング）"
 
+CORNER_LOGO_MARGIN = 18
+CORNER_LOGO_OFFSET_TOP = -4
+CORNER_LOGO_OFFSET_RIGHT = -10
+
 FOLDER_CROSS = "11_交差点(Point)データ"
 FOLDER_OUT = "20_第２スクリーニング"
 
@@ -206,13 +210,14 @@ class MainWindow(QMainWindow):
 
         self.splash = QLabel(self)
         self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.splash.setStyleSheet("background: transparent;")
+        self.splash.setStyleSheet(
+            f"background: transparent; margin-top: {CORNER_LOGO_OFFSET_TOP}px; margin-right: {CORNER_LOGO_OFFSET_RIGHT}px;"
+        )
         self.splash.setPixmap(self._pix_small)
         self.splash.adjustSize()
 
-        margin = 18
-        x = self.width() - self.splash.width() - margin
-        y = margin
+        x = self.width() - self.splash.width() - CORNER_LOGO_MARGIN + abs(CORNER_LOGO_OFFSET_RIGHT)
+        y = CORNER_LOGO_MARGIN + CORNER_LOGO_OFFSET_TOP
         self.splash.move(x, y)
         self.splash.show()
 
@@ -227,9 +232,8 @@ class MainWindow(QMainWindow):
                 pass
 
         if getattr(self, "_corner_logo_visible", False):
-            margin = 18
-            x = self.width() - self.splash.width() - margin
-            y = margin
+            x = self.width() - self.splash.width() - CORNER_LOGO_MARGIN + abs(CORNER_LOGO_OFFSET_RIGHT)
+            y = CORNER_LOGO_MARGIN + CORNER_LOGO_OFFSET_TOP
             self.splash.move(x, y)
 
     def _build_ui(self):
@@ -238,6 +242,7 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(root)
 
         top = QHBoxLayout()
+        top.setContentsMargins(12, 8, 0, 8)
         v.addLayout(top)
 
         btn_project = QPushButton("① プロジェクト選択")
