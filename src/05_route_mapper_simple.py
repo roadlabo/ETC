@@ -625,6 +625,10 @@ class RouteMapperWindow(QMainWindow):
         self._build_ui()
         self._corner_logo_visible = False
         self._pix_small = None
+        self._logo_phase = ""
+        self.LOGO_CORNER_PAD = 8
+        self.LOGO_CORNER_DX = -10
+        self.LOGO_CORNER_DY = -4
         QTimer.singleShot(0, self._init_logo_overlay)
         self._refresh_file_list()
 
@@ -721,9 +725,9 @@ class RouteMapperWindow(QMainWindow):
         self.splash.setPixmap(pix_big)
         self.splash.adjustSize()
 
-        x = (self.width() - self.splash.width()) // 2
-        y = (self.height() - self.splash.height()) // 2
+        x, y = self._logo_center_pos(self.splash.width(), self.splash.height())
         self.splash.move(x, y)
+        self._logo_phase = "center"
         self.splash.show()
 
         effect = QGraphicsOpacityEffect(self.splash)
@@ -760,13 +764,27 @@ class RouteMapperWindow(QMainWindow):
         self.splash.setPixmap(self._pix_small)
         self.splash.adjustSize()
 
-        margin = 18
-        x = self.width() - self.splash.width() - margin
-        y = margin
+        x, y = self._logo_corner_pos(self.splash.width(), self.splash.height())
         self.splash.move(x, y)
         self.splash.show()
 
         self._corner_logo_visible = True
+        self._logo_phase = "corner"
+
+    def _logo_center_pos(self, w: int, h: int):
+        r = self.rect()
+        x = (r.width() - w) // 2
+        y = (r.height() - h) // 2
+        return x, y
+
+    def _logo_corner_pos(self, w: int, h: int):
+        r = self.rect()
+        pad = getattr(self, "LOGO_CORNER_PAD", 8)
+        dx = getattr(self, "LOGO_CORNER_DX", -10)
+        dy = getattr(self, "LOGO_CORNER_DY", -4)
+        x = r.width() - w - pad + dx
+        y = pad + dy
+        return x, y
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -776,10 +794,12 @@ class RouteMapperWindow(QMainWindow):
             except Exception:
                 pass
 
-        if getattr(self, "_corner_logo_visible", False):
-            margin = 18
-            x = self.width() - self.splash.width() - margin
-            y = margin
+        if self.splash and getattr(self, "_logo_phase", "") == "center":
+            x, y = self._logo_center_pos(self.splash.width(), self.splash.height())
+            self.splash.move(x, y)
+
+        if self.splash and getattr(self, "_logo_phase", "") == "corner" and getattr(self, "_corner_logo_visible", False):
+            x, y = self._logo_corner_pos(self.splash.width(), self.splash.height())
             self.splash.move(x, y)
 
     def _pick_directory(self) -> None:
