@@ -226,6 +226,7 @@ class MainWindow(QMainWindow):
         self._logo_fade_anim: QPropertyAnimation | None = None
         self._splash_animating = False
         self._logo_intro_done = False
+        self._pending_logo_reposition = False
         self._build_ui()
         self._set_style()
         self._init_logo_overlay()
@@ -542,12 +543,21 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         self._refresh_about_text()
 
-        # ★イントロ完了までは常に中央キープ（最大化リサイズ対策）
-        if self.splash and not self._logo_intro_done:
-            self.splash.setGeometry(self._splash_rect(center=True))
+        # 連続resizeでsetGeometryを連打しない（Painter not active 対策）
+        if self._pending_logo_reposition:
             return
+        self._pending_logo_reposition = True
 
-        self._position_logo_overlay()
+        def _later():
+            self._pending_logo_reposition = False
+
+            # イントロ中は中央維持、完了後は右上追従
+            if self.splash and not getattr(self, "_logo_intro_done", False):
+                self.splash.setGeometry(self._splash_rect(center=True))
+            else:
+                self._position_logo_overlay()
+
+        QTimer.singleShot(0, _later)
 
     def _refresh_about_text(self) -> None:
         fm = QFontMetrics(self.about_text.font())
