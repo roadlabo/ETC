@@ -2,47 +2,76 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import heapq
 import io
 import os
 import sys
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
-# Paths
-INPUT_DIR = r"D:\\...\\R7年2月_OUT1-2"    # ZIP群の場所
-OUTPUT_DIR = r"D:\\...\\out(1st)"          # 出力先
+# Legacy-compatible defaults
+INPUT_DIR = r"D:\\...\\R7年2月_OUT1-2"
+OUTPUT_DIR = r"D:\\...\\out(1st)"
 TERM_NAME = "R7_2"
-INNER_CSV = "data.csv"                  # ZIP内部の対象CSV名
-ZIP_DIGIT_KEYS = ["523357", "523347", "523450", "523440"]  # ZIP名フィルタ
-
-# CSV I/O
-ENCODING = "utf-8"    # 日本語CSVなら cp932 でも可
+INNER_CSV = "data.csv"
+ZIP_DIGIT_KEYS = ["523357", "523347", "523450", "523440"]
+ENCODING = "utf-8"
 DELIM = ","
-
-# Extraction behavior
-BUFFER_SIZE = 8 << 20   # 8MiB
-SHOW_PROGRESS = True      # 進捗表示ON（％のみ）
-
-# Final sort settings
+BUFFER_SIZE = 8 << 20
+SHOW_PROGRESS = True
 DO_FINAL_SORT = True
-TIMESTAMP_COL = 6         # 0始まり: 7列目（GPS時刻）
-SORT_GLOB = f"{TERM_NAME}_*.csv"
-CHUNK_ROWS = 200_000   # メモリに応じて調整（100k~1M推奨）
+TIMESTAMP_COL = 6
+CHUNK_ROWS = 200_000
 TEMP_SORT_DIR = "_sort_tmp"
 
-def print_progress(stage: str, done: int, total: int) -> None:
-    if not SHOW_PROGRESS or total <= 0:
+
+@dataclass
+class SplitConfig:
+    input_dir: str
+    output_dir: str
+    term_name: str
+    inner_csv: str
+    zip_digit_keys: list[str]
+
+    encoding: str = ENCODING
+    delim: str = DELIM
+
+    buffer_size: int = BUFFER_SIZE
+    do_final_sort: bool = DO_FINAL_SORT
+    timestamp_col: int = TIMESTAMP_COL
+    chunk_rows: int = CHUNK_ROWS
+    temp_sort_dir: str = TEMP_SORT_DIR
+
+
+ProgressCB = Optional[Callable[[str, int, int, dict], None]]
+
+
+def print_progress(
+    stage: str,
+    done: int,
+    total: int,
+    *,
+    extra: Optional[dict] = None,
+    progress_cb: ProgressCB = None,
+    show_progress: bool = SHOW_PROGRESS,
+) -> None:
+    payload = extra or {}
+    if progress_cb is not None:
+        progress_cb(stage, done, total, payload)
+        return
+    if not show_progress or total <= 0:
         return
     pct = min(100, int(done * 100 / total))
     sys.stdout.write(f"\r{stage}: {pct}%")
     sys.stdout.flush()
 
 
-def end_progress_line() -> None:
-    if SHOW_PROGRESS:
+def end_progress_line(progress_cb: ProgressCB = None, show_progress: bool = SHOW_PROGRESS) -> None:
+    if progress_cb is None and show_progress:
         sys.stdout.write("\n")
         sys.stdout.flush()
 
@@ -52,7 +81,7 @@ def ensure_output_dir(path: Path) -> None:
 
 
 def iter_target_zips(directory: Path, digit_keys: Iterable[str]) -> list[Path]:
-    keys = list(digit_keys)
+    keys = [k.strip() for k in digit_keys if k and k.strip()]
     candidates: list[Path] = []
     for entry in directory.iterdir():
         if not entry.is_file() or entry.suffix.lower() != ".zip":
@@ -64,15 +93,18 @@ def iter_target_zips(directory: Path, digit_keys: Iterable[str]) -> list[Path]:
     return candidates
 
 
-def open_writer(opid: str) -> tuple[io.TextIOWrapper, csv.writer]:
-    output_path = OUTPUT_DIR_PATH / f"{TERM_NAME}_{opid}.csv"
-    file_obj = output_path.open(
-        mode="a",
-        encoding=ENCODING,
-        newline="",
-        buffering=BUFFER_SIZE,
-    )
-    writer = csv.writer(file_obj, delimiter=DELIM, quoting=csv.QUOTE_MINIMAL)
+def open_writer(
+    opid: str,
+    *,
+    output_dir_path: Path,
+    term_name: str,
+    encoding: str,
+    delim: str,
+    buffer_size: int,
+) -> tuple[io.TextIOWrapper, csv.writer]:
+    output_path = output_dir_path / f"{term_name}_{opid}.csv"
+    file_obj = output_path.open(mode="a", encoding=encoding, newline="", buffering=buffer_size)
+    writer = csv.writer(file_obj, delimiter=delim, quoting=csv.QUOTE_MINIMAL)
     return file_obj, writer
 
 
@@ -84,25 +116,30 @@ def close_current(current_fp: Optional[io.TextIOWrapper]) -> None:
             pass
 
 
-def process_zip(zip_path: Path) -> None:
+def process_zip(
+    zip_path: Path,
+    config: SplitConfig,
+    *,
+    output_dir_path: Path,
+    cancel_flag=None,
+) -> tuple[int, int]:
     current_fp: Optional[io.TextIOWrapper] = None
     current_writer: Optional[csv.writer] = None
     current_opid: Optional[str] = None
+    rows_written = 0
+    out_files_created = 0
     try:
         with zipfile.ZipFile(zip_path) as zf:
             try:
-                info = zf.getinfo(INNER_CSV)
+                info = zf.getinfo(config.inner_csv)
             except KeyError:
-                return
+                return rows_written, out_files_created
             with zf.open(info, mode="r") as raw:
-                text_stream = io.TextIOWrapper(
-                    raw,
-                    encoding=ENCODING,
-                    newline="",
-                    errors="strict",
-                )
-                reader = csv.reader(text_stream, delimiter=DELIM)
+                text_stream = io.TextIOWrapper(raw, encoding=config.encoding, newline="", errors="strict")
+                reader = csv.reader(text_stream, delimiter=config.delim)
                 while True:
+                    if cancel_flag is not None and cancel_flag.is_set():
+                        break
                     try:
                         row = next(reader)
                     except StopIteration:
@@ -116,13 +153,23 @@ def process_zip(zip_path: Path) -> None:
                         continue
                     if opid != current_opid:
                         close_current(current_fp)
-                        current_fp, current_writer = open_writer(opid)
+                        current_fp, current_writer = open_writer(
+                            opid,
+                            output_dir_path=output_dir_path,
+                            term_name=config.term_name,
+                            encoding=config.encoding,
+                            delim=config.delim,
+                            buffer_size=config.buffer_size,
+                        )
                         current_opid = opid
+                        out_files_created += 1
                     if current_writer is None:
                         continue
                     current_writer.writerow(row)
+                    rows_written += 1
     finally:
         close_current(current_fp)
+    return rows_written, out_files_created
 
 
 def _parse_ts_to_int(s: str) -> int:
@@ -141,14 +188,23 @@ def _parse_ts_to_int(s: str) -> int:
         return 10**20
 
 
-def _split_to_sorted_chunks(src: Path, temp_dir: Path, encoding: str, delim: str,
-                            ts_col: int, chunk_rows: int) -> list[Path]:
+def _split_to_sorted_chunks(
+    src: Path,
+    temp_dir: Path,
+    encoding: str,
+    delim: str,
+    ts_col: int,
+    chunk_rows: int,
+    cancel_flag=None,
+) -> list[Path]:
     temp_dir.mkdir(parents=True, exist_ok=True)
     chunks: list[Path] = []
     buf: list[tuple[int, list[str]]] = []
     with src.open("r", encoding=encoding, newline="") as f:
         rd = csv.reader(f, delimiter=delim)
         for row in rd:
+            if cancel_flag is not None and cancel_flag.is_set():
+                break
             if not row:
                 continue
             key = _parse_ts_to_int(row[ts_col]) if len(row) > ts_col else 10**20
@@ -174,7 +230,14 @@ def _split_to_sorted_chunks(src: Path, temp_dir: Path, encoding: str, delim: str
     return chunks
 
 
-def _merge_chunks(chunk_files: list[Path], dst: Path, encoding: str, delim: str, ts_col: int) -> None:
+def _merge_chunks(
+    chunk_files: list[Path],
+    dst: Path,
+    encoding: str,
+    delim: str,
+    ts_col: int,
+    cancel_flag=None,
+) -> None:
     tmp = dst.with_suffix(".sorted.tmp")
     readers, files = [], []
     try:
@@ -198,6 +261,8 @@ def _merge_chunks(chunk_files: list[Path], dst: Path, encoding: str, delim: str,
         with tmp.open("w", encoding=encoding, newline="") as w:
             wr = csv.writer(w, delimiter=delim, quoting=csv.QUOTE_MINIMAL)
             while heap:
+                if cancel_flag is not None and cancel_flag.is_set():
+                    return
                 _, _, idx, row = heapq.heappop(heap)
                 wr.writerow(row)
                 try:
@@ -215,13 +280,27 @@ def _merge_chunks(chunk_files: list[Path], dst: Path, encoding: str, delim: str,
                 f.close()
             except Exception:
                 pass
+        if cancel_flag is not None and cancel_flag.is_set() and tmp.exists():
+            try:
+                tmp.unlink()
+            except Exception:
+                pass
 
 
-def _final_sort_one(path: Path, encoding: str, delim: str, ts_col: int,
-                    chunk_rows: int, temp_root: Path) -> None:
+def _final_sort_one(
+    path: Path,
+    encoding: str,
+    delim: str,
+    ts_col: int,
+    chunk_rows: int,
+    temp_root: Path,
+    cancel_flag=None,
+) -> None:
     temp_dir = temp_root / path.stem
     try:
-        chunks = _split_to_sorted_chunks(path, temp_dir, encoding, delim, ts_col, chunk_rows)
+        chunks = _split_to_sorted_chunks(path, temp_dir, encoding, delim, ts_col, chunk_rows, cancel_flag=cancel_flag)
+        if cancel_flag is not None and cancel_flag.is_set():
+            return
         if not chunks:
             tmp = path.with_suffix(".sorted.tmp")
             with tmp.open("w", encoding=encoding, newline=""):
@@ -234,10 +313,12 @@ def _final_sort_one(path: Path, encoding: str, delim: str, ts_col: int,
                 with chunks[0].open("r", encoding=encoding, newline="") as r:
                     rd = csv.reader(r, delimiter=delim)
                     for row in rd:
+                        if cancel_flag is not None and cancel_flag.is_set():
+                            return
                         wr.writerow(row)
             os.replace(tmp, path)
         else:
-            _merge_chunks(chunks, path, encoding, delim, ts_col)
+            _merge_chunks(chunks, path, encoding, delim, ts_col, cancel_flag=cancel_flag)
     finally:
         if temp_dir.exists():
             for p in sorted(temp_dir.glob("*.csv")):
@@ -251,51 +332,137 @@ def _final_sort_one(path: Path, encoding: str, delim: str, ts_col: int,
                 pass
 
 
-def _final_sort_all(output_dir: Path, pattern: str, encoding: str, delim: str, ts_col: int,
-                    chunk_rows: int, temp_dir_name: str) -> None:
-    files = sorted(Path(output_dir).glob(pattern))
+def _final_sort_all(config: SplitConfig, output_dir: Path, progress_cb: ProgressCB = None, cancel_flag=None) -> None:
+    pattern = f"{config.term_name}_*.csv"
+    files = sorted(output_dir.glob(pattern))
     total = len(files)
-    if total == 0:
-        return
-    temp_root = Path(output_dir) / temp_dir_name
+    temp_root = output_dir / config.temp_sort_dir
     temp_root.mkdir(parents=True, exist_ok=True)
     done = 0
-    for f in files:
-        _final_sort_one(f, encoding, delim, ts_col, chunk_rows, temp_root)
-        done += 1
-        print_progress("Sort", done, total)
-    end_progress_line()
     try:
-        temp_root.rmdir()
-    except Exception:
-        pass
+        for f in files:
+            if cancel_flag is not None and cancel_flag.is_set():
+                break
+            _final_sort_one(
+                f,
+                config.encoding,
+                config.delim,
+                config.timestamp_col,
+                config.chunk_rows,
+                temp_root,
+                cancel_flag=cancel_flag,
+            )
+            done += 1
+            print_progress(
+                "SORT",
+                done,
+                total,
+                extra={"current_file": f.name, "files": total},
+                progress_cb=progress_cb,
+            )
+        end_progress_line(progress_cb=progress_cb)
+    finally:
+        try:
+            temp_root.rmdir()
+        except Exception:
+            pass
+
+
+def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=None) -> None:
+    input_dir_path = Path(config.input_dir)
+    output_dir_path = Path(config.output_dir)
+    ensure_output_dir(output_dir_path)
+
+    zip_paths = iter_target_zips(input_dir_path, config.zip_digit_keys)
+    total_zips = len(zip_paths)
+    print_progress("SCAN", total_zips, total_zips if total_zips else 1, extra={"zips": total_zips}, progress_cb=progress_cb)
+    end_progress_line(progress_cb=progress_cb)
+
+    processed = 0
+    total_rows = 0
+    total_out_files = 0
+
+    for zip_path in zip_paths:
+        if cancel_flag is not None and cancel_flag.is_set():
+            break
+        rows, out_files = process_zip(zip_path, config, output_dir_path=output_dir_path, cancel_flag=cancel_flag)
+        processed += 1
+        total_rows += rows
+        total_out_files += out_files
+        print_progress(
+            "EXTRACT",
+            processed,
+            total_zips,
+            extra={
+                "zip": zip_path.name,
+                "rows_written": total_rows,
+                "out_files": total_out_files,
+                "zips_done": processed,
+                "zips_total": total_zips,
+            },
+            progress_cb=progress_cb,
+        )
+    if total_zips > 0:
+        end_progress_line(progress_cb=progress_cb)
+
+    if config.do_final_sort and (cancel_flag is None or not cancel_flag.is_set()):
+        _final_sort_all(config, output_dir_path, progress_cb=progress_cb, cancel_flag=cancel_flag)
+
+    status = "CANCELLED" if cancel_flag is not None and cancel_flag.is_set() else "DONE"
+    print_progress(
+        "VERIFY",
+        processed,
+        total_zips if total_zips else processed,
+        extra={"status": status, "rows_written": total_rows, "out_files": total_out_files},
+        progress_cb=progress_cb,
+    )
+    end_progress_line(progress_cb=progress_cb)
+
+
+def _parse_zip_keys(raw: str) -> list[str]:
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _build_config_from_args() -> SplitConfig:
+    parser = argparse.ArgumentParser(description="Split ZIP data by opid with optional final sort.")
+    parser.add_argument("--input_dir", default=INPUT_DIR)
+    parser.add_argument("--output_dir", default=OUTPUT_DIR)
+    parser.add_argument("--term_name", default=TERM_NAME)
+    parser.add_argument("--inner_csv", default=INNER_CSV)
+    parser.add_argument("--zip_digit_keys", default=",".join(ZIP_DIGIT_KEYS))
+    parser.add_argument("--encoding", default=ENCODING)
+    parser.add_argument("--delim", default=DELIM)
+    parser.add_argument("--do_final_sort", action="store_true", default=DO_FINAL_SORT)
+    parser.add_argument("--no_final_sort", action="store_false", dest="do_final_sort")
+    parser.add_argument("--timestamp_col", type=int, default=TIMESTAMP_COL)
+    parser.add_argument("--chunk_rows", type=int, default=CHUNK_ROWS)
+    parser.add_argument("--temp_sort_dir", default=TEMP_SORT_DIR)
+    args = parser.parse_args()
+
+    return SplitConfig(
+        input_dir=args.input_dir,
+        output_dir=args.output_dir,
+        term_name=args.term_name,
+        inner_csv=args.inner_csv,
+        zip_digit_keys=_parse_zip_keys(args.zip_digit_keys),
+        encoding=args.encoding,
+        delim=args.delim,
+        do_final_sort=args.do_final_sort,
+        timestamp_col=args.timestamp_col,
+        chunk_rows=args.chunk_rows,
+        temp_sort_dir=args.temp_sort_dir,
+    )
 
 
 def main() -> None:
-    ensure_output_dir(OUTPUT_DIR_PATH)
-    zip_paths = iter_target_zips(INPUT_DIR_PATH, ZIP_DIGIT_KEYS)
-    total_zips = len(zip_paths)
-    processed = 0
-    for zip_path in zip_paths:
-        process_zip(zip_path)
-        processed += 1
-        print_progress("Extract", processed, total_zips)
-    if total_zips > 0:
-        end_progress_line()
-    if DO_FINAL_SORT:
-        _final_sort_all(
-            output_dir=OUTPUT_DIR_PATH,
-            pattern=SORT_GLOB,
-            encoding=ENCODING,
-            delim=DELIM,
-            ts_col=TIMESTAMP_COL,
-            chunk_rows=CHUNK_ROWS,
-            temp_dir_name=TEMP_SORT_DIR,
-        )
-
-
-INPUT_DIR_PATH = Path(INPUT_DIR)
-OUTPUT_DIR_PATH = Path(OUTPUT_DIR)
+    config = _build_config_from_args()
+    if not config.input_dir or config.input_dir.startswith("D:\\..."):
+        print("[ERROR] input_dir is not configured. Please pass --input_dir.")
+        return
+    if not Path(config.input_dir).exists():
+        print(f"[ERROR] input_dir does not exist: {config.input_dir}")
+        return
+    run_split(config)
 
 
 if __name__ == "__main__":
