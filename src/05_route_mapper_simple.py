@@ -1034,7 +1034,7 @@ def main(argv: Sequence[str]) -> None:
     # ウィンドウ側でも閉じられるよう参照渡し
     w._msg_loading = busy
 
-    w.showFullScreen()
+    w.showMaximized()
     sys.exit(app.exec())
 
 
