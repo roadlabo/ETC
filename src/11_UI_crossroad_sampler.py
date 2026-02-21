@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
         self.html_path = Path(__file__).resolve().parent / "11_crossroad_sampler.html"
 
         self._build_ui()
+        self.splash = None
         self._corner_logo_visible = False
         self._pix_small = None
         self._logo_phase = ""
@@ -189,19 +190,25 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+
         if hasattr(self, "_refresh_about_text"):
             try:
                 self._refresh_about_text()
             except Exception:
                 pass
 
-        if self.splash and getattr(self, "_logo_phase", "") == "center":
-            x, y = self._logo_center_pos(self.splash.width(), self.splash.height())
-            self.splash.move(x, y)
+        splash = getattr(self, "splash", None)
+        phase = getattr(self, "_logo_phase", "")
 
-        if self.splash and getattr(self, "_logo_phase", "") == "corner" and getattr(self, "_corner_logo_visible", False):
-            x, y = self._logo_corner_pos(self.splash.width(), self.splash.height())
-            self.splash.move(x, y)
+        # 中央表示中
+        if splash and phase == "center":
+            x, y = self._logo_center_pos(splash.width(), splash.height())
+            splash.move(x, y)
+
+        # 右上常駐中
+        if splash and phase == "corner" and getattr(self, "_corner_logo_visible", False):
+            x, y = self._logo_corner_pos(splash.width(), splash.height())
+            splash.move(x, y)
 
     def _build_ui(self) -> None:
         root = QWidget()
