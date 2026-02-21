@@ -270,13 +270,15 @@ class MainWindow(QMainWindow):
         header_vbox.setContentsMargins(0, 0, 0, 0)
         header_vbox.setSpacing(6)
 
+        # --- ①プロジェクトフォルダ選択（横並び・改行なし） ---
+        row_project = QHBoxLayout()
         lbl_project_title = QLabel("①プロジェクトフォルダ選択")
         lbl_project_title.setStyleSheet(GREEN_LABEL_STYLE)
-        header_vbox.addWidget(lbl_project_title)
+        row_project.addWidget(lbl_project_title)
 
-        row_project = QHBoxLayout()
         row_project.addWidget(self.btn_project)
         row_project.addWidget(self.project_path_edit, 1)
+        row_project.addStretch(0)
         header_vbox.addLayout(row_project)
 
         row_map = QHBoxLayout()
