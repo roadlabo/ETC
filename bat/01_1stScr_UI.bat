@@ -38,10 +38,8 @@ if exist "%QT6%\bin" (
 
 "%PY%" "%SRC%"
 set "EXITCODE=%ERRORLEVEL%"
-if not "%EXITCODE%"=="0" (
-  echo [ERROR] exitcode=%EXITCODE%
-  pause
-)
+echo [INFO] exitcode=%EXITCODE%
+pause
 
 popd
 endlocal & exit /b %EXITCODE%
