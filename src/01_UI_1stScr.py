@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
-    QGraphicsOpacityEffect,
     QGroupBox,
     QGridLayout,
     QHBoxLayout,
@@ -222,11 +221,8 @@ class MainWindow(QMainWindow):
         self._pix_small: QPixmap | None = None
         self._logo_shadow_effect: QGraphicsDropShadowEffect | None = None
         self._logo_intro_anim: QPropertyAnimation | None = None
-        self._logo_opacity_effect: QGraphicsOpacityEffect | None = None
-        self._logo_fade_anim: QPropertyAnimation | None = None
         self._splash_animating = False
         self._logo_intro_done = False
-        self._pending_logo_reposition = False
         self._build_ui()
         self._set_style()
         QTimer.singleShot(0, self._init_logo_overlay)
@@ -376,26 +372,7 @@ class MainWindow(QMainWindow):
 
         self._layout_splash(is_compact=False)
 
-        self._logo_shadow_effect = QGraphicsDropShadowEffect(self.splash_logo)
-        self._logo_shadow_effect.setBlurRadius(28)
-        self._logo_shadow_effect.setOffset(0, 0)
-        self._logo_shadow_effect.setColor(QColor(0, 255, 180, 140))
-        self.splash_logo.setGraphicsEffect(self._logo_shadow_effect)
-
         self.splash.raise_()
-
-        # --- フェードイン（ほんの少し） ---
-        self._logo_opacity_effect = QGraphicsOpacityEffect(self.splash)
-        self._logo_opacity_effect.setOpacity(0.0)
-        self.splash.setGraphicsEffect(self._logo_opacity_effect)
-
-        fade = QPropertyAnimation(self._logo_opacity_effect, b"opacity", self)
-        fade.setDuration(260)
-        fade.setStartValue(0.0)
-        fade.setEndValue(1.0)
-        fade.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._logo_fade_anim = fade
-        fade.start()
 
         # 中央表示前に一度サイズ確定
         self.splash.adjustSize()
@@ -460,6 +437,13 @@ class MainWindow(QMainWindow):
         self._logo_intro_done = True
         if self.splash:
             self.splash.raise_()
+
+        self._logo_shadow_effect = QGraphicsDropShadowEffect(self.splash_logo)
+        self._logo_shadow_effect.setBlurRadius(28)
+        self._logo_shadow_effect.setOffset(0, 0)
+        self._logo_shadow_effect.setColor(QColor(0, 255, 180, 160))
+        self.splash_logo.setGraphicsEffect(self._logo_shadow_effect)
+
         self._pulse_logo_glow()
 
     def _pulse_logo_glow(self) -> None:
@@ -547,25 +531,6 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._refresh_about_text()
-
-        # 連続resizeでsetGeometryを連打しない（Painter not active 対策）
-        if self._pending_logo_reposition:
-            return
-        self._pending_logo_reposition = True
-
-        def _later():
-            self._pending_logo_reposition = False
-
-            # イントロ中は中央維持、完了後は右上追従
-            if self.splash and not getattr(self, "_logo_intro_done", False):
-                # ★移動アニメ中は邪魔しない（中央に戻さない）
-                if self._splash_animating:
-                    return
-                self.splash.setGeometry(self._splash_rect(center=True))
-            else:
-                self._position_logo_overlay()
-
-        QTimer.singleShot(0, _later)
 
     def _refresh_about_text(self) -> None:
         fm = QFontMetrics(self.about_text.font())
