@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 > nul
 setlocal
-pushd %~dp0
+pushd "%~dp0.."
 
 set "PY=%CD%\runtime\python\python.exe"
 set "SRC=%CD%\src\01_UI_1stScr.py"
