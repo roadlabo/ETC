@@ -9,13 +9,14 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from PyQt6.QtCore import QMargins, QPoint, QRect, QSize, QEasingCurve, Qt, QThread, QTimer, QPropertyAnimation, pyqtSignal
+from PyQt6.QtCore import QMargins, QPoint, QRect, QSize, Qt, QThread, QTimer, QPropertyAnimation, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
     QGroupBox,
     QGridLayout,
     QHBoxLayout,
@@ -216,13 +217,9 @@ class MainWindow(QMainWindow):
         self.cards: dict[str, ZipCard] = {}
         self.current_zip = "-"
         self.current_sort_file = "-"
-        self.splash: QWidget | None = None
-        self.splash_logo: QLabel | None = None
+        self.splash: QLabel | None = None
         self._pix_small: QPixmap | None = None
         self._logo_shadow_effect: QGraphicsDropShadowEffect | None = None
-        self._logo_intro_anim: QPropertyAnimation | None = None
-        self._splash_animating = False
-        self._logo_intro_done = False
         self._build_ui()
         self._set_style()
         QTimer.singleShot(0, self._init_logo_overlay)
@@ -352,144 +349,69 @@ class MainWindow(QMainWindow):
         logo_path = Path(__file__).resolve().parent / "logo.png"
         if not logo_path.exists():
             return
+
         pixmap = QPixmap(str(logo_path))
         if pixmap.isNull():
             return
+
         pix_big = pixmap.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
         self._pix_small = pixmap.scaledToHeight(110, Qt.TransformationMode.SmoothTransformation)
 
-        self.splash = QWidget(self)
-        self.splash.setObjectName("hudSplash")
+        # --- 中央用スプラッシュ ---
+        self.splash = QLabel(self)
         self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.splash.setStyleSheet("background: transparent;")
-
-        self.splash_logo = QLabel(self.splash)
-        self.splash_logo.setObjectName("hudLogo")
-        self.splash_logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.splash_logo.setStyleSheet("background: transparent;")
-        self.splash_logo.setPixmap(pix_big)
-        self.splash_logo.adjustSize()
-
-        self._layout_splash(is_compact=False)
-
-        self.splash.raise_()
-
-        # 中央表示前に一度サイズ確定
+        self.splash.setPixmap(pix_big)
         self.splash.adjustSize()
-        self.splash_logo.adjustSize()
 
-        # まず中央に配置して1秒停止
-        self.splash.setGeometry(self._splash_rect(center=True))
-        # ★遅延生成の場合、子Widgetは自動では表示されないことがあるので明示表示
+        # 中央配置
+        x = (self.width() - self.splash.width()) // 2
+        y = (self.height() - self.splash.height()) // 2
+        self.splash.move(x, y)
         self.splash.show()
-        self.splash.raise_()
 
-        # ★最大化リサイズで右上に飛ばされないよう、イントロ完了までガード
-        self._splash_animating = True
-        self._logo_intro_done = False
+        # --- フェードイン ---
+        effect = QGraphicsOpacityEffect(self.splash)
+        self.splash.setGraphicsEffect(effect)
 
-        QTimer.singleShot(1000, self._start_intro_animation)
+        fade_in = QPropertyAnimation(effect, b"opacity", self)
+        fade_in.setDuration(500)
+        fade_in.setStartValue(0.0)
+        fade_in.setEndValue(1.0)
 
-    def _layout_splash(self, *, is_compact: bool) -> None:
-        if not self.splash or not self.splash_logo:
+        # 1秒後フェードアウト
+        def start_fade_out():
+            fade_out = QPropertyAnimation(effect, b"opacity", self)
+            fade_out.setDuration(500)
+            fade_out.setStartValue(1.0)
+            fade_out.setEndValue(0.0)
+
+            def show_corner_logo():
+                if self.splash:
+                    self.splash.deleteLater()
+                self._show_corner_logo()
+
+            fade_out.finished.connect(show_corner_logo)
+            fade_out.start()
+
+        fade_in.finished.connect(lambda: QTimer.singleShot(1000, start_fade_out))
+        fade_in.start()
+
+    def _show_corner_logo(self) -> None:
+        if not self._pix_small:
             return
 
-        self.splash_logo.move(0, 0)
+        self.splash = QLabel(self)
+        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash.setStyleSheet("background: transparent;")
+        self.splash.setPixmap(self._pix_small)
+        self.splash.adjustSize()
 
-        width = self.splash_logo.width()
-        height = self.splash_logo.height()
-
-        self.splash.setFixedSize(width, height)
-
-    def _start_intro_animation(self) -> None:
-        if not self.splash:
-            return
-
-        self._splash_animating = True
-
-        # 現在位置をスタートにする
-        start_rect = self.splash.geometry()
-
-        # ★ここで最新のウィンドウサイズで終点を再計算
-        end_rect = self._splash_rect(center=False)
-
-        # --- 位置アニメ ---
-        geo_anim = QPropertyAnimation(self.splash, b"geometry", self)
-        geo_anim.setDuration(1200)
-        geo_anim.setEasingCurve(QEasingCurve.Type.OutExpo)
-        geo_anim.setStartValue(start_rect)
-        geo_anim.setEndValue(end_rect)
-        geo_anim.finished.connect(self._finish_intro_animation)
-        self._logo_intro_anim = geo_anim
-        geo_anim.start()
-
-        # --- サイズアニメ（大 → 小） ---
-        if self.splash_logo and self._pix_small:
-
-            start_size = self.splash_logo.size()
-            end_size = self._pix_small.size()
-
-            size_anim = QPropertyAnimation(self.splash_logo, b"minimumSize", self)
-            size_anim.setDuration(1200)
-            size_anim.setEasingCurve(QEasingCurve.Type.OutExpo)
-            size_anim.setStartValue(start_size)
-            size_anim.setEndValue(end_size)
-            size_anim.start()
-
-            # サイズ変化に合わせて splash のサイズも追従
-            def _sync_container() -> None:
-                if self.splash_logo and self.splash:
-                    self.splash.resize(self.splash_logo.size())
-
-            size_anim.valueChanged.connect(lambda _: _sync_container())
-
-    def _finish_intro_animation(self) -> None:
-        self._splash_animating = False
-
-        if not self.splash_logo:
-            return
-
-        if self._pix_small is not None:
-            self.splash_logo.setPixmap(self._pix_small)
-            self.splash_logo.adjustSize()
-
-        self._layout_splash(is_compact=True)
-        self._position_logo_overlay()
-        self._logo_intro_done = True
-        if self.splash:
-            self.splash.raise_()
-
-        self._logo_shadow_effect = QGraphicsDropShadowEffect(self.splash_logo)
-        self._logo_shadow_effect.setBlurRadius(28)
-        self._logo_shadow_effect.setOffset(0, 0)
-        self._logo_shadow_effect.setColor(QColor(0, 255, 180, 160))
-        self.splash_logo.setGraphicsEffect(self._logo_shadow_effect)
-
-        self._pulse_logo_glow()
-
-    def _pulse_logo_glow(self) -> None:
-        if not self._logo_shadow_effect:
-            return
-        self._set_logo_glow(230, 42)
-        QTimer.singleShot(220, lambda: self._set_logo_glow(140, 28))
-        QTimer.singleShot(520, lambda: self._set_logo_glow(160, 30))
-
-    def _splash_rect(self, *, center: bool) -> QRect:
-        if not self.splash:
-            return QRect()
         margin = 18
-        if center:
-            x = (self.width() - self.splash.width()) // 2
-            y = (self.height() - self.splash.height()) // 2
-        else:
-            x = self.width() - self.splash.width() - margin
-            y = margin
-        return QRect(max(0, x), max(0, y), self.splash.width(), self.splash.height())
-
-    def _position_logo_overlay(self) -> None:
-        if not self.splash or self._splash_animating:
-            return
-        self.splash.setGeometry(self._splash_rect(center=False))
+        x = self.width() - self.splash.width() - margin
+        y = margin
+        self.splash.move(x, y)
+        self.splash.show()
 
     def _set_logo_glow(self, alpha: int, blur: int | None = None) -> None:
         if not self._logo_shadow_effect:
@@ -552,6 +474,12 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._refresh_about_text()
+
+        if self.splash and self._pix_small:
+            margin = 18
+            x = self.width() - self.splash.width() - margin
+            y = margin
+            self.splash.move(x, y)
 
     def _refresh_about_text(self) -> None:
         fm = QFontMetrics(self.about_text.font())
