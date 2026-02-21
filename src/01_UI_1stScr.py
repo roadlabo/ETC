@@ -218,7 +218,6 @@ class MainWindow(QMainWindow):
         self.current_sort_file = "-"
         self.splash: QWidget | None = None
         self.splash_logo: QLabel | None = None
-        self.splash_title: QLabel | None = None
         self._pix_small: QPixmap | None = None
         self._logo_shadow_effect: QGraphicsDropShadowEffect | None = None
         self._logo_intro_anim: QPropertyAnimation | None = None
@@ -370,11 +369,6 @@ class MainWindow(QMainWindow):
         self.splash_logo.setPixmap(pix_big)
         self.splash_logo.adjustSize()
 
-        self.splash_title = QLabel("ETCアナライザー", self.splash)
-        self.splash_title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.splash_title.setStyleSheet("color:#cfefff;background:transparent;")
-        self.splash_title.setFont(QFont("Meiryo UI", 34, QFont.Weight.Bold))
-
         self._layout_splash(is_compact=False)
 
         self._logo_shadow_effect = QGraphicsDropShadowEffect(self.splash)
@@ -387,15 +381,14 @@ class MainWindow(QMainWindow):
         self._start_intro_animation()
 
     def _layout_splash(self, *, is_compact: bool) -> None:
-        if not self.splash or not self.splash_logo or not self.splash_title:
+        if not self.splash or not self.splash_logo:
             return
+
         self.splash_logo.move(0, 0)
-        self.splash_title.adjustSize()
-        title_x = self.splash_logo.width() + 18
-        title_y = max(0, (self.splash_logo.height() - self.splash_title.sizeHint().height()) // 2)
-        self.splash_title.move(title_x, title_y)
-        width = self.splash_logo.width() + 18 + self.splash_title.sizeHint().width()
-        height = max(self.splash_logo.height(), self.splash_title.sizeHint().height())
+
+        width = self.splash_logo.width()
+        height = self.splash_logo.height()
+
         self.splash.setFixedSize(width, height)
 
     def _start_intro_animation(self) -> None:
@@ -417,13 +410,14 @@ class MainWindow(QMainWindow):
 
     def _finish_intro_animation(self) -> None:
         self._splash_animating = False
-        if not self.splash_logo or not self.splash_title:
+
+        if not self.splash_logo:
             return
+
         if self._pix_small is not None:
             self.splash_logo.setPixmap(self._pix_small)
             self.splash_logo.adjustSize()
-        self.splash_title.setFont(QFont("Meiryo UI", 16, QFont.Weight.Bold))
-        self.splash_title.setStyleSheet("color:rgba(207,239,255,210);background:transparent;")
+
         self._layout_splash(is_compact=True)
         self._position_logo_overlay()
 
