@@ -15,7 +15,6 @@ from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QFileDialog,
-    QFormLayout,
     QFrame,
     QGroupBox,
     QGridLayout,
@@ -241,7 +240,9 @@ class MainWindow(QMainWindow):
         about_layout.addWidget(about_text)
         outer.addWidget(about_box)
 
-        form = QFormLayout()
+        form_grid = QGridLayout()
+        form_grid.setHorizontalSpacing(16)
+        form_grid.setVerticalSpacing(8)
         self.input_dir = QLineEdit(); self.output_dir = QLineEdit(); self.term_name = QLineEdit("R7_2")
         self.inner_csv = QLineEdit("data.csv"); self.zip_keys = QLineEdit("523357,523347,523450,523440")
         self.encoding = QLineEdit("utf-8"); self.delim = QLineEdit(",")
@@ -251,67 +252,31 @@ class MainWindow(QMainWindow):
         in_row = QHBoxLayout(); in_row.addWidget(self.input_dir); bi = QPushButton("..."); bi.clicked.connect(lambda: self._pick_dir(self.input_dir)); in_row.addWidget(bi)
         out_row = QHBoxLayout(); out_row.addWidget(self.output_dir); bo = QPushButton("..."); bo.clicked.connect(lambda: self._pick_dir(self.output_dir)); out_row.addWidget(bo)
 
-        self._add_form_row(
-            form,
-            "INPUT_DIR",
-            self._wrap(in_row),
-            "プローブデータ様式1-2の「OUT1-2」フォルダを指定します。\nこの中には日付ごとのZIPがあり、その中に data.csv が格納されています。",
-        )
-        self._add_form_row(
-            form,
-            "OUTPUT_DIR",
-            self._wrap(out_row),
-            "第1スクリーニング後の保存先です。\n後続分析のため、共通保存フォルダの使用を推奨します。",
-        )
-        self._add_form_row(
-            form,
-            "TERM",
-            self.term_name,
-            "出力ファイル名の先頭に付ける識別文字列です。\n例：R7_2 など、年月が分かるように設定してください。",
-        )
-        self._add_form_row(
-            form,
-            "INNER_CSV",
-            self.inner_csv,
-            "ZIP内の対象CSV名です。通常は data.csv 固定で変更不要です。",
-        )
-        self._add_form_row(
-            form,
-            "ZIP_KEYS",
-            self.zip_keys,
-            "抽出対象とする2次メッシュ番号をカンマ区切りで入力します。\n付属のメッシュ図を参照してください。",
-        )
-        self._add_form_row(
-            form,
-            "ENCODING",
-            self.encoding,
-            "文字コード設定です。通常は utf-8 のまま変更不要です。",
-        )
-        self._add_form_row(
-            form,
-            "DELIM",
-            self.delim,
-            "CSVの区切り文字です。通常は ,（カンマ）で変更不要です。",
-        )
-        self._add_form_row(
-            form,
-            "DO_SORT",
-            self.do_sort,
-            "抽出後に時系列ソートを実行する設定です。通常はONのまま使用してください。",
-        )
-        self._add_form_row(
-            form,
-            "TIMESTAMP_COL",
-            self.timestamp_col,
-            "時刻が記載されている列番号（0始まり）です。\n通常は 6 で変更不要です。",
-        )
-        self._add_form_row(
-            form,
-            "CHUNK_ROWS",
-            self.chunk_rows,
-            "並べ替え時に一度にメモリへ読み込む行数です。\nメモリ不足時のみ値を下げてください。",
-        )
-        outer.addLayout(form)
+        row = 0
+        self._add_form_row(form_grid, row, "INPUT_DIR", self._wrap(in_row), "様式1-2出力の OUT1-2 フォルダを指定します。日付ごとのZIPが格納されています。")
+        row += 1
+        self._add_form_row(form_grid, row, "OUTPUT_DIR", self._wrap(out_row), "第1スクリーニング後の保存先です。後続分析のため、共通保存フォルダの使用を推奨します。")
+        row += 1
+        self._add_form_row(form_grid, row, "TERM", self.term_name, "出力ファイル名の先頭に付ける識別文字列です。例：R7_2 など、年月が分かるように設定してください。")
+        row += 1
+        self._add_form_row(form_grid, row, "INNER_CSV", self.inner_csv, "ZIP内の対象CSV名です。通常は data.csv 固定で変更不要です。")
+        row += 1
+        self._add_form_row(form_grid, row, "ZIP_KEYS", self.zip_keys, "抽出対象とする2次メッシュ番号をカンマ区切りで入力します。付属のメッシュ図を参照してください。")
+        row += 1
+        self._add_form_row(form_grid, row, "ENCODING", self.encoding, "文字コード設定です。通常は utf-8 のまま変更不要です。")
+        row += 1
+        self._add_form_row(form_grid, row, "DELIM", self.delim, "CSVの区切り文字です。通常は ,（カンマ）で変更不要です。")
+        row += 1
+        self._add_form_row(form_grid, row, "DO_SORT", self.do_sort, "抽出後に時系列ソートを実行する設定です。通常はONのまま使用してください。")
+        row += 1
+        self._add_form_row(form_grid, row, "TIMESTAMP_COL", self.timestamp_col, "時刻が記載されている列番号（0始まり）です。通常は 6 で変更不要です。")
+        row += 1
+        self._add_form_row(form_grid, row, "CHUNK_ROWS", self.chunk_rows, "並べ替え時に一度にメモリへ読み込む行数です。メモリ不足時のみ値を下げてください。")
+
+        form_grid.setColumnStretch(0, 0)
+        form_grid.setColumnStretch(1, 3)
+        form_grid.setColumnStretch(2, 4)
+        outer.addLayout(form_grid)
 
         btns = QHBoxLayout(); self.btn_run = QPushButton("RUN"); self.btn_cancel = QPushButton("CANCEL"); self.btn_open = QPushButton("OPEN OUTPUT")
         self.btn_run.clicked.connect(self.start_run); self.btn_cancel.clicked.connect(self.cancel_run); self.btn_open.clicked.connect(self.open_output)
@@ -362,17 +327,15 @@ class MainWindow(QMainWindow):
     def _wrap(self, layout) -> QWidget:
         w = QWidget(); w.setLayout(layout); return w
 
-    def _add_form_row(self, form: QFormLayout, label: str, field: QWidget, help_text: str) -> None:
-        form.addRow(label, field)
+    def _add_form_row(self, form: QGridLayout, row: int, label: str, field: QWidget, help_text: str) -> None:
+        form.addWidget(QLabel(label), row, 0)
+        form.addWidget(field, row, 1)
         help_label = QLabel(help_text)
         help_label.setWordWrap(True)
         help_label.setObjectName("fieldHelp")
+        help_label.setStyleSheet("color:#6bbf8a;")
         help_label.setFont(QFont("Consolas", 9))
-        help_wrap = QWidget()
-        help_layout = QVBoxLayout(help_wrap)
-        help_layout.setContentsMargins(0, 0, 0, 8)
-        help_layout.addWidget(help_label)
-        form.addRow("", help_wrap)
+        form.addWidget(help_label, row, 2)
 
     def _set_style(self) -> None:
         self.setStyleSheet("""
