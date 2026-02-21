@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-APP_TITLE = "21指定交差点を通過するトリップの抽出ツール（第2スクリーニング）"
+APP_TITLE = "21_指定交差点を通過するトリップの抽出ツール（第２スクリーニング）"
 
 CORNER_LOGO_MARGIN = 18
 CORNER_LOGO_OFFSET_TOP = -4
@@ -357,7 +357,7 @@ class MainWindow(QMainWindow):
 
         self.lbl_about = QLabel(
             "本ソフトは、第1スクリーニング後データから、さらに、「11_交差点(Point)データ」で指定するすべての交差点における通過トリップを一括で抽出します。\n"
-            "抽出されたトリップは「20_第２スクリーニング）」フォルダへ１トリップに対し１CSVファイルで出力します。"
+            "抽出されたトリップは「20_第２スクリーニング）」フォルダへ１トリップに対し１CSVファイルで出力します。出力CSVは様式1-2のデータフォーマットを保持します。"
         )
         self.lbl_about.setWordWrap(True)
         self.lbl_about.setStyleSheet("color: #00ff99; font-weight: 600;")
@@ -411,7 +411,7 @@ class MainWindow(QMainWindow):
         rad_l.setSpacing(2)
         rad_l.addWidget(QLabel("半径"))
         rad_l.addWidget(self.spin_radius)
-        rad_l.addWidget(QLabel("m（既定30m）"))
+        rad_l.addWidget(QLabel("m（デフォルト30m）"))
 
         self.btn_run = QPushButton("21 第2スクリーニング開始（分析スタート）")
         self.btn_run.setFont(top_font)
