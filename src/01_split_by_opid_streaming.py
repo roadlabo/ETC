@@ -77,6 +77,32 @@ def end_progress_line(progress_cb: ProgressCB = None, show_progress: bool = SHOW
         sys.stdout.flush()
 
 
+def _format_hms(sec: float) -> str:
+    total = int(sec)
+    h = total // 3600
+    m = (total % 3600) // 60
+    s = total % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _timestamp() -> str:
+    return time.strftime("%Y/%m/%d %H:%M:%S")
+
+
+class RunLog:
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def info(self, msg: str) -> None:
+        self.lines.append(f"{_timestamp()} [INFO] {msg}")
+
+    def warn(self, msg: str) -> None:
+        self.lines.append(f"{_timestamp()} [WARN] {msg}")
+
+    def error(self, msg: str) -> None:
+        self.lines.append(f"{_timestamp()} [ERROR] {msg}")
+
+
 def ensure_output_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
@@ -129,13 +155,15 @@ def process_zip(
     zips_total: int = 0,
     total_rows_before: int = 0,
     total_out_files_before: int = 0,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int, int]:
     current_fp: Optional[io.TextIOWrapper] = None
     current_writer: Optional[csv.writer] = None
     current_opid: Optional[str] = None
     rows_written = 0
     zip_new = 0
     zip_append = 0
+    missing_inner_csv_count = 0
+    decode_skip_count = 0
     rows_in_zip = 0
     last_emit = 0.0
     try:
@@ -143,7 +171,8 @@ def process_zip(
             try:
                 info = zf.getinfo(config.inner_csv)
             except KeyError:
-                return rows_written, zip_new, zip_append
+                missing_inner_csv_count += 1
+                return rows_written, zip_new, zip_append, missing_inner_csv_count, decode_skip_count
             total_bytes = max(1, info.file_size)
             with zf.open(info, mode="r") as raw:
                 text_stream = io.TextIOWrapper(raw, encoding=config.encoding, newline="", errors="strict")
@@ -156,6 +185,7 @@ def process_zip(
                     except StopIteration:
                         break
                     except (UnicodeDecodeError, csv.Error):
+                        decode_skip_count += 1
                         continue
                     if not row or len(row) <= 3:
                         continue
@@ -206,7 +236,7 @@ def process_zip(
                         last_emit = now
     finally:
         close_current(current_fp)
-    return rows_written, zip_new, zip_append
+    return rows_written, zip_new, zip_append, missing_inner_csv_count, decode_skip_count
 
 
 def _parse_ts_to_int(s: str) -> int:
@@ -369,7 +399,13 @@ def _final_sort_one(
                 pass
 
 
-def _final_sort_all(config: SplitConfig, output_dir: Path, progress_cb: ProgressCB = None, cancel_flag=None) -> None:
+def _final_sort_all(
+    config: SplitConfig,
+    output_dir: Path,
+    progress_cb: ProgressCB = None,
+    cancel_flag=None,
+    run_log: RunLog | None = None,
+) -> None:
     pattern = f"{config.term_name}_*.csv"
     files = sorted(output_dir.glob(pattern))
     total = len(files)
@@ -397,6 +433,10 @@ def _final_sort_all(config: SplitConfig, output_dir: Path, progress_cb: Progress
                 extra={"current_file": f.name, "total_files": total, "done_files": done},
                 progress_cb=progress_cb,
             )
+            if run_log is not None and total > 0:
+                step = max(1, total // 10)
+                if done == 1 or done == total or done % step == 0:
+                    run_log.info(f"SORT: {done}/{total} current={f.name}")
         end_progress_line(progress_cb=progress_cb)
     finally:
         try:
@@ -406,12 +446,23 @@ def _final_sort_all(config: SplitConfig, output_dir: Path, progress_cb: Progress
 
 
 def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=None) -> None:
+    started = time.time()
+    log = RunLog()
+    log.info("=== 01 1st screening start ===")
+    log.info(f"input_dir: {config.input_dir}")
+    log.info(f"output_dir: {config.output_dir}")
+    log.info(f"term_name: {config.term_name}")
+    log.info(f"zip_keys: {','.join(config.zip_digit_keys)}")
+    log.info(f"chunk_rows: {config.chunk_rows}")
+    log.info(f"timestamp_col: {config.timestamp_col}")
+
     input_dir_path = Path(config.input_dir)
     output_dir_path = Path(config.output_dir)
     ensure_output_dir(output_dir_path)
 
     zip_paths = iter_target_zips(input_dir_path, config.zip_digit_keys)
     total_zips = len(zip_paths)
+    log.info(f"zips_total: {total_zips}")
     print_progress(
         "SCAN",
         total_zips,
@@ -424,57 +475,88 @@ def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=N
     processed = 0
     total_rows = 0
     total_out_files = 0
+    total_missing_inner = 0
+    total_decode_skip = 0
 
-    for zip_path in zip_paths:
-        if cancel_flag is not None and cancel_flag.is_set():
-            break
-        rows, zip_new, zip_append = process_zip(
-            zip_path,
-            config,
-            output_dir_path=output_dir_path,
-            cancel_flag=cancel_flag,
-            progress_cb=progress_cb,
-            zip_done=processed + 1,
-            zips_total=total_zips,
-            total_rows_before=total_rows,
-            total_out_files_before=total_out_files,
-        )
-        processed += 1
-        total_rows += rows
-        total_out_files += zip_new
+    try:
+        for zip_path in zip_paths:
+            if cancel_flag is not None and cancel_flag.is_set():
+                break
+            rows, zip_new, zip_append, miss_inner, decode_skip = process_zip(
+                zip_path,
+                config,
+                output_dir_path=output_dir_path,
+                cancel_flag=cancel_flag,
+                progress_cb=progress_cb,
+                zip_done=processed + 1,
+                zips_total=total_zips,
+                total_rows_before=total_rows,
+                total_out_files_before=total_out_files,
+            )
+            processed += 1
+            total_rows += rows
+            total_out_files += zip_new
+            total_missing_inner += miss_inner
+            total_decode_skip += decode_skip
+            log.info(
+                f"ZIP done: {zip_path.name} rows={rows} new={zip_new} append={zip_append} "
+                f"miss_inner={miss_inner} decode_skip={decode_skip}"
+            )
+            print_progress(
+                "EXTRACT",
+                processed,
+                total_zips,
+                extra={
+                    "zip": zip_path.name,
+                    "zip_pct": 100,
+                    "rows_in_zip": rows,
+                    "zip_new": zip_new,
+                    "zip_append": zip_append,
+                    "rows_written": total_rows,
+                    "out_files": total_out_files,
+                    "zips_done": processed,
+                    "zips_total": total_zips,
+                },
+                progress_cb=progress_cb,
+            )
+        if total_zips > 0:
+            end_progress_line(progress_cb=progress_cb)
+
+        if config.do_final_sort and (cancel_flag is None or not cancel_flag.is_set()):
+            log.info("SORT start")
+            _final_sort_all(config, output_dir_path, progress_cb=progress_cb, cancel_flag=cancel_flag, run_log=log)
+
+        status = "CANCELLED" if cancel_flag is not None and cancel_flag.is_set() else "DONE"
+        out_count = len(list(output_dir_path.glob(f"{config.term_name}_*.csv")))
         print_progress(
-            "EXTRACT",
+            "VERIFY",
             processed,
-            total_zips,
-            extra={
-                "zip": zip_path.name,
-                "zip_pct": 100,
-                "rows_in_zip": rows,
-                "zip_new": zip_new,
-                "zip_append": zip_append,
-                "rows_written": total_rows,
-                "out_files": total_out_files,
-                "zips_done": processed,
-                "zips_total": total_zips,
-            },
+            total_zips if total_zips else processed,
+            extra={"status": status, "rows_written": total_rows, "out_files": out_count},
             progress_cb=progress_cb,
         )
-    if total_zips > 0:
         end_progress_line(progress_cb=progress_cb)
 
-    if config.do_final_sort and (cancel_flag is None or not cancel_flag.is_set()):
-        _final_sort_all(config, output_dir_path, progress_cb=progress_cb, cancel_flag=cancel_flag)
+        ended = time.time()
+        log.info(f"status: {status}")
+        log.info(f"zips_processed: {processed}/{total_zips}")
+        log.info(f"rows_written: {total_rows}")
+        log.info(f"out_files: {out_count}")
+        log.info(f"missing_inner_csv: {total_missing_inner}")
+        log.info(f"decode_skip: {total_decode_skip}")
+        log.info(f"elapsed: {_format_hms(ended - started)}")
+        log.info("=== DONE ===")
+    except Exception as exc:
+        log.error(f"run_split failed: {exc}")
+        raise
+    finally:
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        out_path = output_dir_path / f"01_1stScr_log_{stamp}.txt"
+        try:
+            out_path.write_text("\n".join(log.lines) + "\n", encoding="utf-8")
+        except Exception as exc:
+            log.warn(f"log write failed: {exc}")
 
-    status = "CANCELLED" if cancel_flag is not None and cancel_flag.is_set() else "DONE"
-    out_count = len(list(output_dir_path.glob(f"{config.term_name}_*.csv")))
-    print_progress(
-        "VERIFY",
-        processed,
-        total_zips if total_zips else processed,
-        extra={"status": status, "rows_written": total_rows, "out_files": out_count},
-        progress_cb=progress_cb,
-    )
-    end_progress_line(progress_cb=progress_cb)
 
 
 def _parse_zip_keys(raw: str) -> list[str]:
