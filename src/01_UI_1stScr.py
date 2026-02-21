@@ -354,7 +354,7 @@ class MainWindow(QMainWindow):
         pixmap = QPixmap(str(logo_path))
         if pixmap.isNull():
             return
-        pix_big = pixmap.scaledToHeight(220, Qt.TransformationMode.SmoothTransformation)
+        pix_big = pixmap.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
         self._pix_small = pixmap.scaledToHeight(110, Qt.TransformationMode.SmoothTransformation)
 
         self.splash = QWidget(self)
@@ -378,6 +378,10 @@ class MainWindow(QMainWindow):
         self.splash.setGraphicsEffect(self._logo_shadow_effect)
 
         self.splash.raise_()
+
+        # 中央表示前に一度サイズ確定
+        self.splash.adjustSize()
+        self.splash_logo.adjustSize()
 
         # まず中央に配置して1秒停止
         self.splash.setGeometry(self._splash_rect(center=True))
@@ -408,8 +412,8 @@ class MainWindow(QMainWindow):
         end_rect = self._splash_rect(center=False)
 
         anim = QPropertyAnimation(self.splash, b"geometry", self)
-        anim.setDuration(1000)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setDuration(1200)
+        anim.setEasingCurve(QEasingCurve.Type.OutExpo)
         anim.setStartValue(start_rect)
         anim.setEndValue(end_rect)
         anim.finished.connect(self._finish_intro_animation)
