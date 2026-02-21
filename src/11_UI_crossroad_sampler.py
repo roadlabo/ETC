@@ -290,17 +290,22 @@ class MainWindow(QMainWindow):
         row_map.addWidget(self.btn_clear)
         header_vbox.addLayout(row_map)
 
+        row_name = QHBoxLayout()
+
         lbl_name = QLabel("③交差点名")
         lbl_name.setStyleSheet(GREEN_LABEL_STYLE)
-        header_vbox.addWidget(lbl_name)
+        row_name.addWidget(lbl_name)
 
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("例：01○○交差点")
-        header_vbox.addWidget(self.name_edit)
+        row_name.addWidget(self.name_edit, 1)
 
         self.btn_save = QPushButton("交差点ファイル保存")
         self.btn_save.clicked.connect(self.save_clicked)
-        header_vbox.addWidget(self.btn_save)
+        row_name.addWidget(self.btn_save)
+
+        row_name.addStretch(0)
+        header_vbox.addLayout(row_name)
 
         lbl_next = QLabel("④次の交差点を作成してください。または、左の一覧をクリックして、編集・リネーム・削除を行って下さい。")
         lbl_next.setStyleSheet(GREEN_LABEL_STYLE)
