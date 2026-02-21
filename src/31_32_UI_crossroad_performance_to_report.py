@@ -358,6 +358,23 @@ class MainWindow(QMainWindow):
         if hasattr(self, "flow") and self.flow:
             self.flow.update()
 
+        # 右スペーサ幅をロゴ位置に合わせて調整（STEP4右端がロゴ左端より少し左）
+        try:
+            if hasattr(self, "_flow_spacer") and self._flow_spacer:
+                corner = getattr(self, "corner_logo", None)
+                if corner and corner.isVisible():
+                    pad = getattr(self, "LOGO_CORNER_PAD", 8)
+                    dx = getattr(self, "LOGO_CORNER_DX", -10)
+                    logo_left = corner.x()
+                    margin = 12
+                    reserve = max(0, self.width() - (logo_left - margin))
+                    reserve = max(reserve, 60)
+                    self._flow_spacer.setFixedWidth(reserve)
+                else:
+                    self._flow_spacer.setFixedWidth(60)
+        except Exception:
+            pass
+
         if getattr(self, "project_dir", None) and hasattr(self, "lbl_project"):
             name = self.project_dir.name
             fm = QFontMetrics(self.lbl_project.font())
@@ -449,8 +466,11 @@ class MainWindow(QMainWindow):
         run_l.addWidget(self.btn_run)
 
         box1 = StepBox("STEP 1  プロジェクトフォルダの選択", proj_w)
-        box1.setFixedWidth(720)
+        box1.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        box1.setMinimumWidth(360)
+        box1.setMaximumWidth(720)
         box2 = StepBox("STEP 2  分析対象とする曜日を選択", wd_w)
+        box2.setFixedWidth(560)
         box3 = StepBox("STEP 3  交差点通過判定半径（この半径以内を通過したらHIT）", rad_w)
         box3.setFixedWidth(360)
         box4 = StepBox("STEP 4  実行", run_w)
@@ -460,11 +480,15 @@ class MainWindow(QMainWindow):
         flow_grid.addWidget(box2, 0, 1)
         flow_grid.addWidget(box3, 0, 2)
         flow_grid.addWidget(box4, 0, 3)
-        # 右側に余白（ロゴ干渉回避）
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        flow_grid.addWidget(spacer, 0, 4)
-        flow_grid.setColumnStretch(4, 1)
+        # 右側に余白（ロゴ干渉回避）※固定幅で制御
+        self._flow_spacer = QWidget()
+        self._flow_spacer.setFixedWidth(260)
+        flow_grid.addWidget(self._flow_spacer, 0, 4)
+        flow_grid.setColumnStretch(0, 1)
+        flow_grid.setColumnStretch(1, 0)
+        flow_grid.setColumnStretch(2, 0)
+        flow_grid.setColumnStretch(3, 0)
+        flow_grid.setColumnStretch(4, 0)
 
         self.flow.set_steps([box1, box2, box3, box4])
         v.addWidget(self.flow)
