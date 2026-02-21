@@ -5,12 +5,14 @@ from pathlib import Path
 from time import perf_counter
 
 from PyQt6.QtCore import QProcess, QPropertyAnimation, QRect, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QFileDialog,
+    QFrame,
     QGraphicsOpacityEffect,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -18,6 +20,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QStyle,
     QStyleOptionButton,
@@ -128,11 +131,100 @@ class RunHeaderView(QHeaderView):
         super().mousePressEvent(event)
 
 
+class StepBox(QFrame):
+    """ネオン枠の角丸ボックス（中に任意のウィジェットを入れる）"""
+
+    def __init__(self, title: str, content: QWidget, parent=None):
+        super().__init__(parent)
+        self.setObjectName("stepBox")
+        self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+
+        t = QLabel(title)
+        t.setObjectName("stepTitle")
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(6)
+        lay.addWidget(t)
+        lay.addWidget(content)
+
+        self.setStyleSheet(
+            """
+        QFrame#stepBox{
+            border: 2px solid #00ff99;
+            border-radius: 12px;
+            background: rgba(0, 255, 153, 16);
+        }
+        QLabel#stepTitle{
+            color: #00ff99;
+            font-weight: 700;
+        }
+        """
+        )
+
+
+class FlowGuide(QWidget):
+    """複数のStepBoxを配置し、マインドマップ風の接続線を描画する"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._steps: list[QWidget] = []
+        self.setMinimumHeight(86)
+
+    def set_steps(self, steps: list[QWidget]):
+        self._steps = steps
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if len(self._steps) < 2:
+            return
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        neon = QColor("#00ff99")
+
+        glow = QPen(QColor(neon))
+        glow.setWidth(10)
+        glow.setCapStyle(Qt.PenCapStyle.RoundCap)
+        glow.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        c = glow.color()
+        c.setAlpha(40)
+        glow.setColor(c)
+
+        line = QPen(neon)
+        line.setWidth(2)
+        line.setCapStyle(Qt.PenCapStyle.RoundCap)
+        line.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+
+        for a, b in zip(self._steps[:-1], self._steps[1:]):
+            if not a.isVisible() or not b.isVisible():
+                continue
+            ra = a.geometry()
+            rb = b.geometry()
+
+            ax = ra.right()
+            ay = ra.center().y()
+            bx = rb.left()
+            by = rb.center().y()
+
+            ax += 6
+            bx -= 6
+
+            p.setPen(glow)
+            p.drawLine(ax, ay, bx, by)
+
+            p.setPen(line)
+            p.drawLine(ax, ay, bx, by)
+
+        p.end()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_TITLE)
-        self.resize(1100, 760)
 
         self.project_dir: Path | None = None
         self.input_dir: Path | None = None
@@ -260,52 +352,102 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         v = QVBoxLayout(root)
 
-        top = QHBoxLayout()
-        top.setContentsMargins(12, 8, 0, 8)
-        v.addLayout(top)
+        top_font = QFont()
+        top_font.setPointSize(10)
 
-        btn_project = QPushButton("① プロジェクト選択")
-        btn_input = QPushButton("② 第1スクリーニング選択")
-        self.btn_run = QPushButton("第2スクリーニング開始")
+        self.lbl_about = QLabel(
+            "本ソフトは、第1スクリーニング後データから、各交差点の通過候補トリップを抽出し、第2スクリーニング用フォルダ（20_第２スクリーニング）を自動生成します。\n"
+            "交差点中心から指定半径以内を通過したトリップを抽出し、交差点別にCSVを出力します。①プロジェクト → ②第1スクリーニング → ③半径設定 → ④実行の順に操作します。"
+        )
+        self.lbl_about.setWordWrap(True)
+        self.lbl_about.setStyleSheet("color: #00ff99; font-weight: 600;")
+        self.lbl_about.setFont(top_font)
+        v.addWidget(self.lbl_about)
 
-        btn_project.clicked.connect(self.select_project)
-        btn_input.clicked.connect(self.select_input)
-        self.btn_run.clicked.connect(self.run_screening)
+        self.flow = FlowGuide()
+        flow_grid = QGridLayout(self.flow)
+        flow_grid.setContentsMargins(0, 0, 0, 0)
+        flow_grid.setHorizontalSpacing(18)
+        flow_grid.setVerticalSpacing(8)
 
-        arrow1 = QLabel(" → ")
-        arrow2 = QLabel(" → ")
-        arrow1.setStyleSheet("font-size: 18px; font-weight: bold;")
-        arrow2.setStyleSheet("font-size: 18px; font-weight: bold;")
+        self.btn_project = QPushButton("プロジェクトを選ぶ")
+        self.btn_project.setFont(top_font)
+        self.btn_project.clicked.connect(self.select_project)
 
-        top.addWidget(btn_project)
-        top.addWidget(arrow1)
-        top.addWidget(btn_input)
-        top.addWidget(arrow2)
-        top.addWidget(self.btn_run)
-        top.addStretch(1)
+        self.lbl_project = QLabel("未選択")
+        self.lbl_project.setFont(top_font)
+        self.lbl_project.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.lbl_project.setMinimumWidth(0)
 
-        radius_row = QHBoxLayout()
-        radius_prefix = QLabel("第1スクリーニング後のCSVのうち、半径")
-        radius_l_bracket = QLabel("【")
+        proj_w = QWidget()
+        proj_l = QHBoxLayout(proj_w)
+        proj_l.setContentsMargins(0, 0, 0, 0)
+        proj_l.setSpacing(8)
+        proj_l.addWidget(self.btn_project)
+        proj_l.addWidget(self.lbl_project)
+
+        self.btn_input = QPushButton("第1スクリーニングを選ぶ")
+        self.btn_input.setFont(top_font)
+        self.btn_input.clicked.connect(self.select_input)
+
+        self.lbl_input = QLabel("未選択")
+        self.lbl_input.setFont(top_font)
+
+        in_w = QWidget()
+        in_l = QHBoxLayout(in_w)
+        in_l.setContentsMargins(0, 0, 0, 0)
+        in_l.setSpacing(8)
+        in_l.addWidget(self.btn_input)
+        in_l.addWidget(self.lbl_input)
+
         self.spin_radius = QSpinBox()
+        self.spin_radius.setFont(top_font)
         self.spin_radius.setRange(5, 200)
         self.spin_radius.setValue(30)
-        radius_r_bracket = QLabel("】")
-        radius_unit = QLabel("m")
-        radius_suffix = QLabel("以内を通過するトリップを抜き出し、トリップ毎にCSVファイルを生成します。")
-        radius_row.addWidget(radius_prefix)
-        radius_row.addWidget(radius_l_bracket)
-        radius_row.addWidget(self.spin_radius)
-        radius_row.addWidget(radius_r_bracket)
-        radius_row.addWidget(radius_unit)
-        radius_row.addWidget(radius_suffix)
-        radius_row.addStretch(1)
-        v.addLayout(radius_row)
 
-        self.lbl_project = QLabel("Project: (未選択)")
-        self.lbl_input = QLabel("Input(第1): (未選択)")
-        v.addWidget(self.lbl_project)
-        v.addWidget(self.lbl_input)
+        rad_w = QWidget()
+        rad_l = QHBoxLayout(rad_w)
+        rad_l.setContentsMargins(0, 0, 0, 0)
+        rad_l.setSpacing(2)
+        rad_l.addWidget(QLabel("半径"))
+        rad_l.addWidget(self.spin_radius)
+        rad_l.addWidget(QLabel("m（既定30m）"))
+
+        self.btn_run = QPushButton("21 第2スクリーニング開始（分析スタート）")
+        self.btn_run.setFont(top_font)
+        self.btn_run.clicked.connect(self.run_screening)
+
+        run_w = QWidget()
+        run_l = QHBoxLayout(run_w)
+        run_l.setContentsMargins(0, 0, 0, 0)
+        run_l.addWidget(self.btn_run)
+
+        box1 = StepBox("STEP 1 プロジェクトフォルダの選択", proj_w)
+        box1.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        box1.setMinimumWidth(360)
+        box1.setMaximumWidth(720)
+        box2 = StepBox("STEP 2 第1スクリーニングデータの選択", in_w)
+        box2.setFixedWidth(410)
+        box3 = StepBox("STEP 3 交差点通過判定半径（この半径以内を通過したらHIT）", rad_w)
+        box3.setFixedWidth(410)
+        box4 = StepBox("STEP 4 実行", run_w)
+        box4.setFixedWidth(260)
+
+        flow_grid.addWidget(box1, 0, 0)
+        flow_grid.addWidget(box2, 0, 1)
+        flow_grid.addWidget(box3, 0, 2)
+        flow_grid.addWidget(box4, 0, 3)
+        self._flow_spacer = QWidget()
+        self._flow_spacer.setFixedWidth(260)
+        flow_grid.addWidget(self._flow_spacer, 0, 4)
+        flow_grid.setColumnStretch(0, 1)
+        flow_grid.setColumnStretch(1, 0)
+        flow_grid.setColumnStretch(2, 0)
+        flow_grid.setColumnStretch(3, 0)
+        flow_grid.setColumnStretch(4, 0)
+
+        self.flow.set_steps([box1, box2, box3, box4])
+        v.addWidget(self.flow)
 
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels([
@@ -423,7 +565,7 @@ class MainWindow(QMainWindow):
         if not d:
             return
         self.project_dir = Path(d).resolve()
-        self.lbl_project.setText(f"Project: {self.project_dir}")
+        self.lbl_project.setText(self.project_dir.name)
         self.log_info(f"project set: {self.project_dir}")
         self.scan_crossroads()
 
@@ -432,7 +574,7 @@ class MainWindow(QMainWindow):
         if not d:
             return
         self.input_dir = Path(d).resolve()
-        self.lbl_input.setText(f"Input(第1): {self.input_dir}")
+        self.lbl_input.setText(self.input_dir.name)
         self.log_info(f"input set: {self.input_dir}")
 
     def scan_crossroads(self):
@@ -733,7 +875,8 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     w = MainWindow()
-    w.showMaximized()
+    w.show()
+    QTimer.singleShot(0, w.showMaximized)
     sys.exit(app.exec())
 
 
