@@ -229,7 +229,7 @@ class MainWindow(QMainWindow):
         self._pending_logo_reposition = False
         self._build_ui()
         self._set_style()
-        self._init_logo_overlay()
+        QTimer.singleShot(0, self._init_logo_overlay)
         self.anim_timer = QTimer(self)
         self.anim_timer.timeout.connect(self._tick_animation)
         self.anim_timer.start(120)
@@ -455,6 +455,8 @@ class MainWindow(QMainWindow):
         self._layout_splash(is_compact=True)
         self._position_logo_overlay()
         self._logo_intro_done = True
+        if self.splash:
+            self.splash.raise_()
         self._pulse_logo_glow()
 
     def _pulse_logo_glow(self) -> None:
@@ -553,6 +555,9 @@ class MainWindow(QMainWindow):
 
             # イントロ中は中央維持、完了後は右上追従
             if self.splash and not getattr(self, "_logo_intro_done", False):
+                # ★移動アニメ中は邪魔しない（中央に戻さない）
+                if self._splash_animating:
+                    return
                 self.splash.setGeometry(self._splash_rect(center=True))
             else:
                 self._position_logo_overlay()
