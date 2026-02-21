@@ -8,7 +8,7 @@ from time import perf_counter
 os.environ.setdefault("QT_LOGGING_RULES", "qt.text.font.db=false")
 
 from PyQt6.QtCore import QProcess, QPropertyAnimation, QRect, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont, QGuiApplication, QPainter, QPixmap
+from PyQt6.QtGui import QFont, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -120,7 +120,6 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_TITLE)
-        self.resize(1320, 780)
 
         self.project_dir: Path | None = None
         self.proc: QProcess | None = None
@@ -153,7 +152,6 @@ class MainWindow(QMainWindow):
         self.log_info("第3判定：20-100mで角度算出　基準値との誤差40°")
         self.log_info("その他：枝不明")
         self.log_info("①プロジェクト選択 → ②曜日選択 → 31→32一括実行【分析スタート】")
-        QTimer.singleShot(0, self._fit_to_screen)
 
     def _init_logo_overlay(self) -> None:
         logo_path = Path(__file__).resolve().parent / "logo.png"
@@ -234,15 +232,6 @@ class MainWindow(QMainWindow):
             y = margin
             self.splash.move(x, y)
 
-    def _fit_to_screen(self) -> None:
-        scr = self.screen() or QGuiApplication.primaryScreen()
-        if not scr:
-            return
-        g = scr.availableGeometry()
-        self.setMaximumSize(g.width(), g.height())
-        self.resize(int(g.width() * 0.98), int(g.height() * 0.90))
-        self.move(g.left(), g.top())
-
     def _build_ui(self) -> None:
         root = QWidget()
         self.setCentralWidget(root)
@@ -311,16 +300,14 @@ class MainWindow(QMainWindow):
         header = self.table.horizontalHeader()
         self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setStretchLastSection(True)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        header.setStretchLastSection(False)
         header.setMinimumSectionSize(24)
-        header.setDefaultSectionSize(72)
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         header.setFixedHeight(44)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(self.table.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(self.table.EditTrigger.NoEditTriggers)
-        self._apply_column_widths()
         v.addWidget(self.table, stretch=3)
 
         self.lbl_progress = QLabel("")
@@ -332,31 +319,6 @@ class MainWindow(QMainWindow):
         self.log.setMaximumBlockCount(5000)
         v.addWidget(self.lbl_progress)
         v.addWidget(self.log, stretch=2)
-
-    def _apply_column_widths(self) -> None:
-        header = self.table.horizontalHeader()
-        fixed = QHeaderView.ResizeMode.Fixed
-
-        header.setSectionResizeMode(COL_RUN, fixed)
-        self.table.setColumnWidth(COL_RUN, 44)
-
-        header.setSectionResizeMode(COL_NAME, fixed)
-        self.table.setColumnWidth(COL_NAME, 260)
-
-        for c in [COL_CROSS_CSV, COL_CROSS_JPG, COL_S2_DIR, COL_S2_CSV, COL_OUT31, COL_OUT32]:
-            header.setSectionResizeMode(c, fixed)
-            self.table.setColumnWidth(c, 52)
-
-        for c in [COL_DONE_FILES, COL_TOTAL_FILES, COL_WEEKDAY, COL_SPLIT, COL_TARGET, COL_OK, COL_UNK, COL_NOTPASS]:
-            header.setSectionResizeMode(c, fixed)
-            self.table.setColumnWidth(c, 84)
-
-        header.setSectionResizeMode(COL_STATUS, fixed)
-        self.table.setColumnWidth(COL_STATUS, 170)
-
-        last = self.table.columnCount() - 1
-        header.setSectionResizeMode(last, QHeaderView.ResizeMode.Stretch)
-        header.setTextElideMode(Qt.TextElideMode.ElideRight)
 
     def _timestamp(self) -> str:
         return datetime.now().strftime("%Y/%m/%d %H:%M:%S")
