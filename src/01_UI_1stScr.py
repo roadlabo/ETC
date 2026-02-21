@@ -207,7 +207,7 @@ class SplitWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("01 第1スクリーニング HUD")
+        self.setWindowTitle("01_対象2次メッシュ内の運行IDごと抽出ツール(第1スクリーニング)")
         self.resize(1600, 980)
         self.worker: SplitWorker | None = None
         self.started_at = 0.0
@@ -240,7 +240,7 @@ class MainWindow(QMainWindow):
         about_layout = QVBoxLayout(about_box)
         self.about_full_text = (
             "本ソフトは、ETC2.0プローブデータ（様式1-2出力）から指定した2次メッシュに該当するデータを抽出し、"
-            "運行ID（OPID）ごとにCSVファイルへ分割したうえで、各CSVの内容を時系列順に並べ替えます。"
+            "運行ID（OPID）ごとにCSVファイルへ分割したうえで、各CSVの内容を時系列順に並べ替えます。データフォーマットは様式1-2を保持します。"
             "これにより必要な運行データのみを整理・抽出し、後続の分析を効率的に実施できます。"
         )
         self.about_text = QLabel()
