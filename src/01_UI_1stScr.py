@@ -268,7 +268,7 @@ class MainWindow(QMainWindow):
         row += 1
         self._add_form_row(form_grid, row, "TERM", self.term_name, "出力ファイル名の先頭識別子（例 R7_2）")
         row += 1
-        self._add_form_row(form_grid, row, "ZIP_KEYS", self.zip_keys, "2次メッシュ番号を記入　複数ある場合はカンマ","で区切って下さい　詳細は2次メッシュマップ参照")
+        self._add_form_row(form_grid, row, "ZIP_KEYS", self.zip_keys, "2次メッシュ番号を記入　複数ある場合はカンマ（,）で区切って下さい　詳細は2次メッシュマップ参照")
         row += 1
         self._add_form_row(form_grid, row, "CHUNK_ROWS", self.chunk_rows, "並べ替え時に一度に読む行数　メモリ不足時は下げる")
 
