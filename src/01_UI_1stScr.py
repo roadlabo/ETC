@@ -378,7 +378,11 @@ class MainWindow(QMainWindow):
         self.splash.setGraphicsEffect(self._logo_shadow_effect)
 
         self.splash.raise_()
-        self._start_intro_animation()
+
+        # まず中央に配置して1秒停止
+        self.splash.setGeometry(self._splash_rect(center=True))
+
+        QTimer.singleShot(1000, self._start_intro_animation)
 
     def _layout_splash(self, *, is_compact: bool) -> None:
         if not self.splash or not self.splash_logo:
@@ -394,10 +398,14 @@ class MainWindow(QMainWindow):
     def _start_intro_animation(self) -> None:
         if not self.splash:
             return
+
         self._splash_animating = True
-        start_rect = self._splash_rect(center=True)
+
+        # 現在位置をスタートにする
+        start_rect = self.splash.geometry()
+
+        # ★ここで最新のウィンドウサイズで終点を再計算
         end_rect = self._splash_rect(center=False)
-        self.splash.setGeometry(start_rect)
 
         anim = QPropertyAnimation(self.splash, b"geometry", self)
         anim.setDuration(1000)
