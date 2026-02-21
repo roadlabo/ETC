@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-APP_TITLE = "21[UI] Point Trip Extractor（第2スクリーニング）"
+APP_TITLE = "21指定交差点を通過するトリップの抽出ツール（第2スクリーニング）"
 
 CORNER_LOGO_MARGIN = 18
 CORNER_LOGO_OFFSET_TOP = -4
@@ -356,8 +356,8 @@ class MainWindow(QMainWindow):
         top_font.setPointSize(10)
 
         self.lbl_about = QLabel(
-            "本ソフトは、第1スクリーニング後データから、各交差点の通過候補トリップを抽出し、第2スクリーニング用フォルダ（20_第２スクリーニング）を自動生成します。\n"
-            "交差点中心から指定半径以内を通過したトリップを抽出し、交差点別にCSVを出力します。①プロジェクト → ②第1スクリーニング → ③半径設定 → ④実行の順に操作します。"
+            "本ソフトは、第1スクリーニング後データから、さらに、「11_交差点(Point)データ」で指定するすべての交差点における通過トリップを一括で抽出します。\n"
+            "抽出されたトリップは「20_第２スクリーニング）」フォルダへ１トリップに対し１CSVファイルで出力します。"
         )
         self.lbl_about.setWordWrap(True)
         self.lbl_about.setStyleSheet("color: #00ff99; font-weight: 600;")
