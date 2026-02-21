@@ -8,7 +8,7 @@ from time import perf_counter
 os.environ.setdefault("QT_LOGGING_RULES", "qt.text.font.db=false")
 
 from PyQt6.QtCore import QProcess, QPropertyAnimation, QRect, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont, QPainter, QPixmap, QColor, QPen
+from PyQt6.QtGui import QFont, QFontMetrics, QPainter, QPixmap, QColor, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -358,6 +358,13 @@ class MainWindow(QMainWindow):
         if hasattr(self, "flow") and self.flow:
             self.flow.update()
 
+        if getattr(self, "project_dir", None) and hasattr(self, "lbl_project"):
+            name = self.project_dir.name
+            fm = QFontMetrics(self.lbl_project.font())
+            max_px = self.lbl_project.width()
+            self.lbl_project.setText(fm.elidedText(name, Qt.TextElideMode.ElideRight, max_px))
+            self.lbl_project.setToolTip(name)
+
     def _build_ui(self) -> None:
         root = QWidget()
         self.setCentralWidget(root)
@@ -389,6 +396,8 @@ class MainWindow(QMainWindow):
 
         self.lbl_project = QLabel("未選択")
         self.lbl_project.setFont(top_font)
+        self.lbl_project.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.lbl_project.setMinimumWidth(0)
 
         proj_w = QWidget()
         proj_l = QHBoxLayout(proj_w)
@@ -440,6 +449,7 @@ class MainWindow(QMainWindow):
         run_l.addWidget(self.btn_run)
 
         box1 = StepBox("STEP 1  プロジェクトフォルダの選択", proj_w)
+        box1.setFixedWidth(720)
         box2 = StepBox("STEP 2  分析対象とする曜日を選択", wd_w)
         box3 = StepBox("STEP 3  通過判定半径（この半径以内を通過でHIT）", rad_w)
         box3.setFixedWidth(360)
@@ -672,7 +682,12 @@ class MainWindow(QMainWindow):
         if not d:
             return
         self.project_dir = Path(d).resolve()
-        self.lbl_project.setText(self.project_dir.name)
+        name = self.project_dir.name
+        fm = QFontMetrics(self.lbl_project.font())
+        max_px = self.lbl_project.width() if self.lbl_project.width() > 20 else 360
+        elided = fm.elidedText(name, Qt.TextElideMode.ElideRight, max_px)
+        self.lbl_project.setText(elided)
+        self.lbl_project.setToolTip(name)
         self.log_info(f"project set: {self.project_dir}")
         self.scan_crossroads()
 
