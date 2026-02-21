@@ -253,12 +253,14 @@ class MainWindow(QMainWindow):
         splash = getattr(self, "splash_logo", None)
         if phase == "center" and splash and splash.isVisible():
             w, h = splash.width(), splash.height()
-            splash.move(self._logo_center_pos(w, h))
+            x, y = self._logo_center_pos(w, h)
+            splash.move(x, y)
 
         corner = getattr(self, "corner_logo", None)
         if phase == "corner" and corner and corner.isVisible():
             w, h = corner.width(), corner.height()
-            corner.move(self._logo_corner_pos(w, h))
+            x, y = self._logo_corner_pos(w, h)
+            corner.move(x, y)
 
     def _build_ui(self) -> None:
         root = QWidget()
