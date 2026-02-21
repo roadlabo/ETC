@@ -15,14 +15,16 @@ import pandas as pd
 NOGUI_MODE = "--nogui" in sys.argv[1:]
 
 if not NOGUI_MODE:
-    from PyQt6.QtCore import Qt, QUrl
+    from PyQt6.QtCore import QPropertyAnimation, Qt, QTimer, QUrl
     from PyQt6.QtWebEngineCore import QWebEngineSettings
+    from PyQt6.QtGui import QPixmap
     from PyQt6.QtWebEngineWidgets import QWebEngineView
     from PyQt6.QtWidgets import (
         QApplication,
         QFileDialog,
         QHBoxLayout,
         QLabel,
+        QGraphicsOpacityEffect,
         QMainWindow,
         QMessageBox,
         QPushButton,
@@ -37,9 +39,9 @@ if not NOGUI_MODE:
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 else:
     Figure = FigureCanvas = object
-    Qt = QUrl = QWebEngineSettings = QWebEngineView = object
-    QApplication = QFileDialog = QHBoxLayout = QLabel = QMainWindow = object
-    QMessageBox = QPushButton = QSplitter = QVBoxLayout = QWidget = object
+    QPropertyAnimation = QTimer = Qt = QUrl = QWebEngineSettings = QWebEngineView = object
+    QApplication = QFileDialog = QGraphicsOpacityEffect = QHBoxLayout = QLabel = QMainWindow = object
+    QMessageBox = QPixmap = QPushButton = QSplitter = QVBoxLayout = QWidget = object
     QListWidget = QListWidgetItem = QProgressDialog = object
 
 
@@ -621,6 +623,9 @@ class RouteMapperWindow(QMainWindow):
         self.current_df: Optional[pd.DataFrame] = None
 
         self._build_ui()
+        self._corner_logo_visible = False
+        self._pix_small = None
+        QTimer.singleShot(0, self._init_logo_overlay)
         self._refresh_file_list()
 
     def _build_ui(self) -> None:
@@ -697,6 +702,85 @@ class RouteMapperWindow(QMainWindow):
 
         layout = QVBoxLayout(root)
         layout.addWidget(splitter)
+
+    def _init_logo_overlay(self) -> None:
+        logo_path = Path(__file__).resolve().parent / "logo.png"
+        if not logo_path.exists():
+            return
+
+        pixmap = QPixmap(str(logo_path))
+        if pixmap.isNull():
+            return
+
+        pix_big = pixmap.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
+        self._pix_small = pixmap.scaledToHeight(110, Qt.TransformationMode.SmoothTransformation)
+
+        self.splash = QLabel(self)
+        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash.setStyleSheet("background: transparent;")
+        self.splash.setPixmap(pix_big)
+        self.splash.adjustSize()
+
+        x = (self.width() - self.splash.width()) // 2
+        y = (self.height() - self.splash.height()) // 2
+        self.splash.move(x, y)
+        self.splash.show()
+
+        effect = QGraphicsOpacityEffect(self.splash)
+        self.splash.setGraphicsEffect(effect)
+
+        fade_in = QPropertyAnimation(effect, b"opacity", self)
+        fade_in.setDuration(500)
+        fade_in.setStartValue(0.0)
+        fade_in.setEndValue(1.0)
+
+        def start_fade_out():
+            fade_out = QPropertyAnimation(effect, b"opacity", self)
+            fade_out.setDuration(500)
+            fade_out.setStartValue(1.0)
+            fade_out.setEndValue(0.0)
+
+            def show_corner_logo():
+                self.splash.deleteLater()
+                self._show_corner_logo()
+
+            fade_out.finished.connect(show_corner_logo)
+            fade_out.start()
+
+        fade_in.finished.connect(lambda: QTimer.singleShot(3000, start_fade_out))
+        fade_in.start()
+
+    def _show_corner_logo(self) -> None:
+        if not self._pix_small:
+            return
+
+        self.splash = QLabel(self)
+        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash.setStyleSheet("background: transparent;")
+        self.splash.setPixmap(self._pix_small)
+        self.splash.adjustSize()
+
+        margin = 18
+        x = self.width() - self.splash.width() - margin
+        y = margin
+        self.splash.move(x, y)
+        self.splash.show()
+
+        self._corner_logo_visible = True
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_refresh_about_text"):
+            try:
+                self._refresh_about_text()
+            except Exception:
+                pass
+
+        if getattr(self, "_corner_logo_visible", False):
+            margin = 18
+            x = self.width() - self.splash.width() - margin
+            y = margin
+            self.splash.move(x, y)
 
     def _pick_directory(self) -> None:
         d = QFileDialog.getExistingDirectory(
@@ -950,7 +1034,7 @@ def main(argv: Sequence[str]) -> None:
     # ウィンドウ側でも閉じられるよう参照渡し
     w._msg_loading = busy
 
-    w.show()
+    w.showFullScreen()
     sys.exit(app.exec())
 
 
