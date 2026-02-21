@@ -219,6 +219,7 @@ class MainWindow(QMainWindow):
         self.current_sort_file = "-"
         self.splash: QLabel | None = None
         self._pix_small: QPixmap | None = None
+        self._corner_logo_visible = False
         self._logo_shadow_effect: QGraphicsDropShadowEffect | None = None
         self._build_ui()
         self._set_style()
@@ -379,7 +380,7 @@ class MainWindow(QMainWindow):
         fade_in.setStartValue(0.0)
         fade_in.setEndValue(1.0)
 
-        # 1秒後フェードアウト
+        # 3秒後フェードアウト
         def start_fade_out():
             fade_out = QPropertyAnimation(effect, b"opacity", self)
             fade_out.setDuration(500)
@@ -394,7 +395,7 @@ class MainWindow(QMainWindow):
             fade_out.finished.connect(show_corner_logo)
             fade_out.start()
 
-        fade_in.finished.connect(lambda: QTimer.singleShot(1000, start_fade_out))
+        fade_in.finished.connect(lambda: QTimer.singleShot(3000, start_fade_out))
         fade_in.start()
 
     def _show_corner_logo(self) -> None:
@@ -412,6 +413,7 @@ class MainWindow(QMainWindow):
         y = margin
         self.splash.move(x, y)
         self.splash.show()
+        self._corner_logo_visible = True
 
     def _set_logo_glow(self, alpha: int, blur: int | None = None) -> None:
         if not self._logo_shadow_effect:
@@ -475,7 +477,7 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         self._refresh_about_text()
 
-        if self.splash and self._pix_small:
+        if self.splash and self._corner_logo_visible:
             margin = 18
             x = self.width() - self.splash.width() - margin
             y = margin
