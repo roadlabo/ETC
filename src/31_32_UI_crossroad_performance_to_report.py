@@ -8,14 +8,16 @@ from time import perf_counter
 os.environ.setdefault("QT_LOGGING_RULES", "qt.text.font.db=false")
 
 from PyQt6.QtCore import QProcess, QPropertyAnimation, QRect, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont, QPainter, QPixmap
+from PyQt6.QtGui import QFont, QPainter, QPixmap, QColor, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
     QDialog,
     QFileDialog,
+    QFrame,
     QGraphicsOpacityEffect,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -23,6 +25,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QStyle,
     QStyleOptionButton,
@@ -114,6 +117,96 @@ class RunHeaderView(QHeaderView):
                 event.accept()
                 return
         super().mousePressEvent(event)
+
+
+class StepBox(QFrame):
+    """ネオン枠の角丸ボックス（中に任意のウィジェットを入れる）"""
+
+    def __init__(self, title: str, content: QWidget, parent=None):
+        super().__init__(parent)
+        self.setObjectName("stepBox")
+        self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+
+        t = QLabel(title)
+        t.setObjectName("stepTitle")
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(6)
+        lay.addWidget(t)
+        lay.addWidget(content)
+
+        self.setStyleSheet(
+            """
+        QFrame#stepBox{
+            border: 2px solid #00ff99;
+            border-radius: 12px;
+            background: rgba(0, 255, 153, 16);
+        }
+        QLabel#stepTitle{
+            color: #00ff99;
+            font-weight: 700;
+        }
+        """
+        )
+
+
+class FlowGuide(QWidget):
+    """複数のStepBoxを配置し、マインドマップ風の接続線を描画する"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._steps: list[QWidget] = []
+        self.setMinimumHeight(86)
+
+    def set_steps(self, steps: list[QWidget]):
+        self._steps = steps
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if len(self._steps) < 2:
+            return
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        neon = QColor("#00ff99")
+
+        glow = QPen(QColor(neon))
+        glow.setWidth(10)
+        glow.setCapStyle(Qt.PenCapStyle.RoundCap)
+        glow.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        c = glow.color()
+        c.setAlpha(40)
+        glow.setColor(c)
+
+        line = QPen(neon)
+        line.setWidth(2)
+        line.setCapStyle(Qt.PenCapStyle.RoundCap)
+        line.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+
+        for a, b in zip(self._steps[:-1], self._steps[1:]):
+            if not a.isVisible() or not b.isVisible():
+                continue
+            ra = a.geometry()
+            rb = b.geometry()
+
+            ax = ra.right()
+            ay = ra.center().y()
+            bx = rb.left()
+            by = rb.center().y()
+
+            ax += 6
+            bx -= 6
+
+            p.setPen(glow)
+            p.drawLine(ax, ay, bx, by)
+
+            p.setPen(line)
+            p.drawLine(ax, ay, bx, by)
+
+        p.end()
 
 
 class MainWindow(QMainWindow):
@@ -262,6 +355,9 @@ class MainWindow(QMainWindow):
             x, y = self._logo_corner_pos(w, h)
             corner.move(x, y)
 
+        if hasattr(self, "flow") and self.flow:
+            self.flow.update()
+
     def _build_ui(self) -> None:
         root = QWidget()
         self.setCentralWidget(root)
@@ -280,32 +376,36 @@ class MainWindow(QMainWindow):
         self.lbl_about.setFont(top_font)
         v.addWidget(self.lbl_about)
 
-        # --- 上段コントロール（1段目:①→② / 2段目:③→④） ---
-        top1 = QHBoxLayout()
-        v.addLayout(top1)
+        # --- フローUI（ネオン四角＋接続線） ---
+        self.flow = FlowGuide()
+        flow_grid = QGridLayout(self.flow)
+        flow_grid.setContentsMargins(0, 0, 0, 0)
+        flow_grid.setHorizontalSpacing(18)
+        flow_grid.setVerticalSpacing(8)
 
-        # ①プロジェクト選択ボタン + プロジェクト名表示
-        self.btn_project = QPushButton("① プロジェクト選択")
+        self.btn_project = QPushButton("プロジェクトを選ぶ")
         self.btn_project.setFont(top_font)
         self.btn_project.clicked.connect(self.select_project)
 
-        self.lbl_project = QLabel("プロジェクト名: (未選択)")
+        self.lbl_project = QLabel("未選択")
         self.lbl_project.setFont(top_font)
 
-        top1.addWidget(self.btn_project)
-        top1.addWidget(self.lbl_project)
+        proj_w = QWidget()
+        proj_l = QHBoxLayout(proj_w)
+        proj_l.setContentsMargins(0, 0, 0, 0)
+        proj_l.setSpacing(8)
+        proj_l.addWidget(self.btn_project)
+        proj_l.addWidget(self.lbl_project)
 
-        top1.addWidget(QLabel("  →  "))
-
-        # ②曜日選択
-        lbl_wd = QLabel("② 曜日選択")
-        lbl_wd.setFont(top_font)
-        top1.addWidget(lbl_wd)
+        wd_w = QWidget()
+        wd_l = QHBoxLayout(wd_w)
+        wd_l.setContentsMargins(0, 0, 0, 0)
+        wd_l.setSpacing(8)
 
         self.chk_all = QCheckBox("ALL")
         self.chk_all.setFont(top_font)
         self.chk_all.stateChanged.connect(self._on_all_weekday_changed)
-        top1.addWidget(self.chk_all)
+        wd_l.addWidget(self.chk_all)
 
         self.weekday_checks: dict[str, QCheckBox] = {}
         for wd in WEEKDAY_KANJI:
@@ -313,39 +413,44 @@ class MainWindow(QMainWindow):
             chk.setFont(top_font)
             chk.stateChanged.connect(self._on_single_weekday_changed)
             self.weekday_checks[wd] = chk
-            top1.addWidget(chk)
+            wd_l.addWidget(chk)
 
         self._set_weekdays_from_all(True)
-
-        top1.addStretch(1)
-
-        top2 = QHBoxLayout()
-        v.addLayout(top2)
-
-        # ③半径（21と同一設定・デフォルト30m）
-        lbl_r1 = QLabel("③ 半径")
-        lbl_r1.setFont(top_font)
-        top2.addWidget(lbl_r1)
 
         self.spin_radius = QSpinBox()
         self.spin_radius.setFont(top_font)
         self.spin_radius.setRange(5, 200)
         self.spin_radius.setValue(30)
-        top2.addWidget(self.spin_radius)
 
-        lbl_r2 = QLabel("m 以内を通過するトリップを分析対象とします（21第2スクリーニング時と同じ距離・既定30m）。")
-        lbl_r2.setFont(top_font)
-        top2.addWidget(lbl_r2)
+        rad_w = QWidget()
+        rad_l = QHBoxLayout(rad_w)
+        rad_l.setContentsMargins(0, 0, 0, 0)
+        rad_l.setSpacing(6)
+        rad_l.addWidget(QLabel("半径"))
+        rad_l.addWidget(self.spin_radius)
+        rad_l.addWidget(QLabel("m（21第2スクリーニングと同一・既定30m）"))
 
-        top2.addWidget(QLabel("  →  "))
-
-        # ④ 31/32 一括実行ボタン
-        self.btn_run = QPushButton("④ 31→32一括実行【分析スタート】")
+        self.btn_run = QPushButton("31→32 一括実行（分析スタート）")
         self.btn_run.setFont(top_font)
         self.btn_run.clicked.connect(self.start_batch)
-        top2.addWidget(self.btn_run)
 
-        top2.addStretch(1)
+        run_w = QWidget()
+        run_l = QHBoxLayout(run_w)
+        run_l.setContentsMargins(0, 0, 0, 0)
+        run_l.addWidget(self.btn_run)
+
+        box1 = StepBox("STEP 1  プロジェクト", proj_w)
+        box2 = StepBox("STEP 2  曜日", wd_w)
+        box3 = StepBox("STEP 3  半径", rad_w)
+        box4 = StepBox("STEP 4  実行", run_w)
+
+        flow_grid.addWidget(box1, 0, 0)
+        flow_grid.addWidget(box2, 0, 1)
+        flow_grid.addWidget(box3, 0, 2)
+        flow_grid.addWidget(box4, 0, 3)
+
+        self.flow.set_steps([box1, box2, box3, box4])
+        v.addWidget(self.flow)
 
         self.lbl_summary = QLabel("")
         v.addWidget(self.lbl_summary)
@@ -560,7 +665,7 @@ class MainWindow(QMainWindow):
         if not d:
             return
         self.project_dir = Path(d).resolve()
-        self.lbl_project.setText(f"プロジェクト名: {self.project_dir.name}")
+        self.lbl_project.setText(self.project_dir.name)
         self.log_info(f"project set: {self.project_dir}")
         self.scan_crossroads()
 
