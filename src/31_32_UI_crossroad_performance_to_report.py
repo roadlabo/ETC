@@ -267,68 +267,97 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         v = QVBoxLayout(root)
 
+        top_font = QFont()
+        top_font.setPointSize(10)
+
+        # --- 説明文（ネオン色／2行・改行は1回のみ） ---
+        self.lbl_about = QLabel(
+            "本ソフトは、ETC2.0データから交差点の進入→退出方向別に通過台数を集計し、スムーズ通過時間との差から遅れ時間（方向別・総遅れ時間）を算出してExcelレポートを出力します。\n"
+            "必要データは「11_交差点(Point)データ」と「20_第２スクリーニング」です（1交差点=1レポート）。"
+        )
+        self.lbl_about.setWordWrap(True)
+        self.lbl_about.setStyleSheet("color: #00ff88; font-weight: 600;")
+        self.lbl_about.setFont(top_font)
+        v.addWidget(self.lbl_about)
+
+        # --- 上段コントロール（①→②→③→④の順） ---
         top = QHBoxLayout()
         v.addLayout(top)
+
+        # ①プロジェクト選択ボタン + プロジェクト名表示
         self.btn_project = QPushButton("① プロジェクト選択")
+        self.btn_project.setFont(top_font)
         self.btn_project.clicked.connect(self.select_project)
 
+        self.lbl_project = QLabel("プロジェクト名: (未選択)")
+        self.lbl_project.setFont(top_font)
+
+        top.addWidget(self.btn_project)
+        top.addWidget(self.lbl_project)
+
+        top.addWidget(QLabel("  →  "))
+
+        # ②曜日選択
         weekday_container = QHBoxLayout()
         weekday_container.setSpacing(10)
-        weekday_container.addWidget(QLabel("② 曜日選択"))
+        lbl_wd = QLabel("② 曜日選択")
+        lbl_wd.setFont(top_font)
+        weekday_container.addWidget(lbl_wd)
+
         self.chk_all = QCheckBox("ALL")
+        self.chk_all.setFont(top_font)
         self.chk_all.stateChanged.connect(self._on_all_weekday_changed)
         weekday_container.addWidget(self.chk_all)
+
         self.weekday_checks: dict[str, QCheckBox] = {}
         for wd in WEEKDAY_KANJI:
             chk = QCheckBox(wd)
+            chk.setFont(top_font)
             chk.stateChanged.connect(self._on_single_weekday_changed)
             self.weekday_checks[wd] = chk
             weekday_container.addWidget(chk)
+
         self._set_weekdays_from_all(True)
 
         weekday_widget = QWidget()
         weekday_widget.setLayout(weekday_container)
-        self.btn_run = QPushButton("31→32一括実行【分析スタート】")
-        self.btn_run.clicked.connect(self.start_batch)
-
-        top.addWidget(self.btn_project)
-        top.addWidget(QLabel(" → "))
         top.addWidget(weekday_widget)
-        top.addWidget(QLabel(" → "))
-        top.addWidget(self.btn_run)
-        top.addStretch(1)
 
-        # --- ソフト概要説明 ---
-        self.lbl_about = QLabel(
-            "本ソフトは、「11_交差点(Point)データ」と「20_第２スクリーニング」の様式1-2由来CSVスクリーニングデータを用い、複数交差点を一括解析するETC2.0交差点分析ツールです。\n"
-            "トリップを進入方向→退出方向別に分類し通過台数を集計するとともに、スムーズ通過時間との差からトリップ毎の遅れ時間を算出し、方向別および総遅れ時間（交差点負荷指標）を算出します。\n"
-            "その結果を1交差点につき1レポートとしてExcel形式で出力します（31→32連続実行）。"
-        )
-        self.lbl_about.setStyleSheet("color: #00aa55; font-size: 11px;")
-        self.lbl_about.setWordWrap(True)
-        v.addWidget(self.lbl_about)
+        top.addWidget(QLabel("  →  "))
 
+        # ③半径（21と同一設定・デフォルト30m）
         radius_row = QHBoxLayout()
-        radius_prefix = QLabel("第2スクリーニング後のCSVのうち、半径")
-        radius_l_bracket = QLabel("【")
+        radius_row.setSpacing(4)
+
+        lbl_r1 = QLabel("③ 半径")
+        lbl_r1.setFont(top_font)
+        radius_row.addWidget(lbl_r1)
+
         self.spin_radius = QSpinBox()
+        self.spin_radius.setFont(top_font)
         self.spin_radius.setRange(5, 200)
         self.spin_radius.setValue(30)
-        radius_r_bracket = QLabel("】")
-        radius_unit = QLabel("m")
-        radius_suffix = QLabel("以内を通過するトリップを分析対象とします。")
-        radius_row.addWidget(radius_prefix)
-        radius_row.addWidget(radius_l_bracket)
         radius_row.addWidget(self.spin_radius)
-        radius_row.addWidget(radius_r_bracket)
-        radius_row.addWidget(radius_unit)
-        radius_row.addWidget(radius_suffix)
-        radius_row.addStretch(1)
-        v.addLayout(radius_row)
 
-        self.lbl_project = QLabel("Project: (未選択)")
+        lbl_r2 = QLabel("m 以内を通過するトリップを分析対象とします（21第2スクリーニング時の設定と同じ距離。デフォルト30m）。")
+        lbl_r2.setFont(top_font)
+        radius_row.addWidget(lbl_r2)
+
+        radius_widget = QWidget()
+        radius_widget.setLayout(radius_row)
+        top.addWidget(radius_widget)
+
+        top.addWidget(QLabel("  →  "))
+
+        # ④ 31/32 一括実行ボタン
+        self.btn_run = QPushButton("④ 31→32一括実行【分析スタート】")
+        self.btn_run.setFont(top_font)
+        self.btn_run.clicked.connect(self.start_batch)
+        top.addWidget(self.btn_run)
+
+        top.addStretch(1)
+
         self.lbl_summary = QLabel("")
-        v.addWidget(self.lbl_project)
         v.addWidget(self.lbl_summary)
 
         self.table = QTableWidget(0, 17)
@@ -541,7 +570,7 @@ class MainWindow(QMainWindow):
         if not d:
             return
         self.project_dir = Path(d).resolve()
-        self.lbl_project.setText(f"Project: {self.project_dir}")
+        self.lbl_project.setText(f"プロジェクト名: {self.project_dir.name}")
         self.log_info(f"project set: {self.project_dir}")
         self.scan_crossroads()
 
