@@ -280,7 +280,7 @@ class MainWindow(QMainWindow):
         header_vbox.addLayout(row_project)
 
         row_map = QHBoxLayout()
-        self.lbl_guide = QLabel("②地図上を左クリック：中心点指定・方向追加　右クリック：やり直し")
+        self.lbl_guide = QLabel("②地図上を左クリック：中心点指定・方向追加　右クリック：方向指定やり直し　中心点の指定から全てやり直しは右のクリアボタン　=>")
         self.lbl_guide.setStyleSheet(GREEN_LABEL_STYLE)
         row_map.addWidget(self.lbl_guide)
         row_map.addStretch(1)
