@@ -252,6 +252,11 @@ class MainWindow(QMainWindow):
         self.log_info("その他：枝不明")
         self.log_info("①プロジェクト選択 → ②曜日選択 → 31→32一括実行【分析スタート】")
 
+        # 起動直後はレイアウトが未確定になりがちなので、短い遅延で数回リフレッシュ
+        QTimer.singleShot(0, self._force_layout_refresh)
+        QTimer.singleShot(50, self._force_layout_refresh)
+        QTimer.singleShot(150, self._force_layout_refresh)
+
     def _init_logo_overlay(self) -> None:
         logo_path = Path(__file__).resolve().parent / "logo.png"
         if not logo_path.exists():
@@ -318,6 +323,9 @@ class MainWindow(QMainWindow):
         self._corner_logo_visible = True
         self._logo_phase = "corner"
 
+        # ロゴ表示で右端条件が変わるので、ここでも再計算
+        QTimer.singleShot(0, self._force_layout_refresh)
+
     def _logo_center_pos(self, w: int, h: int):
         r = self.rect()
         x = (r.width() - w) // 2
@@ -332,6 +340,26 @@ class MainWindow(QMainWindow):
         x = r.width() - w - pad + dx
         y = pad + dy
         return x, y
+
+    def _force_layout_refresh(self) -> None:
+        """起動直後のレイアウト未確定を吸収し、幅依存UIを再計算する。"""
+        try:
+            cw = self.centralWidget()
+            if cw and cw.layout():
+                cw.layout().activate()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "flow") and self.flow:
+                self.flow.update()
+        except Exception:
+            pass
+
+        try:
+            self.resize(self.size())
+        except Exception:
+            pass
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
