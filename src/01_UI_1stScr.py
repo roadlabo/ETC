@@ -207,7 +207,7 @@ class SplitWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("01_対象2次メッシュ内の運行IDごと抽出ツール(第1スクリーニング)")
+        self.setWindowTitle("01_第1スクリーニング")
         self.resize(1600, 980)
         self.worker: SplitWorker | None = None
         self.started_at = 0.0
