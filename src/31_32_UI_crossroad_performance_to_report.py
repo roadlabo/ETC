@@ -1183,7 +1183,13 @@ class MainWindow(QMainWindow):
 def main() -> None:
     app = QApplication(sys.argv)
     w = MainWindow()
-    w.showMaximized()
+
+    # いきなり showMaximized() しない。まず show() して polish/サイズヒント/レイアウトを確定させる
+    w.show()
+
+    # イベントループに入ってから最大化（初回から幅が安定する）
+    QTimer.singleShot(0, w.showMaximized)
+
     sys.exit(app.exec())
 
 
