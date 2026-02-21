@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
 )
 
-APP_TITLE = "11[UI] 交差点サンプラー"
+APP_TITLE = "11 交差点ファイル作成ツール"
 FOLDER_CROSS = "11_交差点(Point)データ"
 DUPLICATE_MSG = "その交差点名は既に存在します。別名で保存してください。"
 
