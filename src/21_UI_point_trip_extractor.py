@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-APP_TITLE = "21_指定交差点を通過するトリップの抽出ツール（第２スクリーニング）"
+APP_TITLE = "21_第２スクリーニング（指定交差点を通過するトリップの抽出）"
 
 CORNER_LOGO_MARGIN = 18
 CORNER_LOGO_OFFSET_TOP = -4
@@ -413,7 +413,7 @@ class MainWindow(QMainWindow):
         rad_l.addWidget(self.spin_radius)
         rad_l.addWidget(QLabel("m（デフォルト30m）"))
 
-        self.btn_run = QPushButton("21 第2スクリーニング開始（分析スタート）")
+        self.btn_run = QPushButton("21_第2スクリーニング開始（分析スタート）")
         self.btn_run.setFont(top_font)
         self.btn_run.clicked.connect(self.run_screening)
 
