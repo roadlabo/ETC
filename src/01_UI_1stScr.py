@@ -9,14 +9,13 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from PyQt6.QtCore import QMargins, QPoint, QRect, QSize, Qt, QThread, QTimer, QPropertyAnimation, pyqtSignal
+from PyQt6.QtCore import QMargins, QPoint, QRect, QSize, QEasingCurve, Qt, QThread, QTimer, QPropertyAnimation, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
-    QGraphicsOpacityEffect,
     QGroupBox,
     QGridLayout,
     QHBoxLayout,
@@ -217,10 +216,13 @@ class MainWindow(QMainWindow):
         self.cards: dict[str, ZipCard] = {}
         self.current_zip = "-"
         self.current_sort_file = "-"
-        self.logo_label: QLabel | None = None
-        self.logo_container: QWidget | None = None
+        self.splash: QWidget | None = None
+        self.splash_logo: QLabel | None = None
+        self.splash_title: QLabel | None = None
+        self._pix_small: QPixmap | None = None
         self._logo_shadow_effect: QGraphicsDropShadowEffect | None = None
-        self._logo_anim: QPropertyAnimation | None = None
+        self._logo_intro_anim: QPropertyAnimation | None = None
+        self._splash_animating = False
         self._build_ui()
         self._set_style()
         self._init_logo_overlay()
@@ -353,45 +355,94 @@ class MainWindow(QMainWindow):
         pixmap = QPixmap(str(logo_path))
         if pixmap.isNull():
             return
-        scaled = pixmap.scaledToHeight(110, Qt.TransformationMode.SmoothTransformation)
+        pix_big = pixmap.scaledToHeight(220, Qt.TransformationMode.SmoothTransformation)
+        self._pix_small = pixmap.scaledToHeight(110, Qt.TransformationMode.SmoothTransformation)
 
-        self.logo_container = QWidget(self)
-        self.logo_container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.logo_container.setStyleSheet("background: transparent;")
-        self.logo_container.setFixedSize(scaled.size())
+        self.splash = QWidget(self)
+        self.splash.setObjectName("hudSplash")
+        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash.setStyleSheet("background: transparent;")
 
-        self.logo_label = QLabel(self.logo_container)
-        self.logo_label.setObjectName("hudLogo")
-        self.logo_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.logo_label.setStyleSheet("background: transparent;")
-        self.logo_label.setPixmap(scaled)
-        self.logo_label.resize(scaled.size())
+        self.splash_logo = QLabel(self.splash)
+        self.splash_logo.setObjectName("hudLogo")
+        self.splash_logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash_logo.setStyleSheet("background: transparent;")
+        self.splash_logo.setPixmap(pix_big)
+        self.splash_logo.adjustSize()
 
-        self._logo_shadow_effect = QGraphicsDropShadowEffect(self.logo_container)
+        self.splash_title = QLabel("ETCアナライザー", self.splash)
+        self.splash_title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash_title.setStyleSheet("color:#cfefff;background:transparent;")
+        self.splash_title.setFont(QFont("Meiryo UI", 34, QFont.Weight.Bold))
+
+        self._layout_splash(is_compact=False)
+
+        self._logo_shadow_effect = QGraphicsDropShadowEffect(self.splash)
         self._logo_shadow_effect.setBlurRadius(28)
         self._logo_shadow_effect.setOffset(0, 0)
         self._logo_shadow_effect.setColor(QColor(0, 255, 180, 140))
-        self.logo_container.setGraphicsEffect(self._logo_shadow_effect)
+        self.splash.setGraphicsEffect(self._logo_shadow_effect)
 
-        opacity = QGraphicsOpacityEffect(self.logo_label)
-        opacity.setOpacity(0.0)
-        self.logo_label.setGraphicsEffect(opacity)
-        self._logo_anim = QPropertyAnimation(opacity, b"opacity", self)
-        self._logo_anim.setDuration(650)
-        self._logo_anim.setStartValue(0.0)
-        self._logo_anim.setEndValue(1.0)
-        self._logo_anim.start()
+        self.splash.raise_()
+        self._start_intro_animation()
 
-        self.logo_container.raise_()
+    def _layout_splash(self, *, is_compact: bool) -> None:
+        if not self.splash or not self.splash_logo or not self.splash_title:
+            return
+        self.splash_logo.move(0, 0)
+        self.splash_title.adjustSize()
+        title_x = self.splash_logo.width() + 18
+        title_y = max(0, (self.splash_logo.height() - self.splash_title.sizeHint().height()) // 2)
+        self.splash_title.move(title_x, title_y)
+        width = self.splash_logo.width() + 18 + self.splash_title.sizeHint().width()
+        height = max(self.splash_logo.height(), self.splash_title.sizeHint().height())
+        self.splash.setFixedSize(width, height)
+
+    def _start_intro_animation(self) -> None:
+        if not self.splash:
+            return
+        self._splash_animating = True
+        start_rect = self._splash_rect(center=True)
+        end_rect = self._splash_rect(center=False)
+        self.splash.setGeometry(start_rect)
+
+        anim = QPropertyAnimation(self.splash, b"geometry", self)
+        anim.setDuration(1000)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setStartValue(start_rect)
+        anim.setEndValue(end_rect)
+        anim.finished.connect(self._finish_intro_animation)
+        self._logo_intro_anim = anim
+        anim.start()
+
+    def _finish_intro_animation(self) -> None:
+        self._splash_animating = False
+        if not self.splash_logo or not self.splash_title:
+            return
+        if self._pix_small is not None:
+            self.splash_logo.setPixmap(self._pix_small)
+            self.splash_logo.adjustSize()
+        self.splash_title.setFont(QFont("Meiryo UI", 16, QFont.Weight.Bold))
+        self.splash_title.setStyleSheet("color:rgba(207,239,255,210);background:transparent;")
+        self._layout_splash(is_compact=True)
         self._position_logo_overlay()
 
-    def _position_logo_overlay(self) -> None:
-        if not self.logo_container:
-            return
+    def _splash_rect(self, *, center: bool) -> QRect:
+        if not self.splash:
+            return QRect()
         margin = 18
-        x = self.width() - self.logo_container.width() - margin
-        y = margin
-        self.logo_container.move(max(0, x), max(0, y))
+        if center:
+            x = (self.width() - self.splash.width()) // 2
+            y = (self.height() - self.splash.height()) // 2
+        else:
+            x = self.width() - self.splash.width() - margin
+            y = margin
+        return QRect(max(0, x), max(0, y), self.splash.width(), self.splash.height())
+
+    def _position_logo_overlay(self) -> None:
+        if not self.splash or self._splash_animating:
+            return
+        self.splash.setGeometry(self._splash_rect(center=False))
 
     def _set_logo_glow(self, alpha: int, blur: int | None = None) -> None:
         if not self._logo_shadow_effect:
