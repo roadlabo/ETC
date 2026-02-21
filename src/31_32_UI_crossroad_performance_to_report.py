@@ -272,17 +272,17 @@ class MainWindow(QMainWindow):
 
         # --- 説明文（ネオン色／2行・改行は1回のみ） ---
         self.lbl_about = QLabel(
-            "本ソフトは、ETC2.0データから交差点の進入→退出方向別に通過台数を集計し、スムーズ通過時間との差から遅れ時間（方向別・総遅れ時間）を算出してExcelレポートを出力します。\n"
-            "必要データは「11_交差点(Point)データ」と「20_第２スクリーニング」です（1交差点=1レポート）。"
+            "本ソフトは、「11_交差点(Point)データ」と「20_第２スクリーニング」の様式1-2由来第2スクリーニング後データを用い、複数交差点を一括解析するETC2.0交差点分析ツールです。1トリップで指定交差点を複数回通過する場合は、トリップを分割して分析します。\n"
+            "トリップを進入方向→退出方向別に分類し通過トリップ数を集計するとともに、スムーズ通過時間との差からトリップ毎の遅れ時間を算出し、方向別および総遅れ時間（交差点負荷指標）を算出します。その結果を1交差点につき1レポートとしてExcel形式で出力します。"
         )
         self.lbl_about.setWordWrap(True)
-        self.lbl_about.setStyleSheet("color: #00ff88; font-weight: 600;")
+        self.lbl_about.setStyleSheet("color: #00ff99; font-weight: 600;")
         self.lbl_about.setFont(top_font)
         v.addWidget(self.lbl_about)
 
-        # --- 上段コントロール（①→②→③→④の順） ---
-        top = QHBoxLayout()
-        v.addLayout(top)
+        # --- 上段コントロール（1段目:①→② / 2段目:③→④） ---
+        top1 = QHBoxLayout()
+        v.addLayout(top1)
 
         # ①プロジェクト選択ボタン + プロジェクト名表示
         self.btn_project = QPushButton("① プロジェクト選択")
@@ -292,22 +292,20 @@ class MainWindow(QMainWindow):
         self.lbl_project = QLabel("プロジェクト名: (未選択)")
         self.lbl_project.setFont(top_font)
 
-        top.addWidget(self.btn_project)
-        top.addWidget(self.lbl_project)
+        top1.addWidget(self.btn_project)
+        top1.addWidget(self.lbl_project)
 
-        top.addWidget(QLabel("  →  "))
+        top1.addWidget(QLabel("  →  "))
 
         # ②曜日選択
-        weekday_container = QHBoxLayout()
-        weekday_container.setSpacing(10)
         lbl_wd = QLabel("② 曜日選択")
         lbl_wd.setFont(top_font)
-        weekday_container.addWidget(lbl_wd)
+        top1.addWidget(lbl_wd)
 
         self.chk_all = QCheckBox("ALL")
         self.chk_all.setFont(top_font)
         self.chk_all.stateChanged.connect(self._on_all_weekday_changed)
-        weekday_container.addWidget(self.chk_all)
+        top1.addWidget(self.chk_all)
 
         self.weekday_checks: dict[str, QCheckBox] = {}
         for wd in WEEKDAY_KANJI:
@@ -315,47 +313,39 @@ class MainWindow(QMainWindow):
             chk.setFont(top_font)
             chk.stateChanged.connect(self._on_single_weekday_changed)
             self.weekday_checks[wd] = chk
-            weekday_container.addWidget(chk)
+            top1.addWidget(chk)
 
         self._set_weekdays_from_all(True)
 
-        weekday_widget = QWidget()
-        weekday_widget.setLayout(weekday_container)
-        top.addWidget(weekday_widget)
+        top1.addStretch(1)
 
-        top.addWidget(QLabel("  →  "))
+        top2 = QHBoxLayout()
+        v.addLayout(top2)
 
         # ③半径（21と同一設定・デフォルト30m）
-        radius_row = QHBoxLayout()
-        radius_row.setSpacing(4)
-
         lbl_r1 = QLabel("③ 半径")
         lbl_r1.setFont(top_font)
-        radius_row.addWidget(lbl_r1)
+        top2.addWidget(lbl_r1)
 
         self.spin_radius = QSpinBox()
         self.spin_radius.setFont(top_font)
         self.spin_radius.setRange(5, 200)
         self.spin_radius.setValue(30)
-        radius_row.addWidget(self.spin_radius)
+        top2.addWidget(self.spin_radius)
 
-        lbl_r2 = QLabel("m 以内を通過するトリップを分析対象とします（21第2スクリーニング時の設定と同じ距離。デフォルト30m）。")
+        lbl_r2 = QLabel("m 以内を通過するトリップを分析対象とします（21第2スクリーニング時と同じ距離・既定30m）。")
         lbl_r2.setFont(top_font)
-        radius_row.addWidget(lbl_r2)
+        top2.addWidget(lbl_r2)
 
-        radius_widget = QWidget()
-        radius_widget.setLayout(radius_row)
-        top.addWidget(radius_widget)
-
-        top.addWidget(QLabel("  →  "))
+        top2.addWidget(QLabel("  →  "))
 
         # ④ 31/32 一括実行ボタン
         self.btn_run = QPushButton("④ 31→32一括実行【分析スタート】")
         self.btn_run.setFont(top_font)
         self.btn_run.clicked.connect(self.start_batch)
-        top.addWidget(self.btn_run)
+        top2.addWidget(self.btn_run)
 
-        top.addStretch(1)
+        top2.addStretch(1)
 
         self.lbl_summary = QLabel("")
         v.addWidget(self.lbl_summary)
