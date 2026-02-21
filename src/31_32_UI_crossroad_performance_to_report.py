@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-APP_TITLE = "31+32 交差点performance→report（一括実行）"
+APP_TITLE = "31交差点パフォーマンス分析　+　32レポート作成（一括実行）"
 FOLDER_CROSS = "11_交差点(Point)データ"
 FOLDER_S2 = "20_第２スクリーニング"
 FOLDER_31OUT = "31_交差点パフォーマンス"
