@@ -37,6 +37,14 @@ COL_NAME = 0
 COL_CSV = 1
 COL_JPG = 2
 
+GREEN_LABEL_STYLE = """
+QLabel {
+    color: #00d26a;
+    font-weight: bold;
+    font-size: 13px;
+}
+"""
+
 
 class Bridge(QObject):
     saved = pyqtSignal(str)
@@ -64,7 +72,7 @@ class Bridge(QObject):
         jpg_data_url = payload.get("jpg_data_url", "")
 
         if not base_name:
-            self.error.emit("出力ファイル名を入力してください。")
+            self.error.emit("交差点名を入力してください。")
             return
         if not self.window.cross_dir:
             self.error.emit("先にプロジェクトを選択してください。")
@@ -223,11 +231,12 @@ class MainWindow(QMainWindow):
         left_vbox.setContentsMargins(0, 0, 0, 0)
         left_vbox.setSpacing(6)
 
-        self.btn_project = QPushButton("① プロジェクト選択")
+        self.btn_project = QPushButton("選択")
         self.btn_project.clicked.connect(self.select_project)
-        self.btn_project.setFixedWidth(220)
 
-        self.lbl_project = QLabel("Project: (未選択)")
+        self.project_path_edit = QLineEdit()
+        self.project_path_edit.setReadOnly(True)
+        self.project_path_edit.setPlaceholderText("フォルダが選択されていません")
 
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["交差点名", "CSV", "JPG"])
@@ -259,33 +268,44 @@ class MainWindow(QMainWindow):
         header_panel = QWidget()
         header_vbox = QVBoxLayout(header_panel)
         header_vbox.setContentsMargins(0, 0, 0, 0)
-        header_vbox.setSpacing(2)
-        header_vbox.addWidget(self.btn_project, 0, Qt.AlignmentFlag.AlignLeft)
-        header_vbox.addWidget(self.lbl_project, 0, Qt.AlignmentFlag.AlignLeft)
+        header_vbox.setSpacing(6)
 
-        self.lbl_guide = QLabel("② 地図上を左クリック：中心点・方向追加　右クリック：やり直し")
-        self.lbl_guide.setWordWrap(True)
-        header_vbox.addWidget(self.lbl_guide, 0, Qt.AlignmentFlag.AlignLeft)
+        lbl_project_title = QLabel("①プロジェクトフォルダ選択")
+        lbl_project_title.setStyleSheet(GREEN_LABEL_STYLE)
+        header_vbox.addWidget(lbl_project_title)
 
-        row_out = QHBoxLayout()
-        row_out.addWidget(QLabel("③ 出力ファイル名"), 0)
+        row_project = QHBoxLayout()
+        row_project.addWidget(self.btn_project)
+        row_project.addWidget(self.project_path_edit, 1)
+        header_vbox.addLayout(row_project)
 
-        self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("例: crossroad001")
-        row_out.addWidget(self.name_edit, stretch=1)
-        header_vbox.addLayout(row_out, stretch=0)
-
-        self.btn_save = QPushButton("保存")
-        self.btn_save.clicked.connect(self.save_clicked)
+        row_map = QHBoxLayout()
+        self.lbl_guide = QLabel("②地図上を左クリック：中心点指定・方向追加　右クリック：やり直し")
+        self.lbl_guide.setStyleSheet(GREEN_LABEL_STYLE)
+        row_map.addWidget(self.lbl_guide)
+        row_map.addStretch(1)
 
         self.btn_clear = QPushButton("クリア")
         self.btn_clear.clicked.connect(self.clear_clicked)
+        row_map.addWidget(self.btn_clear)
+        header_vbox.addLayout(row_map)
 
-        row_btns = QHBoxLayout()
-        row_btns.addWidget(self.btn_save)
-        row_btns.addWidget(self.btn_clear)
-        row_btns.addStretch(1)
-        header_vbox.addLayout(row_btns, stretch=0)
+        lbl_name = QLabel("③交差点名")
+        lbl_name.setStyleSheet(GREEN_LABEL_STYLE)
+        header_vbox.addWidget(lbl_name)
+
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("例：01○○交差点")
+        header_vbox.addWidget(self.name_edit)
+
+        self.btn_save = QPushButton("交差点ファイル保存")
+        self.btn_save.clicked.connect(self.save_clicked)
+        header_vbox.addWidget(self.btn_save)
+
+        lbl_next = QLabel("④次の交差点を作成してください。または、左の一覧をクリックして、編集・リネーム・削除を行って下さい。")
+        lbl_next.setStyleSheet(GREEN_LABEL_STYLE)
+        lbl_next.setWordWrap(True)
+        header_vbox.addWidget(lbl_next)
 
         header_container = QWidget()
         header_hbox = QHBoxLayout(header_container)
@@ -334,7 +354,7 @@ class MainWindow(QMainWindow):
         self.cross_dir = self.project_dir / FOLDER_CROSS
         self.cross_dir.mkdir(parents=True, exist_ok=True)
 
-        self.lbl_project.setText(f"Project: {self.project_dir}")
+        self.project_path_edit.setText(str(self.project_dir))
         self.load_html()
         self.scan_crossroads()
 
@@ -380,7 +400,7 @@ class MainWindow(QMainWindow):
 
         base_name = self.name_edit.text().strip()
         if not base_name:
-            self._show_error("出力ファイル名を入力してください。")
+            self._show_error("交差点名を入力してください。")
             return
 
         overwrite = self.editing_name is not None and base_name == self.editing_name
