@@ -262,15 +262,15 @@ class MainWindow(QMainWindow):
         out_row = QHBoxLayout(); out_row.addWidget(self.output_dir); bo = QPushButton("..."); bo.clicked.connect(lambda: self._pick_dir(self.output_dir)); out_row.addWidget(bo)
 
         row = 0
-        self._add_form_row(form_grid, row, "INPUT_DIR", self._wrap(in_row), "様式1-2出力の OUT1-2 フォルダを指定（中に日別ZIP / data.csv）。")
+        self._add_form_row(form_grid, row, "INPUT_DIR", self._wrap(in_row), "様式1-2出力の OUT1-2 フォルダを指定（中に日別ZIP / data.csv）")
         row += 1
-        self._add_form_row(form_grid, row, "OUTPUT_DIR", self._wrap(out_row), "第1スクリーニング保存先（後続分析で共通利用推奨）。")
+        self._add_form_row(form_grid, row, "OUTPUT_DIR", self._wrap(out_row), "第1スクリーニング保存先　後続分析で共通利用するのでプロジェクトフォルダ外を推奨")
         row += 1
-        self._add_form_row(form_grid, row, "TERM", self.term_name, "出力ファイル名の先頭識別子（例 R7_2）。")
+        self._add_form_row(form_grid, row, "TERM", self.term_name, "出力ファイル名の先頭識別子（例 R7_2）")
         row += 1
-        self._add_form_row(form_grid, row, "ZIP_KEYS", self.zip_keys, "対象2次メッシュ番号（カンマ区切り）。")
+        self._add_form_row(form_grid, row, "ZIP_KEYS", self.zip_keys, "2次メッシュ番号を記入　複数ある場合はカンマ","で区切って下さい　詳細は2次メッシュマップ参照")
         row += 1
-        self._add_form_row(form_grid, row, "CHUNK_ROWS", self.chunk_rows, "並べ替え時に一度に読む行数（メモリ不足時は下げる）。")
+        self._add_form_row(form_grid, row, "CHUNK_ROWS", self.chunk_rows, "並べ替え時に一度に読む行数　メモリ不足時は下げる")
 
         form_grid.setColumnStretch(0, 0)
         form_grid.setColumnStretch(1, 3)
