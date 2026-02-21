@@ -141,11 +141,13 @@ class MainWindow(QMainWindow):
         self._waiting_lock_dialog: QDialog | None = None
         self._waiting_lock_timer: QTimer | None = None
         self._waiting_lock_path: Path | None = None
+        self.splash_logo = None
+        self.corner_logo = None
+        self._logo_phase = "none"
 
         self._build_ui()
         self._corner_logo_visible = False
         self._pix_small = None
-        self._logo_phase = ""
         self.LOGO_CORNER_PAD = 8
         self.LOGO_CORNER_DX = -10
         self.LOGO_CORNER_DY = -4
@@ -169,19 +171,19 @@ class MainWindow(QMainWindow):
         pix_big = pixmap.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
         self._pix_small = pixmap.scaledToHeight(110, Qt.TransformationMode.SmoothTransformation)
 
-        self.splash = QLabel(self)
-        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.splash.setStyleSheet("background: transparent;")
-        self.splash.setPixmap(pix_big)
-        self.splash.adjustSize()
+        self.splash_logo = QLabel(self)
+        self.splash_logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash_logo.setStyleSheet("background: transparent;")
+        self.splash_logo.setPixmap(pix_big)
+        self.splash_logo.adjustSize()
 
-        x, y = self._logo_center_pos(self.splash.width(), self.splash.height())
-        self.splash.move(x, y)
+        x, y = self._logo_center_pos(self.splash_logo.width(), self.splash_logo.height())
+        self.splash_logo.move(x, y)
         self._logo_phase = "center"
-        self.splash.show()
+        self.splash_logo.show()
 
-        effect = QGraphicsOpacityEffect(self.splash)
-        self.splash.setGraphicsEffect(effect)
+        effect = QGraphicsOpacityEffect(self.splash_logo)
+        self.splash_logo.setGraphicsEffect(effect)
 
         fade_in = QPropertyAnimation(effect, b"opacity", self)
         fade_in.setDuration(500)
@@ -195,7 +197,9 @@ class MainWindow(QMainWindow):
             fade_out.setEndValue(0.0)
 
             def show_corner_logo():
-                self.splash.deleteLater()
+                if self.splash_logo:
+                    self.splash_logo.deleteLater()
+                    self.splash_logo = None
                 self._show_corner_logo()
 
             fade_out.finished.connect(show_corner_logo)
@@ -208,15 +212,15 @@ class MainWindow(QMainWindow):
         if not self._pix_small:
             return
 
-        self.splash = QLabel(self)
-        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.splash.setStyleSheet("background: transparent;")
-        self.splash.setPixmap(self._pix_small)
-        self.splash.adjustSize()
+        self.corner_logo = QLabel(self)
+        self.corner_logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.corner_logo.setStyleSheet("background: transparent;")
+        self.corner_logo.setPixmap(self._pix_small)
+        self.corner_logo.adjustSize()
 
-        x, y = self._logo_corner_pos(self.splash.width(), self.splash.height())
-        self.splash.move(x, y)
-        self.splash.show()
+        x, y = self._logo_corner_pos(self.corner_logo.width(), self.corner_logo.height())
+        self.corner_logo.move(x, y)
+        self.corner_logo.show()
 
         self._corner_logo_visible = True
         self._logo_phase = "corner"
@@ -244,13 +248,17 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        if self.splash and getattr(self, "_logo_phase", "") == "center":
-            x, y = self._logo_center_pos(self.splash.width(), self.splash.height())
-            self.splash.move(x, y)
+        phase = getattr(self, "_logo_phase", "")
 
-        if self.splash and getattr(self, "_logo_phase", "") == "corner" and getattr(self, "_corner_logo_visible", False):
-            x, y = self._logo_corner_pos(self.splash.width(), self.splash.height())
-            self.splash.move(x, y)
+        splash = getattr(self, "splash_logo", None)
+        if phase == "center" and splash and splash.isVisible():
+            w, h = splash.width(), splash.height()
+            splash.move(self._logo_center_pos(w, h))
+
+        corner = getattr(self, "corner_logo", None)
+        if phase == "corner" and corner and corner.isVisible():
+            w, h = corner.width(), corner.height()
+            corner.move(self._logo_corner_pos(w, h))
 
     def _build_ui(self) -> None:
         root = QWidget()
