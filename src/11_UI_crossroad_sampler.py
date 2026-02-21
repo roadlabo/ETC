@@ -72,7 +72,10 @@ class Bridge(QObject):
             return
 
         try:
-            csv_path.write_text(str(csv_text), encoding="utf-8")
+            csv_norm = str(csv_text).replace("\r\n", "\n").replace("\r", "\n")
+            csv_norm = csv_norm.rstrip("\n") + "\n"
+            with open(csv_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(csv_norm)
             image_b64 = str(jpg_data_url).split(",", 1)[1]
             jpg_path.write_bytes(base64.b64decode(image_b64))
         except Exception as exc:
@@ -320,7 +323,7 @@ class MainWindow(QMainWindow):
             self._show_error("リネーム対象を選択してください。")
             return
 
-        new_name, ok = QInputDialog.getText(self, "リネーム", "新しい交差点名")
+        new_name, ok = QInputDialog.getText(self, "リネーム", "新しい交差点名", text=old_name)
         if not ok:
             return
         new_name = new_name.strip()
