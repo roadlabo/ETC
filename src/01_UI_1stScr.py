@@ -220,6 +220,10 @@ class MainWindow(QMainWindow):
         self.splash: QLabel | None = None
         self._pix_small: QPixmap | None = None
         self._corner_logo_visible = False
+        self._logo_phase = ""
+        self.LOGO_CORNER_PAD = 8
+        self.LOGO_CORNER_DX = -10
+        self.LOGO_CORNER_DY = -4
         self._logo_shadow_effect: QGraphicsDropShadowEffect | None = None
         self._build_ui()
         self._set_style()
@@ -366,9 +370,9 @@ class MainWindow(QMainWindow):
         self.splash.adjustSize()
 
         # 中央配置
-        x = (self.width() - self.splash.width()) // 2
-        y = (self.height() - self.splash.height()) // 2
+        x, y = self._logo_center_pos(self.splash.width(), self.splash.height())
         self.splash.move(x, y)
+        self._logo_phase = "center"
         self.splash.show()
 
         # --- フェードイン ---
@@ -408,12 +412,26 @@ class MainWindow(QMainWindow):
         self.splash.setPixmap(self._pix_small)
         self.splash.adjustSize()
 
-        margin = 18
-        x = self.width() - self.splash.width() - margin
-        y = margin
+        x, y = self._logo_corner_pos(self.splash.width(), self.splash.height())
         self.splash.move(x, y)
         self.splash.show()
         self._corner_logo_visible = True
+        self._logo_phase = "corner"
+
+    def _logo_center_pos(self, w: int, h: int):
+        r = self.rect()
+        x = (r.width() - w) // 2
+        y = (r.height() - h) // 2
+        return x, y
+
+    def _logo_corner_pos(self, w: int, h: int):
+        r = self.rect()
+        pad = getattr(self, "LOGO_CORNER_PAD", 8)
+        dx = getattr(self, "LOGO_CORNER_DX", -10)
+        dy = getattr(self, "LOGO_CORNER_DY", -4)
+        x = r.width() - w - pad + dx
+        y = pad + dy
+        return x, y
 
     def _set_logo_glow(self, alpha: int, blur: int | None = None) -> None:
         if not self._logo_shadow_effect:
@@ -477,10 +495,12 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         self._refresh_about_text()
 
-        if self.splash and self._corner_logo_visible:
-            margin = 18
-            x = self.width() - self.splash.width() - margin
-            y = margin
+        if self.splash and getattr(self, "_logo_phase", "") == "center":
+            x, y = self._logo_center_pos(self.splash.width(), self.splash.height())
+            self.splash.move(x, y)
+
+        if self.splash and getattr(self, "_logo_phase", "") == "corner" and self._corner_logo_visible:
+            x, y = self._logo_corner_pos(self.splash.width(), self.splash.height())
             self.splash.move(x, y)
 
     def _refresh_about_text(self) -> None:
