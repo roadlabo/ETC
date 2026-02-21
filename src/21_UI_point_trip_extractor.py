@@ -709,7 +709,7 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     w = MainWindow()
-    w.showFullScreen()
+    w.showMaximized()
     sys.exit(app.exec())
 
 
