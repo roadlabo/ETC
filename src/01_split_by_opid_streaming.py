@@ -10,7 +10,7 @@ import os
 import sys
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -35,8 +35,8 @@ class SplitConfig:
     input_dir: str
     output_dir: str
     term_name: str
-    inner_csv: str
-    zip_digit_keys: list[str]
+    inner_csv: str = INNER_CSV
+    zip_digit_keys: list[str] = field(default_factory=lambda: ZIP_DIGIT_KEYS.copy())
 
     encoding: str = ENCODING
     delim: str = DELIM

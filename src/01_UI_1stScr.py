@@ -10,10 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PyQt6.QtCore import QMargins, QPoint, QRect, QSize, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PyQt6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QFileDialog,
     QFrame,
     QGroupBox,
@@ -228,50 +227,39 @@ class MainWindow(QMainWindow):
 
         about_box = QGroupBox("本ソフトについて")
         about_layout = QVBoxLayout(about_box)
-        about_text = QLabel(
-            "本ソフトは、ETC2.0プローブデータ（様式1-2出力）から、\n"
-            "指定した2次メッシュに該当するデータを抽出し、\n"
-            "運行ID（OPID）ごとにCSVファイルへ分割します。\n"
-            "さらに、各CSVの内容を時系列順に並べ替えます。\n"
-            "これにより、必要な運行データのみを整理・抽出でき、\n"
-            "後続の分析を効率的に実施することができます。"
+        self.about_full_text = (
+            "本ソフトは、ETC2.0プローブデータ（様式1-2出力）から指定した2次メッシュに該当するデータを抽出し、"
+            "運行ID（OPID）ごとにCSVファイルへ分割したうえで、各CSVの内容を時系列順に並べ替えます。"
+            "これにより必要な運行データのみを整理・抽出し、後続の分析を効率的に実施できます。"
         )
-        about_text.setWordWrap(True)
-        about_layout.addWidget(about_text)
+        self.about_text = QLabel()
+        self.about_text.setWordWrap(False)
+        self.about_text.setMinimumHeight(24)
+        self.about_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.about_text.setToolTip(self.about_full_text)
+        self._refresh_about_text()
+        about_layout.addWidget(self.about_text)
         outer.addWidget(about_box)
 
         form_grid = QGridLayout()
         form_grid.setHorizontalSpacing(16)
-        form_grid.setVerticalSpacing(8)
+        form_grid.setVerticalSpacing(4)
         self.input_dir = QLineEdit(); self.output_dir = QLineEdit(); self.term_name = QLineEdit("R7_2")
-        self.inner_csv = QLineEdit("data.csv"); self.zip_keys = QLineEdit("523357,523347,523450,523440")
-        self.encoding = QLineEdit("utf-8"); self.delim = QLineEdit(",")
-        self.do_sort = QCheckBox("DO_FINAL_SORT"); self.do_sort.setChecked(True)
-        self.timestamp_col = QSpinBox(); self.timestamp_col.setRange(0, 100); self.timestamp_col.setValue(6)
+        self.zip_keys = QLineEdit("523357,523347,523450,523440")
         self.chunk_rows = QSpinBox(); self.chunk_rows.setRange(1000, 5_000_000); self.chunk_rows.setValue(200000)
         in_row = QHBoxLayout(); in_row.addWidget(self.input_dir); bi = QPushButton("..."); bi.clicked.connect(lambda: self._pick_dir(self.input_dir)); in_row.addWidget(bi)
         out_row = QHBoxLayout(); out_row.addWidget(self.output_dir); bo = QPushButton("..."); bo.clicked.connect(lambda: self._pick_dir(self.output_dir)); out_row.addWidget(bo)
 
         row = 0
-        self._add_form_row(form_grid, row, "INPUT_DIR", self._wrap(in_row), "様式1-2出力の OUT1-2 フォルダを指定します。日付ごとのZIPが格納されています。")
+        self._add_form_row(form_grid, row, "INPUT_DIR", self._wrap(in_row), "様式1-2出力の OUT1-2 フォルダを指定（中に日別ZIP / data.csv）。")
         row += 1
-        self._add_form_row(form_grid, row, "OUTPUT_DIR", self._wrap(out_row), "第1スクリーニング後の保存先です。後続分析のため、共通保存フォルダの使用を推奨します。")
+        self._add_form_row(form_grid, row, "OUTPUT_DIR", self._wrap(out_row), "第1スクリーニング保存先（後続分析で共通利用推奨）。")
         row += 1
-        self._add_form_row(form_grid, row, "TERM", self.term_name, "出力ファイル名の先頭に付ける識別文字列です。例：R7_2 など、年月が分かるように設定してください。")
+        self._add_form_row(form_grid, row, "TERM", self.term_name, "出力ファイル名の先頭識別子（例 R7_2）。")
         row += 1
-        self._add_form_row(form_grid, row, "INNER_CSV", self.inner_csv, "ZIP内の対象CSV名です。通常は data.csv 固定で変更不要です。")
+        self._add_form_row(form_grid, row, "ZIP_KEYS", self.zip_keys, "対象2次メッシュ番号（カンマ区切り）。")
         row += 1
-        self._add_form_row(form_grid, row, "ZIP_KEYS", self.zip_keys, "抽出対象とする2次メッシュ番号をカンマ区切りで入力します。付属のメッシュ図を参照してください。")
-        row += 1
-        self._add_form_row(form_grid, row, "ENCODING", self.encoding, "文字コード設定です。通常は utf-8 のまま変更不要です。")
-        row += 1
-        self._add_form_row(form_grid, row, "DELIM", self.delim, "CSVの区切り文字です。通常は ,（カンマ）で変更不要です。")
-        row += 1
-        self._add_form_row(form_grid, row, "DO_SORT", self.do_sort, "抽出後に時系列ソートを実行する設定です。通常はONのまま使用してください。")
-        row += 1
-        self._add_form_row(form_grid, row, "TIMESTAMP_COL", self.timestamp_col, "時刻が記載されている列番号（0始まり）です。通常は 6 で変更不要です。")
-        row += 1
-        self._add_form_row(form_grid, row, "CHUNK_ROWS", self.chunk_rows, "並べ替え時に一度にメモリへ読み込む行数です。メモリ不足時のみ値を下げてください。")
+        self._add_form_row(form_grid, row, "CHUNK_ROWS", self.chunk_rows, "並べ替え時に一度に読む行数（メモリ不足時は下げる）。")
 
         form_grid.setColumnStretch(0, 0)
         form_grid.setColumnStretch(1, 3)
@@ -331,7 +319,7 @@ class MainWindow(QMainWindow):
         form.addWidget(QLabel(label), row, 0)
         form.addWidget(field, row, 1)
         help_label = QLabel(help_text)
-        help_label.setWordWrap(True)
+        help_label.setWordWrap(False)
         help_label.setObjectName("fieldHelp")
         help_label.setStyleSheet("color:#6bbf8a;")
         help_label.setFont(QFont("Consolas", 9))
@@ -379,11 +367,19 @@ class MainWindow(QMainWindow):
     def _config(self) -> SplitConfig:
         return SplitConfig(
             input_dir=self.input_dir.text().strip(), output_dir=self.output_dir.text().strip(),
-            term_name=self.term_name.text().strip(), inner_csv=self.inner_csv.text().strip() or "data.csv",
+            term_name=self.term_name.text().strip(), inner_csv="data.csv",
             zip_digit_keys=[x.strip() for x in self.zip_keys.text().split(",") if x.strip()],
-            encoding=self.encoding.text().strip() or "utf-8", delim=self.delim.text() or ",",
-            do_final_sort=self.do_sort.isChecked(), timestamp_col=self.timestamp_col.value(), chunk_rows=self.chunk_rows.value(),
+            encoding="utf-8", delim=",",
+            do_final_sort=True, timestamp_col=6, chunk_rows=self.chunk_rows.value(),
         )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._refresh_about_text()
+
+    def _refresh_about_text(self) -> None:
+        fm = QFontMetrics(self.about_text.font())
+        self.about_text.setText(fm.elidedText(self.about_full_text, Qt.TextElideMode.ElideRight, self.about_text.width()))
 
     def _reset_zip_cards(self, zip_list: list[str]) -> None:
         while self.zip_flow.count():
