@@ -476,6 +476,8 @@ class MainWindow(QMainWindow):
 
         self.chk_all = QCheckBox("ALL")
         self.chk_all.setFont(top_font)
+        self.chk_all.setMinimumWidth(50)
+        self.chk_all.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.chk_all.stateChanged.connect(self._on_all_weekday_changed)
         wd_l.addWidget(self.chk_all)
 
@@ -483,6 +485,7 @@ class MainWindow(QMainWindow):
         for wd in WEEKDAY_KANJI:
             chk = QCheckBox(wd)
             chk.setFont(top_font)
+            chk.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             chk.stateChanged.connect(self._on_single_weekday_changed)
             self.weekday_checks[wd] = chk
             wd_l.addWidget(chk)
