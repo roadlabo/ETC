@@ -437,7 +437,7 @@ class MainWindow(QMainWindow):
         rad_l.setSpacing(2)
         rad_l.addWidget(QLabel("半径"))
         rad_l.addWidget(self.spin_radius)
-        rad_l.addWidget(QLabel("m（21第2スクリーニングと同一・既定30m）"))
+        rad_l.addWidget(QLabel("m（第2スクリーニング時と同一として下さい・既定30m）"))
 
         self.btn_run = QPushButton("31→32 一括実行（分析スタート）")
         self.btn_run.setFont(top_font)
@@ -451,7 +451,7 @@ class MainWindow(QMainWindow):
         box1 = StepBox("STEP 1  プロジェクトフォルダの選択", proj_w)
         box1.setFixedWidth(720)
         box2 = StepBox("STEP 2  分析対象とする曜日を選択", wd_w)
-        box3 = StepBox("STEP 3  交差点通過判定半径（この半径以内を通過でHIT）", rad_w)
+        box3 = StepBox("STEP 3  交差点通過判定半径（この半径以内を通過したらHIT）", rad_w)
         box3.setFixedWidth(360)
         box4 = StepBox("STEP 4  実行", run_w)
         box4.setFixedWidth(260)
