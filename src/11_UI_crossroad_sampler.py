@@ -272,7 +272,7 @@ class MainWindow(QMainWindow):
 
         # --- ①プロジェクトフォルダ選択（横並び・改行なし） ---
         row_project = QHBoxLayout()
-        lbl_project_title = QLabel("①プロジェクトフォルダ選択")
+        lbl_project_title = QLabel("①プロジェクトフォルダ選択（この中に「11_交差点(Point)データ」フォルダを作成します）")
         lbl_project_title.setStyleSheet(GREEN_LABEL_STYLE)
         row_project.addWidget(lbl_project_title)
 
