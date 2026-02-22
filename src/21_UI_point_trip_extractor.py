@@ -223,21 +223,39 @@ class DistHistogram(QWidget):
 
     def paintEvent(self, _event):
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor("#09120f"))
-        w = max(1, self.width() - 8)
-        h = max(1, self.height() - 16)
+        r = self.rect()
+        p.fillRect(r, QColor("#09120f"))
+        label_h = 14
+        chart = r.adjusted(4, 4, -4, -(4 + label_h))
+        w = max(1, chart.width())
+        h = max(1, chart.height())
         maxv = max(self.counts) if self.counts else 1
         bw = w / self.bins
         p.setPen(QPen(QColor("#1d5a3a"), 1))
         for i in range(self.bins + 1):
-            x = int(4 + i * bw)
-            p.drawLine(x, 4, x, h + 4)
+            x = int(chart.left() + i * bw)
+            p.drawLine(x, chart.top(), x, chart.bottom())
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor("#56d27f"))
         for i, c in enumerate(self.counts):
             bh = 0 if maxv == 0 else int((c / maxv) * (h - 2))
-            x = int(5 + i * bw)
-            p.drawRect(x, h + 4 - bh, max(2, int(bw) - 2), bh)
+            x = int(chart.left() + 1 + i * bw)
+            p.drawRect(x, chart.bottom() - bh, max(2, int(bw) - 2), bh)
+
+        p.setPen(QColor("#7cffc6"))
+        f = p.font()
+        f.setPointSize(max(8, f.pointSize() - 1))
+        p.setFont(f)
+        p.drawText(
+            QRect(r.left() + 6, r.bottom() - label_h, 40, label_h),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            "0",
+        )
+        p.drawText(
+            QRect(r.right() - 60, r.bottom() - label_h, 54, label_h),
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            str(int(self.radius)),
+        )
 
 
 class CrossCard(QFrame):
@@ -250,12 +268,13 @@ class CrossCard(QFrame):
         self.setFixedSize(320, 220)
         v = QVBoxLayout(self)
         self.title = QLabel(name)
-        self.flags = QLabel("交差点JPG/CSV: - / -")
-        self.flags2 = QLabel("第2 folder/CSV: - / -")
+        self.sel_label = QLabel("第2スクリーニング：対象")
+        self.flags = QLabel("交差点定義ファイルJPG／CSV: - / -")
+        self.flags2 = QLabel("20_第２スクリーニング_フォルダ／抽出済みCSV: - / -")
         self.hit = QLabel("HITトリップ数: 0")
         self.hist_title = QLabel("中心最近接距離(m) ヒストグラム")
         self.hist = DistHistogram(radius)
-        for w in [self.title, self.flags, self.flags2, self.hit, self.hist_title, self.hist]:
+        for w in [self.title, self.sel_label, self.flags, self.flags2, self.hit, self.hist_title, self.hist]:
             v.addWidget(w)
         self.apply_state("待機")
 
@@ -264,8 +283,8 @@ class CrossCard(QFrame):
         self.apply_state(self.state)
 
     def set_flags(self, *, has_csv: bool, has_jpg: bool, has_s2_dir: bool, has_s2_csv: bool) -> None:
-        self.flags.setText(f"交差点JPG/CSV: {'有' if has_jpg else '無'} / {'有' if has_csv else '無'}")
-        self.flags2.setText(f"第2 folder/CSV: {'有' if has_s2_dir else '無'} / {'有' if has_s2_csv else '無'}")
+        self.flags.setText(f"交差点定義ファイルJPG／CSV: {'有' if has_jpg else '無'} / {'有' if has_csv else '無'}")
+        self.flags2.setText(f"20_第２スクリーニング_フォルダ／抽出済みCSV: {'有' if has_s2_dir else '無'} / {'有' if has_s2_csv else '無'}")
 
     def set_hit_count(self, count: int) -> None:
         self.hit.setText(f"HITトリップ数: {count:,}")
@@ -275,17 +294,29 @@ class CrossCard(QFrame):
         self.apply_state(state)
 
     def apply_state(self, state: str) -> None:
-        sel = " ON" if self.selected else " OFF"
+        self.sel_label.setText("第2スクリーニング：対象" if self.selected else "第2スクリーニング：非対象")
         if state == "処理中":
-            style = "border:2px solid #9cffbe;background:#0f1e17;color:#b5ffd0;"
+            if self.selected:
+                style = "border:2px solid #9cffbe;background:#0f1e17;color:#b5ffd0;"
+            else:
+                style = "border:2px solid #0c5a41;background:#040806;color:#2f7a5b;"
         elif state == "完了":
-            style = "border:2px solid #68d088;background:#0c1712;color:#a2f0be;"
+            if self.selected:
+                style = "border:2px solid #68d088;background:#0c1712;color:#a2f0be;"
+            else:
+                style = "border:2px solid #0c5a41;background:#040806;color:#2f7a5b;"
         elif state == "エラー":
-            style = "border:2px solid #d96f6f;background:#261010;color:#ffaaaa;"
+            if self.selected:
+                style = "border:2px solid #d96f6f;background:#261010;color:#ffaaaa;"
+            else:
+                style = "border:2px solid #5a2b2b;background:#140808;color:#8c5a5a;"
         else:
-            style = "border:1px solid #2a6b45;background:#0a120f;color:#79d58f;"
+            if self.selected:
+                style = "border:1px solid #1ee6a8;background:#07120e;color:#7cffc6;"
+            else:
+                style = "border:1px solid #0c5a41;background:#040806;color:#2f7a5b;"
         self.setStyleSheet(f"QFrame#crossCard{{{style}}}")
-        self.title.setText(f"{self.name} [{state}{sel}]")
+        self.title.setText(f"{self.name} [{state}]")
 
 
 class MainWindow(QMainWindow):
@@ -347,9 +378,19 @@ class MainWindow(QMainWindow):
         rad_w = QWidget(); rad_l = QHBoxLayout(rad_w); rad_l.setContentsMargins(0, 0, 0, 0)
         rad_l.addWidget(QLabel("半径")); rad_l.addWidget(self.spin_radius); rad_l.addWidget(QLabel("m"))
         self.btn_run = QPushButton("分析スタート"); self.btn_run.clicked.connect(self.run_screening)
-        b1 = StepBox("STEP 1: プロジェクト", proj_w); b2 = StepBox("STEP 2: 第1スクリーニング", in_w)
-        b3 = StepBox("STEP 3: 半径", rad_w); b4 = StepBox("STEP 4: 実行", self.btn_run)
+        b1 = StepBox("STEP1 プロジェクトフォルダの選択", proj_w)
+        b2 = StepBox("STEP2 第1スクリーニングデータの選択", in_w)
+        b3 = StepBox("STEP3 交差点通過判定半径（この半径以内を通過したトリップを抽出します）", rad_w)
+        b4 = StepBox("STEP4 第2スクリーニング実行", self.btn_run)
         flow_grid.addWidget(b1, 0, 0); flow_grid.addWidget(b2, 0, 1); flow_grid.addWidget(b3, 0, 2); flow_grid.addWidget(b4, 0, 3)
+        self._flow_spacer = QWidget()
+        self._flow_spacer.setFixedWidth(380)
+        flow_grid.addWidget(self._flow_spacer, 0, 4)
+        flow_grid.setColumnStretch(0, 1)
+        flow_grid.setColumnStretch(1, 0)
+        flow_grid.setColumnStretch(2, 0)
+        flow_grid.setColumnStretch(3, 0)
+        flow_grid.setColumnStretch(4, 0)
         self.flow.set_steps([b1, b2, b3, b4]); v.addWidget(self.flow)
 
         mid = QHBoxLayout(); v.addLayout(mid, stretch=5)
@@ -420,8 +461,7 @@ class MainWindow(QMainWindow):
             self.time_eta_big.setText("残り --:--:--")
 
     def _tick_animation(self) -> None:
-        if self._telemetry_running:
-            self.sweep.tick()
+        self.sweep.tick()
         self._update_time_boxes()
 
     def _on_radius_changed(self, radius: int) -> None:
