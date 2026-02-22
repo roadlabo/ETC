@@ -269,11 +269,12 @@ def trip_matches_point(
     thresh_m: float,
     min_hits: int,
     target_weekdays: set[int],
-) -> bool:
-    """Return True if the segment [start, end) passes near the crossroad point."""
+) -> tuple[bool, float]:
+    """Return match flag and minimum distance for segment [start, end)."""
 
     point_hits = 0
     segment_hits = 0
+    min_dist = float("inf")
 
     coords: list[Tuple[float, float]] = []
 
@@ -293,13 +294,15 @@ def trip_matches_point(
 
         coords.append((lon, lat))
         distance = haversine_distance_m(lat, lon, cross_lat_deg, cross_lon_deg)
+        if distance < min_dist:
+            min_dist = distance
         if distance <= thresh_m:
             point_hits += 1
             if point_hits + segment_hits >= min_hits:
-                return True
+                return True, min_dist
 
     if point_hits > 0 or len(coords) < 2:
-        return point_hits + segment_hits >= min_hits
+        return (point_hits + segment_hits >= min_hits), min_dist
 
     # Segment-based check only when no point hit and at least two points exist.
     lon0 = cross_lon_deg
@@ -314,13 +317,15 @@ def trip_matches_point(
                 continue
 
         dist = _segment_distance_to_origin((last_x, last_y), (x, y))
+        if dist < min_dist:
+            min_dist = dist
         if dist <= thresh_m:
             segment_hits += 1
             if point_hits + segment_hits >= min_hits:
-                return True
+                return True, min_dist
         last_x, last_y = x, y
 
-    return point_hits + segment_hits >= min_hits
+    return (point_hits + segment_hits >= min_hits), min_dist
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +495,7 @@ def process_file_for_crossroad(
     saved_count = 0
 
     for seg_idx, (start, end) in enumerate(segments, start=1):
-        if not trip_matches_point(
+        ok, _min_dist = trip_matches_point(
             rows,
             start,
             end,
@@ -499,7 +504,8 @@ def process_file_for_crossroad(
             thresh_m,
             min_hits,
             TARGET_WEEKDAYS,
-        ):
+        )
+        if not ok:
             continue
 
         matched_count += 1
@@ -562,7 +568,7 @@ def process_file_for_all_crossroads(
 
     for seg_idx, (start, end) in enumerate(segments, start=1):
         for cp in crossroads:
-            if not trip_matches_point(
+            ok, min_dist = trip_matches_point(
                 rows,
                 start,
                 end,
@@ -571,10 +577,13 @@ def process_file_for_all_crossroads(
                 thresh_m,
                 min_hits,
                 TARGET_WEEKDAYS,
-            ):
+            )
+            if not ok:
                 continue
 
             matched_count += 1
+            if min_dist != float("inf"):
+                print(f"中心最近接距離(m): {cp.name} {min_dist:.1f}", flush=True)
             hits_per_cross[cp.name] = hits_per_cross.get(cp.name, 0) + 1
 
             if dry_run:
@@ -743,9 +752,6 @@ def run_second_screening(
     last_len = 0
 
     for idx, trip_path in enumerate(trip_files, 1):
-        if idx == 1:
-            for cp in crossroads:
-                print(f"[INFO] 交差点開始: {cp.name}", flush=True)
         cand, matched = process_file_for_all_crossroads(
             trip_path,
             crossroads,

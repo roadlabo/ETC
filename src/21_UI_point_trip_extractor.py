@@ -43,7 +43,7 @@ RE_LEVEL = re.compile(r"\[(INFO|WARN|WARNING|ERROR|DEBUG)\]")
 RE_CUR_CROSS = re.compile(r"交差点開始:\s*(\S+)")
 RE_FILE_DONE = re.compile(r"進捗:\s*(\d+)\s*/\s*(\d+)")
 RE_HIT = re.compile(r"HIT:\s*(\S+)\s+(\d+)")
-RE_NEAR = re.compile(r"中心最近接距離\(m\):\s*([0-9.]+)")
+RE_NEAR = re.compile(r"中心最近接距離\(m\):\s*(\S+)\s+([0-9.]+)")
 RE_OPID = re.compile(r"運行ID総数:\s*(\d+)")
 
 
@@ -263,6 +263,7 @@ class CrossCard(QFrame):
         super().__init__()
         self.name = name
         self.selected = True
+        self.locked = False
         self.state = "待機"
         self.setObjectName("crossCard")
         self.setFixedSize(320, 220)
@@ -279,8 +280,13 @@ class CrossCard(QFrame):
         self.apply_state("待機")
 
     def mousePressEvent(self, _event):
+        if self.locked:
+            return
         self.selected = not self.selected
         self.apply_state(self.state)
+
+    def set_locked(self, locked: bool) -> None:
+        self.locked = locked
 
     def set_flags(self, *, has_csv: bool, has_jpg: bool, has_s2_dir: bool, has_s2_csv: bool) -> None:
         self.flags.setText(f"交差点定義ファイルJPG／CSV: {'有' if has_jpg else '無'} / {'有' if has_csv else '無'}")
@@ -336,6 +342,7 @@ class MainWindow(QMainWindow):
         self.batch_started_at: datetime | None = None
         self.batch_ended_at: datetime | None = None
         self.batch_start_perf: float | None = None
+        self.is_running = False
 
         self.cards: dict[str, CrossCard] = {}
         self.errors = 0
@@ -366,7 +373,10 @@ class MainWindow(QMainWindow):
         self.lbl_about.setWordWrap(True); self.lbl_about.setFont(top_font)
         v.addWidget(self.lbl_about)
 
-        self.flow = FlowGuide(); flow_grid = QGridLayout(self.flow)
+        self.flow = FlowGuide()
+        self.flow.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.flow_host = QWidget()
+        flow_grid = QGridLayout(self.flow_host)
         flow_grid.setContentsMargins(0, 0, 0, 0); flow_grid.setHorizontalSpacing(18)
         self.btn_project = QPushButton("プロジェクトを選ぶ"); self.btn_project.clicked.connect(self.select_project)
         self.lbl_project = QLabel("未選択")
@@ -391,7 +401,15 @@ class MainWindow(QMainWindow):
         flow_grid.setColumnStretch(2, 0)
         flow_grid.setColumnStretch(3, 0)
         flow_grid.setColumnStretch(4, 0)
-        self.flow.set_steps([b1, b2, b3, b4]); v.addWidget(self.flow)
+        self.flow.set_steps([b1, b2, b3, b4])
+        flow_stack = QFrame()
+        flow_stack.setObjectName("flowStack")
+        stack_l = QVBoxLayout(flow_stack)
+        stack_l.setContentsMargins(0, 0, 0, 0)
+        stack_l.setSpacing(0)
+        stack_l.addWidget(self.flow)
+        stack_l.addWidget(self.flow_host)
+        v.addWidget(flow_stack)
 
         mid = QHBoxLayout(); v.addLayout(mid, stretch=5)
         left_panel = QFrame(); lv = QVBoxLayout(left_panel)
@@ -604,7 +622,9 @@ class MainWindow(QMainWindow):
         self._update_progress_label()
         for card in self.cards.values():
             card.set_state("待機")
+            card.set_locked(True)
 
+        self.is_running = True
         self.btn_run.setEnabled(False)
         self.log_info("①プロジェクト選択 → ②第1スクリーニング選択 → 21【分析スタート】")
         self.log_info(f"start: targets={','.join(targets)} radius={self.spin_radius.value()}m")
@@ -665,8 +685,11 @@ class MainWindow(QMainWindow):
             return
 
         m_near = RE_NEAR.search(text)
-        if m_near and self.current_name in self.cards:
-            self.cards[self.current_name].hist.add_value(float(m_near.group(1)), self.spin_radius.value())
+        if m_near:
+            name = m_near.group(1)
+            dist = float(m_near.group(2))
+            if name in self.cards:
+                self.cards[name].hist.add_value(dist, self.spin_radius.value())
             return
 
         m_opid = RE_OPID.search(text)
@@ -720,11 +743,13 @@ class MainWindow(QMainWindow):
 
     def _on_finished(self, code: int, _status):
         self._flush_process_buffers()
+        self.is_running = False
         self._telemetry_running = False
         self.tele["status"].setText("状態: DONE" if code == 0 else "状態: ERROR")
         self.time_eta_big.setText("残り 00:00:00")
         for card in self.cards.values():
             card.set_state("完了" if code == 0 else "エラー")
+            card.set_locked(False)
         self.log_info(f"process finished: code={code}")
         self.log_info("🎉 おめでとうございます。全件処理完了です。")
         self.btn_run.setEnabled(True)
