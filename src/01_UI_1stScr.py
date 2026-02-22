@@ -225,6 +225,13 @@ class MainWindow(QMainWindow):
         self.LOGO_CORNER_DX = -10
         self.LOGO_CORNER_DY = -4
         self._logo_shadow_effect: QGraphicsDropShadowEffect | None = None
+        self._eta_mode = "IDLE"
+        self._eta_done = 0
+        self._eta_total = 0
+        self._zip_done_last = -1
+        self._zip_pct_last: dict[str, int] = {}
+        self._sort_bucket_last = -1
+        self._scan_logged = False
         self._build_ui()
         self._set_style()
         QTimer.singleShot(0, self._init_logo_overlay)
@@ -309,12 +316,25 @@ class MainWindow(QMainWindow):
         telem = QFrame(); tg = QVBoxLayout(telem); tg.addWidget(QLabel("CYBER TELEMETRY"))
         self.zip_progress = QProgressBar(); self.sort_progress = QProgressBar()
         self.tele = {
-            "zip": QLabel("現在ZIP: -"), "rows": QLabel("累計行数: 0"), "rps": QLabel("rows/s: 0.0"),
-            "zip_counts": QLabel("新規/追記: 0 / 0"), "sort_file": QLabel("SORT中: -"), "errors": QLabel("エラー数: 0"), "status": QLabel("状態: IDLE")
+            "zip": QLabel("現在ZIP: -"),
+            "rows": QLabel("累積行数（総CSVファイル合計）: 0"),
+            "opid": QLabel("運行ID総数（出力CSVファイル数）: 0"),
+            "sort_file": QLabel("SORT中: -"),
+            "errors": QLabel("エラー数: 0"),
+            "status": QLabel("状態: IDLE"),
         }
+        self.time_elapsed_big = QLabel("経過 00:00:00")
+        self.time_eta_big = QLabel("残り --:--:--")
+        big_font = QFont("Consolas", 28)
+        self.time_elapsed_big.setFont(big_font)
+        self.time_eta_big.setFont(big_font)
+        self.time_elapsed_big.setStyleSheet("color:#c9ffe0;")
+        self.time_eta_big.setStyleSheet("color:#c9ffe0;")
         tg.addWidget(QLabel("全体ZIP進捗")); tg.addWidget(self.zip_progress)
         tg.addWidget(QLabel("SORT進捗")); tg.addWidget(self.sort_progress)
-        for k in ["zip", "rows", "rps", "zip_counts", "sort_file", "errors", "status"]: tg.addWidget(self.tele[k])
+        tg.addWidget(self.time_elapsed_big)
+        tg.addWidget(self.time_eta_big)
+        for k in ["zip", "rows", "opid", "sort_file", "errors", "status"]: tg.addWidget(self.tele[k])
         self.sweep = SweepWidget(); tg.addWidget(self.sweep)
         tg.addStretch(1)
         top.addWidget(telem, 3)
@@ -475,12 +495,32 @@ class MainWindow(QMainWindow):
         self.log.setPlainText("\n".join(self.log_lines))
         self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
 
+    def _fmt_hms(self, sec: float) -> str:
+        sec = max(0, int(sec))
+        h = sec // 3600
+        m = (sec % 3600) // 60
+        s = sec % 60
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+    def _update_time_boxes(self) -> None:
+        if self.started_at <= 0:
+            self.time_elapsed_big.setText("経過 00:00:00")
+            self.time_eta_big.setText("残り --:--:--")
+            return
+
+        elapsed = time.time() - self.started_at
+        self.time_elapsed_big.setText(f"経過 {self._fmt_hms(elapsed)}")
+
+        if self._eta_total > 0 and self._eta_done > 0 and self._eta_done <= self._eta_total:
+            rate = elapsed / max(1, self._eta_done)
+            remain = rate * (self._eta_total - self._eta_done)
+            self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
+        else:
+            self.time_eta_big.setText("残り --:--:--")
+
     def _tick_animation(self) -> None:
         self.sweep.tick()
-        if self.started_at > 0:
-            elapsed = time.time() - self.started_at
-            rps = self.rows_written / elapsed if elapsed > 0 else 0.0
-            self.tele["rps"].setText(f"rows/s: {rps:,.1f}")
+        self._update_time_boxes()
 
     def _config(self) -> SplitConfig:
         return SplitConfig(
@@ -524,6 +564,18 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing input", "必須項目を設定してください")
             return
         self.started_at = time.time(); self.rows_written = 0; self.errors = 0
+        self._eta_mode = "IDLE"
+        self._eta_done = 0
+        self._eta_total = 0
+        self._zip_done_last = -1
+        self._zip_pct_last = {}
+        self._sort_bucket_last = -1
+        self._scan_logged = False
+        self.tele["zip"].setText("現在ZIP: -")
+        self.tele["rows"].setText("累積行数（総CSVファイル合計）: 0")
+        self.tele["opid"].setText("運行ID総数（出力CSVファイル数）: 0")
+        self.time_elapsed_big.setText("経過 00:00:00")
+        self.time_eta_big.setText("残り --:--:--")
         self.zip_progress.setValue(0); self.sort_progress.setValue(0)
         self._append_log("管制: ミッション開始。ZIP走査へ移行します。")
         self.worker = SplitWorker(cfg)
@@ -553,23 +605,36 @@ class MainWindow(QMainWindow):
         if stage == "SCAN":
             zips = extra.get("zip_list", [])
             self._reset_zip_cards(zips)
-            self._append_log(f"ZIPを走査中…（{len(zips)}件）")
+            if not self._scan_logged:
+                self._scan_logged = True
+                self._append_log(f"ZIP走査完了（{len(zips)}件）")
             return
 
         if stage == "EXTRACT":
             zip_name = extra.get("zip", "")
             zdone = int(extra.get("zips_done", done)); ztot = max(1, int(extra.get("zips_total", total)))
             self.zip_progress.setValue(int(zdone * 100 / ztot))
+            self.tele["zip"].setVisible(True)
             self.current_zip = zip_name or self.current_zip
             self.tele["zip"].setText(f"現在ZIP: {self.current_zip}")
             self.rows_written = int(extra.get("rows_written", self.rows_written))
-            self.tele["rows"].setText(f"累計行数: {self.rows_written:,}")
+            self.tele["rows"].setText(f"累積行数（総CSVファイル合計）: {self.rows_written:,}")
+            opid_total = int(extra.get("opid_total", 0))
+            self.tele["opid"].setText(f"運行ID総数（出力CSVファイル数）: {opid_total:,}")
             zn = int(extra.get("zip_new", 0)); za = int(extra.get("zip_append", 0))
-            self.tele["zip_counts"].setText(f"新規/追記: {zn:,} / {za:,}")
+            zip_pct = int(extra.get("zip_pct", 0))
             if zip_name in self.cards:
-                status = "処理中" if int(extra.get("zip_pct", 0)) < 100 else "完了"
-                self.cards[zip_name].apply(status, int(extra.get("zip_pct", 0)), int(extra.get("rows_in_zip", 0)), zn, za)
-            self._append_log(f"ZIP解析中：{zip_name}（進捗 {int(extra.get('zip_pct',0))}%）")
+                status = "処理中" if zip_pct < 100 else "完了"
+                self.cards[zip_name].apply(status, zip_pct, int(extra.get("rows_in_zip", 0)), zn, za)
+
+            prev_pct = self._zip_pct_last.get(zip_name, -1)
+            self._zip_pct_last[zip_name] = zip_pct
+            if zip_name and zip_pct >= 100 and prev_pct < 100:
+                self._append_log(f"{zip_name} 抽出完了（{zdone}/{ztot}）")
+
+            self._eta_mode = "EXTRACT"
+            self._eta_done = zdone
+            self._eta_total = ztot
 
         if stage == "SORT":
             total_files = max(1, int(extra.get("total_files", total)))
@@ -577,10 +642,28 @@ class MainWindow(QMainWindow):
             self.sort_progress.setValue(int(done_files * 100 / total_files))
             self.current_sort_file = extra.get("current_file", "-")
             self.tele["sort_file"].setText(f"SORT中: {self.current_sort_file}")
-            self._append_log(f"並べ替え中：{done_files}/{total_files}（現在：{self.current_sort_file}）")
+            self.tele["zip"].setText("")
+            pct = int(done_files * 100 / total_files)
+            bucket = (pct // 10) * 10
+            if bucket != self._sort_bucket_last and bucket in {0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100}:
+                self._sort_bucket_last = bucket
+                if bucket == 0:
+                    self._append_log("並べ替え開始（SORT）")
+                elif bucket < 100:
+                    self._append_log(f"並べ替え {bucket}% 完了")
+                else:
+                    self._append_log("並べ替え 100% 完了")
+
+            self._eta_mode = "SORT"
+            self._eta_done = done_files
+            self._eta_total = total_files
 
         if stage == "VERIFY":
             status = extra.get("status", "DONE")
+            self._eta_mode = "IDLE"
+            self._eta_done = 0
+            self._eta_total = 0
+            self.time_eta_big.setText("残り 00:00:00")
             self._append_log("完了：COMPLETE" if status == "DONE" else "中断：CANCELLED")
             for card in self.cards.values():
                 if "処理中" in card.state.text() or "待機" in card.state.text():
