@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
@@ -385,6 +386,8 @@ class MainWindow(QMainWindow):
         self.lbl_input = QLabel("未選択")
         in_w = QWidget(); in_l = QHBoxLayout(in_w); in_l.setContentsMargins(0, 0, 0, 0); in_l.addWidget(self.btn_input); in_l.addWidget(self.lbl_input)
         self.spin_radius = QSpinBox(); self.spin_radius.setRange(5, 200); self.spin_radius.setValue(30); self.spin_radius.valueChanged.connect(self._on_radius_changed)
+        self.spin_radius.setButtonSymbols(QSpinBox.ButtonSymbols.UpDownArrows)
+        self.spin_radius.setFixedWidth(90)
         rad_w = QWidget(); rad_l = QHBoxLayout(rad_w); rad_l.setContentsMargins(0, 0, 0, 0)
         rad_l.addWidget(QLabel("半径")); rad_l.addWidget(self.spin_radius); rad_l.addWidget(QLabel("m"))
         self.btn_run = QPushButton("分析スタート"); self.btn_run.clicked.connect(self.run_screening)
@@ -404,11 +407,11 @@ class MainWindow(QMainWindow):
         self.flow.set_steps([b1, b2, b3, b4])
         flow_stack = QFrame()
         flow_stack.setObjectName("flowStack")
-        stack_l = QVBoxLayout(flow_stack)
+        stack_l = QStackedLayout(flow_stack)
         stack_l.setContentsMargins(0, 0, 0, 0)
-        stack_l.setSpacing(0)
-        stack_l.addWidget(self.flow)
+        stack_l.setStackingMode(QStackedLayout.StackingMode.StackAll)
         stack_l.addWidget(self.flow_host)
+        stack_l.addWidget(self.flow)
         v.addWidget(flow_stack)
 
         mid = QHBoxLayout(); v.addLayout(mid, stretch=5)
@@ -449,7 +452,7 @@ class MainWindow(QMainWindow):
         mid.addWidget(right_panel, 3)
 
         self.log = QPlainTextEdit(); self.log.setReadOnly(True)
-        self.log.setFont(QFont("Consolas", 10)); self.log.setMaximumBlockCount(10)
+        self.log.setFont(QFont("Consolas", 10)); self.log.setMaximumBlockCount(2000)
         v.addWidget(self.log, stretch=2)
 
     def _set_style(self):
@@ -627,6 +630,7 @@ class MainWindow(QMainWindow):
 
         self.is_running = True
         self.btn_run.setEnabled(False)
+        self.spin_radius.setEnabled(False)
         self.log_info("①プロジェクト選択 → ②第1スクリーニング選択 → 21【分析スタート】")
         self.log_info(f"start: targets={','.join(targets)} radius={self.spin_radius.value()}m")
 
@@ -754,6 +758,7 @@ class MainWindow(QMainWindow):
         self.log_info(f"process finished: code={code}")
         self.log_info("🎉 おめでとうございます。全件処理完了です。")
         self.btn_run.setEnabled(True)
+        self.spin_radius.setEnabled(True)
         self.batch_ended_at = datetime.now()
         total_sec = perf_counter() - self.batch_start_perf if self.batch_start_perf else 0.0
         self.log_info(f"総所要時間: {format_hhmmss(total_sec)}")
