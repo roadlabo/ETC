@@ -155,6 +155,7 @@ def process_zip(
     zips_total: int = 0,
     total_rows_before: int = 0,
     total_out_files_before: int = 0,
+    seen_opids: Optional[set[str]] = None,
 ) -> tuple[int, int, int, int, int]:
     current_fp: Optional[io.TextIOWrapper] = None
     current_writer: Optional[csv.writer] = None
@@ -192,6 +193,8 @@ def process_zip(
                     opid = row[3].strip()
                     if not opid:
                         continue
+                    if seen_opids is not None:
+                        seen_opids.add(opid)
                     if opid != current_opid:
                         close_current(current_fp)
                         current_fp, current_writer, existed = open_writer(
@@ -230,6 +233,7 @@ def process_zip(
                                 "zip_append": zip_append,
                                 "rows_written": total_rows_before + rows_written,
                                 "out_files": total_out_files_before + zip_new,
+                                "opid_total": len(seen_opids) if seen_opids is not None else 0,
                             },
                             progress_cb=progress_cb,
                         )
@@ -477,6 +481,7 @@ def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=N
     total_out_files = 0
     total_missing_inner = 0
     total_decode_skip = 0
+    seen_opids: set[str] = set()
 
     try:
         for zip_path in zip_paths:
@@ -492,6 +497,7 @@ def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=N
                 zips_total=total_zips,
                 total_rows_before=total_rows,
                 total_out_files_before=total_out_files,
+                seen_opids=seen_opids,
             )
             processed += 1
             total_rows += rows
@@ -514,6 +520,7 @@ def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=N
                     "zip_append": zip_append,
                     "rows_written": total_rows,
                     "out_files": total_out_files,
+                    "opid_total": len(seen_opids),
                     "zips_done": processed,
                     "zips_total": total_zips,
                 },
