@@ -320,6 +320,7 @@ class MainWindow(QMainWindow):
             "rows": QLabel("累積行数（総CSVファイル合計）: 0"),
             "opid": QLabel("運行ID総数（出力CSVファイル数）: 0"),
             "sort_file": QLabel("SORT中: -"),
+            "sort_done": QLabel("SORT済みCSV数: 0"),
             "errors": QLabel("エラー数: 0"),
             "status": QLabel("状態: IDLE"),
         }
@@ -334,7 +335,7 @@ class MainWindow(QMainWindow):
         tg.addWidget(QLabel("SORT進捗")); tg.addWidget(self.sort_progress)
         tg.addWidget(self.time_elapsed_big)
         tg.addWidget(self.time_eta_big)
-        for k in ["zip", "rows", "opid", "sort_file", "errors", "status"]: tg.addWidget(self.tele[k])
+        for k in ["zip", "rows", "opid", "sort_file", "sort_done", "errors", "status"]: tg.addWidget(self.tele[k])
         self.sweep = SweepWidget(); tg.addWidget(self.sweep)
         tg.addStretch(1)
         top.addWidget(telem, 3)
@@ -574,6 +575,7 @@ class MainWindow(QMainWindow):
         self.tele["zip"].setText("現在ZIP: -")
         self.tele["rows"].setText("累積行数（総CSVファイル合計）: 0")
         self.tele["opid"].setText("運行ID総数（出力CSVファイル数）: 0")
+        self.tele["sort_done"].setText("SORT済みCSV数: 0")
         self.time_elapsed_big.setText("経過 00:00:00")
         self.time_eta_big.setText("残り --:--:--")
         self.zip_progress.setValue(0); self.sort_progress.setValue(0)
@@ -642,6 +644,7 @@ class MainWindow(QMainWindow):
             self.sort_progress.setValue(int(done_files * 100 / total_files))
             self.current_sort_file = extra.get("current_file", "-")
             self.tele["sort_file"].setText(f"SORT中: {self.current_sort_file}")
+            self.tele["sort_done"].setText(f"SORT済みCSV数: {done_files} / {total_files}")
             self.tele["zip"].setText("")
             pct = int(done_files * 100 / total_files)
             bucket = (pct // 10) * 10
