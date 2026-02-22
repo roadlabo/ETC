@@ -428,6 +428,8 @@ class MainWindow(QMainWindow):
             "status": QLabel("状態: IDLE"),
             "current": QLabel("現在交差点: -"),
         }
+        self.lbl_progress = QLabel("進捗ファイル: 0/0（0.0%）")
+        self.lbl_progress.setStyleSheet("color:#7cffc6; font-weight:600;")
         self.progress_bar = QProgressBar(); self.progress_bar.setRange(0, 100); self.progress_bar.setValue(0)
         self.time_elapsed_big = QLabel("経過 00:00:00")
         self.time_eta_big = QLabel("残り --:--:--")
@@ -435,6 +437,7 @@ class MainWindow(QMainWindow):
         self.time_eta_big.setFont(QFont("Consolas", 18, QFont.Weight.Bold))
         rv.addWidget(self.tele["cross_total"])
         rv.addWidget(self.tele["opid"])
+        rv.addWidget(self.lbl_progress)
         rv.addWidget(self.progress_bar)
         rv.addWidget(self.time_elapsed_big)
         rv.addWidget(self.time_eta_big)
@@ -445,10 +448,8 @@ class MainWindow(QMainWindow):
         rv.addStretch(1)
         mid.addWidget(right_panel, 3)
 
-        self.lbl_progress = QLabel("調査中ファイル 0,000/0,000ファイル（0.0％）")
         self.log = QPlainTextEdit(); self.log.setReadOnly(True)
         self.log.setFont(QFont("Consolas", 10)); self.log.setMaximumBlockCount(10)
-        v.addWidget(self.lbl_progress)
         v.addWidget(self.log, stretch=2)
 
     def _set_style(self):
@@ -506,7 +507,7 @@ class MainWindow(QMainWindow):
 
     def _update_progress_label(self) -> None:
         pct = (self.done_files / self.total_files * 100.0) if self.total_files else 0.0
-        self.lbl_progress.setText(f"調査中ファイル {self.done_files:,.0f}/{self.total_files:,.0f}ファイル（{pct:.1f}％）")
+        self.lbl_progress.setText(f"進捗ファイル: {self.done_files:,}/{self.total_files:,}（{pct:.1f}%）")
         self.progress_bar.setValue(int(pct))
 
     def _clear_cards(self):
