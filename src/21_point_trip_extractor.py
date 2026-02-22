@@ -598,11 +598,11 @@ def process_file_for_all_crossroads(
             if not ok:
                 continue
 
-            print(f"交差点開始: {cp.name}", flush=True)
             matched_count += 1
             if min_dist != float("inf"):
                 print(f"中心最近接距離(m): {cp.name} {min_dist:.1f}", flush=True)
             hits_per_cross[cp.name] = hits_per_cross.get(cp.name, 0) + 1
+            print(f"HIT: {cp.name} {hits_per_cross[cp.name]}", flush=True)
 
             if dry_run:
                 saved_per_cross[cp.name] = saved_per_cross.get(cp.name, 0) + 1
@@ -786,10 +786,6 @@ def run_second_screening(
         )
         total_candidate += cand
         total_matched += matched
-        print(f"進捗: {idx}/{total_files}", end="\r", flush=True)
-        for cp in crossroads:
-            print(f"HIT: {cp.name} {hits_per_cross[cp.name]}", flush=True)
-
         elapsed = time.time() - overall_start
         percent = (idx / total_files) * 100 if total_files else 100.0
         eta = (elapsed / idx) * (total_files - idx) if idx else 0.0
