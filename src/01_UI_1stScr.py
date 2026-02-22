@@ -232,6 +232,10 @@ class MainWindow(QMainWindow):
         self._zip_pct_last: dict[str, int] = {}
         self._sort_bucket_last = -1
         self._scan_logged = False
+        self._last_zips_total = 0
+        self._last_zips_done = 0
+        self._last_opid_total = 0
+        self._last_rows_written = 0
         self._build_ui()
         self._set_style()
         QTimer.singleShot(0, self._init_logo_overlay)
@@ -340,7 +344,9 @@ class MainWindow(QMainWindow):
         tg.addStretch(1)
         top.addWidget(telem, 3)
 
-        self.log = QPlainTextEdit(); self.log.setReadOnly(True); self.log.setMaximumBlockCount(100)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(10)
         outer.addWidget(self.log, 1)
         self._set_stage("IDLE")
 
@@ -492,7 +498,7 @@ class MainWindow(QMainWindow):
     def _append_log(self, msg: str) -> None:
         ts = time.strftime("%H:%M:%S")
         self.log_lines.append(f"[{ts}] {msg}")
-        self.log_lines = self.log_lines[-100:]
+        self.log_lines = self.log_lines[-10:]
         self.log.setPlainText("\n".join(self.log_lines))
         self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
 
@@ -502,6 +508,37 @@ class MainWindow(QMainWindow):
         m = (sec % 3600) // 60
         s = sec % 60
         return f"{h:02d}:{m:02d}:{s:02d}"
+
+    def _ui_summary_lines(
+        self,
+        *,
+        status: str,
+        zips_total: int,
+        zips_done: int,
+        opid_total: int,
+        rows_written: int,
+    ) -> list[str]:
+        dt = time.strftime("%Y/%m/%d %H:%M:%S")
+        elapsed = self._fmt_hms(time.time() - self.started_at) if self.started_at > 0 else "00:00:00"
+        inp = self.input_dir.text().strip()
+        out = self.output_dir.text().strip()
+        term = self.term_name.text().strip()
+        mesh = ",".join([x.strip() for x in self.zip_keys.text().split(",") if x.strip()])
+
+        badge = "🎉🎉🎉" if status == "DONE" else "🛑"
+        title = f"{badge} 第1スクリーニング {('完了' if status == 'DONE' else '中断')} {badge}"
+        return [
+            "========================================",
+            title,
+            f"解析日時: {dt}",
+            f"解析時間: {elapsed}",
+            f"ZIP: {zips_done}/{zips_total}  OPID(CSV): {opid_total:,}  行数: {rows_written:,}",
+            f"INPUT : {inp}",
+            f"OUTPUT: {out}",
+            f"TERM  : {term}",
+            f"MESH  : {mesh}",
+            f"STATUS: {status}",
+        ]
 
     def _update_time_boxes(self) -> None:
         if self.started_at <= 0:
@@ -572,6 +609,10 @@ class MainWindow(QMainWindow):
         self._zip_pct_last = {}
         self._sort_bucket_last = -1
         self._scan_logged = False
+        self._last_zips_total = 0
+        self._last_zips_done = 0
+        self._last_opid_total = 0
+        self._last_rows_written = 0
         self.tele["zip"].setText("現在ZIP: -")
         self.tele["rows"].setText("累積行数（総CSVファイル合計）: 0")
         self.tele["opid"].setText("運行ID総数（出力CSVファイル数）: 0")
@@ -623,6 +664,10 @@ class MainWindow(QMainWindow):
             self.tele["rows"].setText(f"累積行数（総CSVファイル合計）: {self.rows_written:,}")
             opid_total = int(extra.get("opid_total", 0))
             self.tele["opid"].setText(f"運行ID総数（出力CSVファイル数）: {opid_total:,}")
+            self._last_zips_total = ztot
+            self._last_zips_done = zdone
+            self._last_rows_written = self.rows_written
+            self._last_opid_total = opid_total
             zn = int(extra.get("zip_new", 0)); za = int(extra.get("zip_append", 0))
             zip_pct = int(extra.get("zip_pct", 0))
             if zip_name in self.cards:
@@ -663,11 +708,23 @@ class MainWindow(QMainWindow):
 
         if stage == "VERIFY":
             status = extra.get("status", "DONE")
+            self._last_rows_written = int(extra.get("rows_written", self._last_rows_written))
+            self._last_opid_total = int(extra.get("out_files", self._last_opid_total))
+
+            lines = self._ui_summary_lines(
+                status=status,
+                zips_total=int(self._last_zips_total),
+                zips_done=int(self._last_zips_done),
+                opid_total=int(self._last_opid_total),
+                rows_written=int(self._last_rows_written),
+            )
+            for ln in lines:
+                self._append_log(ln)
+
             self._eta_mode = "IDLE"
             self._eta_done = 0
             self._eta_total = 0
             self.time_eta_big.setText("残り 00:00:00")
-            self._append_log("完了：COMPLETE" if status == "DONE" else "中断：CANCELLED")
             for card in self.cards.values():
                 if "処理中" in card.state.text() or "待機" in card.state.text():
                     card.apply("スキップ" if status == "CANCELLED" else "完了", card.bar.value(), 0, 0, 0)
@@ -675,6 +732,8 @@ class MainWindow(QMainWindow):
     def on_finished(self, status: str) -> None:
         self._set_stage("VERIFY")
         self.tele["status"].setText(f"状態: {status}")
+        if hasattr(self, "anim_timer") and self.anim_timer.isActive():
+            self.anim_timer.stop()
 
     def on_failed(self, message: str) -> None:
         self.errors += 1
