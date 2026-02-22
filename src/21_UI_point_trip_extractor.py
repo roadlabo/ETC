@@ -639,6 +639,8 @@ class MainWindow(QMainWindow):
         self.is_running = True
         self.btn_run.setEnabled(False)
         self.spin_radius.setEnabled(False)
+        if hasattr(self, "anim_timer"):
+            self.anim_timer.start(120)
         self.log_info("①プロジェクト選択 → ②第1スクリーニング選択 → 21【分析スタート】")
         self.log_info(f"start: targets={','.join(targets)} radius={self.spin_radius.value()}m")
 
@@ -767,6 +769,16 @@ class MainWindow(QMainWindow):
         self.log_info("🎉 おめでとうございます。全件処理完了です。")
         self.btn_run.setEnabled(True)
         self.spin_radius.setEnabled(True)
+        if hasattr(self, "anim_timer"):
+            self.anim_timer.stop()
+        if self.started_at:
+            elapsed = datetime.now() - datetime.fromtimestamp(self.started_at)
+            sec = int(elapsed.total_seconds())
+            h = sec // 3600
+            m = (sec % 3600) // 60
+            s = sec % 60
+            self.time_elapsed_big.setText(f"経過 {h:02d}:{m:02d}:{s:02d}")
+        self.tele["status"].setText("状態: DONE" if code == 0 else "状態: ERROR")
         self.batch_ended_at = datetime.now()
         total_sec = perf_counter() - self.batch_start_perf if self.batch_start_perf else 0.0
         self.log_info(f"総所要時間: {format_hhmmss(total_sec)}")
