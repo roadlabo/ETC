@@ -42,7 +42,6 @@ FOLDER_CROSS = "11_交差点(Point)データ"
 FOLDER_OUT = "20_第２スクリーニング"
 
 RE_LEVEL = re.compile(r"\[(INFO|WARN|WARNING|ERROR|DEBUG)\]")
-RE_CUR_CROSS = re.compile(r"交差点開始:\s*(\S+)")
 RE_FILE_DONE = re.compile(r"進捗:\s*(\d+)\s*/\s*(\d+)")
 RE_HIT = re.compile(r"HIT:\s*(\S+)\s+(\d+)")
 RE_NEAR = re.compile(r"中心最近接距離\(m\):\s*(\S+)\s+([0-9.]+)")
@@ -210,6 +209,8 @@ class DistHistogram(QWidget):
         self.bins = bins
         self.counts = [0] * bins
         self.setMinimumHeight(64)
+        self._dirty = False
+        self._last_paint_ts = 0.0
 
     def set_radius(self, radius: int) -> None:
         self.radius = max(1, radius)
@@ -222,7 +223,12 @@ class DistHistogram(QWidget):
             return
         idx = min(self.bins - 1, int((dist_m / max(1e-6, r)) * self.bins))
         self.counts[idx] += 1
-        self.update()
+        now = time.time()
+        if now - self._last_paint_ts > 0.07:
+            self._last_paint_ts = now
+            self.update()
+        else:
+            self._dirty = True
 
     def paintEvent(self, _event):
         p = QPainter(self)
@@ -259,6 +265,7 @@ class DistHistogram(QWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
             str(int(self.radius)),
         )
+        self._dirty = False
 
 
 class CrossCard(QFrame):
@@ -269,8 +276,8 @@ class CrossCard(QFrame):
         self.locked = False
         self.state = "待機"
         self.setObjectName("crossCard")
-        self.setMinimumWidth(260)
-        self.setMaximumWidth(340)
+        self.setMinimumWidth(220)
+        self.setMaximumWidth(260)
         self.setFixedHeight(220)
         v = QVBoxLayout(self)
         self.title = QLabel(name)
@@ -337,7 +344,6 @@ class MainWindow(QMainWindow):
         self.project_dir: Path | None = None
         self.input_dir: Path | None = None
         self.proc: QProcess | None = None
-        self.current_name: str | None = None
         self._stdout_buf = ""
         self._stderr_buf = ""
         self._last_log_line: str | None = None
@@ -422,7 +428,7 @@ class MainWindow(QMainWindow):
         v.addWidget(mid_split, stretch=5)
         left_panel = QFrame(); lv = QVBoxLayout(left_panel)
         lv.addWidget(QLabel("交差点アイコン一覧"))
-        self.cross_container = QWidget(); self.cross_flow = FlowLayout(self.cross_container, spacing=6); self.cross_container.setLayout(self.cross_flow)
+        self.cross_container = QWidget(); self.cross_flow = FlowLayout(self.cross_container, spacing=4); self.cross_container.setLayout(self.cross_flow)
         self.cross_scroll = QScrollArea(); self.cross_scroll.setWidgetResizable(True); self.cross_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); self.cross_scroll.setWidget(self.cross_container)
         lv.addWidget(self.cross_scroll)
         mid_split.addWidget(left_panel)
@@ -434,7 +440,6 @@ class MainWindow(QMainWindow):
             "opid": QLabel("第1スクリーニング数（運行ID数）: -"),
             "errors": QLabel("エラー数: 0"),
             "status": QLabel("状態: IDLE"),
-            "current": QLabel("現在交差点: -"),
         }
         self.lbl_progress = QLabel("進捗ファイル: 0/0（0.0%）")
         self.lbl_progress.setStyleSheet("color:#7cffc6; font-weight:600;")
@@ -451,11 +456,10 @@ class MainWindow(QMainWindow):
         rv.addWidget(self.time_eta_big)
         rv.addWidget(self.tele["errors"])
         rv.addWidget(self.tele["status"])
-        rv.addWidget(self.tele["current"])
         self.sweep = SweepWidget(); rv.addWidget(self.sweep)
         rv.addStretch(1)
         mid_split.addWidget(right_panel)
-        mid_split.setSizes([1500, 500])
+        mid_split.setSizes([1700, 400])
         mid_split.setStretchFactor(0, 4)
         mid_split.setStretchFactor(1, 1)
 
@@ -493,6 +497,9 @@ class MainWindow(QMainWindow):
     def _tick_animation(self) -> None:
         self.sweep.tick()
         self._update_time_boxes()
+        for card in self.cards.values():
+            if getattr(card.hist, "_dirty", False):
+                card.hist.update()
 
     def _on_radius_changed(self, radius: int) -> None:
         for card in self.cards.values():
@@ -623,7 +630,7 @@ class MainWindow(QMainWindow):
 
         self.log_lines = []; self._last_log_line = None
         self.batch_started_at = datetime.now(); self.batch_start_perf = perf_counter(); self.batch_ended_at = None
-        self.current_name = None; self._stdout_buf = ""; self._stderr_buf = ""
+        self._stdout_buf = ""; self._stderr_buf = ""
         self.total_files = len(list(self.input_dir.rglob("*.csv"))); self.done_files = 0
         self.errors = 0; self.tele["errors"].setText("エラー数: 0")
         self.started_at = time.time(); self._eta_done = 0; self._eta_total = self.total_files
@@ -679,13 +686,6 @@ class MainWindow(QMainWindow):
         text = line.strip()
         if not text:
             return
-        m_cross = RE_CUR_CROSS.search(text)
-        if m_cross:
-            self.current_name = m_cross.group(1)
-            self.tele["current"].setText(f"現在交差点: {self.current_name}")
-            if self.current_name in self.cards:
-                self.cards[self.current_name].set_state("処理中")
-
         m_file = RE_FILE_DONE.search(text)
         if m_file:
             self.done_files = int(m_file.group(1)); self.total_files = int(m_file.group(2))
