@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QLayout,
     QScrollArea,
+    QSplitter,
     QSizePolicy,
     QSpinBox,
     QStackedLayout,
@@ -65,7 +66,8 @@ class FlowLayout(QLayout):
         super().__init__(parent)
         self.item_list = []
         self.setContentsMargins(margin, margin, margin, margin)
-        self.setSpacing(spacing)
+        self._hspace = spacing
+        self._vspace = spacing
 
     def addItem(self, item):
         self.item_list.append(item)
@@ -108,11 +110,11 @@ class FlowLayout(QLayout):
         y = rect.y()
         line_height = 0
         for item in self.item_list:
-            next_x = x + item.sizeHint().width() + self.spacing()
-            if next_x - self.spacing() > rect.right() and line_height > 0:
+            next_x = x + item.sizeHint().width() + self._hspace
+            if next_x - self._hspace > rect.right() and line_height > 0:
                 x = rect.x()
-                y += line_height + self.spacing()
-                next_x = x + item.sizeHint().width() + self.spacing()
+                y += line_height + self._vspace
+                next_x = x + item.sizeHint().width() + self._hspace
                 line_height = 0
             if not test_only:
                 item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
@@ -267,7 +269,9 @@ class CrossCard(QFrame):
         self.locked = False
         self.state = "待機"
         self.setObjectName("crossCard")
-        self.setFixedSize(320, 220)
+        self.setMinimumWidth(260)
+        self.setMaximumWidth(340)
+        self.setFixedHeight(220)
         v = QVBoxLayout(self)
         self.title = QLabel(name)
         self.sel_label = QLabel("第2スクリーニング：対象")
@@ -414,13 +418,14 @@ class MainWindow(QMainWindow):
         stack_l.addWidget(self.flow)
         v.addWidget(flow_stack)
 
-        mid = QHBoxLayout(); v.addLayout(mid, stretch=5)
+        mid_split = QSplitter(Qt.Orientation.Horizontal)
+        v.addWidget(mid_split, stretch=5)
         left_panel = QFrame(); lv = QVBoxLayout(left_panel)
         lv.addWidget(QLabel("交差点アイコン一覧"))
-        self.cross_container = QWidget(); self.cross_flow = FlowLayout(self.cross_container, spacing=10); self.cross_container.setLayout(self.cross_flow)
-        self.cross_scroll = QScrollArea(); self.cross_scroll.setWidgetResizable(True); self.cross_scroll.setWidget(self.cross_container)
+        self.cross_container = QWidget(); self.cross_flow = FlowLayout(self.cross_container, spacing=6); self.cross_container.setLayout(self.cross_flow)
+        self.cross_scroll = QScrollArea(); self.cross_scroll.setWidgetResizable(True); self.cross_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); self.cross_scroll.setWidget(self.cross_container)
         lv.addWidget(self.cross_scroll)
-        mid.addWidget(left_panel, 4)
+        mid_split.addWidget(left_panel)
 
         right_panel = QFrame(); rv = QVBoxLayout(right_panel)
         rv.addWidget(QLabel("CYBER TELEMETRY"))
@@ -449,7 +454,10 @@ class MainWindow(QMainWindow):
         rv.addWidget(self.tele["current"])
         self.sweep = SweepWidget(); rv.addWidget(self.sweep)
         rv.addStretch(1)
-        mid.addWidget(right_panel, 3)
+        mid_split.addWidget(right_panel)
+        mid_split.setSizes([1500, 500])
+        mid_split.setStretchFactor(0, 4)
+        mid_split.setStretchFactor(1, 1)
 
         self.log = QPlainTextEdit(); self.log.setReadOnly(True)
         self.log.setFont(QFont("Consolas", 10)); self.log.setMaximumBlockCount(2000)
