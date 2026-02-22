@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
-from PyQt6.QtCore import QLayout, QPoint, QProcess, QPropertyAnimation, QRect, QSize, Qt, QTimer
+from PyQt6.QtCore import QPoint, QProcess, QPropertyAnimation, QRect, QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QLayout,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
