@@ -1642,12 +1642,13 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", type=str, default="")
+    parser.add_argument("csv_pos", nargs="?", help="(legacy) performance.csv path")
     parsed = parser.parse_args()
 
     app = QApplication(sys.argv)
     busy = make_busy_dialog("起動中", "Qt初期化中…（初回は時間がかかることがあります）")
 
-    csv_path = parsed.csv
+    csv_path = parsed.csv or parsed.csv_pos
     if not csv_path:
         # ① ファイル選択を見せる前に「起動中」を閉じる
         if busy is not None:
@@ -1690,15 +1691,16 @@ def run_without_gui(args: List[str]) -> Optional[str]:
     parser = __import__("argparse").ArgumentParser()
     parser.add_argument("--nogui", action="store_true")
     parser.add_argument("--csv", type=str, default="")
+    parser.add_argument("csv_pos", nargs="?", help="(legacy) performance.csv path")
     parsed = parser.parse_args(args)
 
-    if not parsed.csv:
+    if not (parsed.csv or parsed.csv_pos):
         selected = prompt_csv_path()
         if selected:
             parsed.csv = selected
         else:
             raise ValueError("--csv が未指定です。PyQt6/tkinter ダイアログも利用できないため --csv が必須です。")
-    csv_path = Path(parsed.csv).expanduser().resolve()
+    csv_path = Path(parsed.csv or parsed.csv_pos).expanduser().resolve()
     df = read_csv_safely(str(csv_path))
     ensure_columns(df, REQUIRED_COLS)
 
