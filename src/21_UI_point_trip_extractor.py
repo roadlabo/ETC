@@ -280,9 +280,9 @@ class CrossCard(QFrame):
         card_w = int(287 * 1.02)
         self.setMinimumWidth(card_w)
         self.setMaximumWidth(card_w)
-        self.setFixedHeight(250)
+        self.setFixedHeight(int(250 * 1.2))
         v = QVBoxLayout(self)
-        v.setSpacing(6)
+        v.setSpacing(10)
         v.setContentsMargins(8, 8, 8, 8)
         self.title = QLabel(name)
         title_font = self.title.font()
@@ -297,11 +297,10 @@ class CrossCard(QFrame):
         self.hist = DistHistogram(radius)
         for w in [self.title, self.sel_label, self.flags, self.flags2, self.hit, self.hist_title, self.hist]:
             v.addWidget(w)
-        self.btn_viewer = QPushButton("第2SRC トリップビューアー")
+        self.btn_viewer = QPushButton("第2スクリーニング トリップビューアー")
         self.btn_viewer.setObjectName("btnViewer")
         btn_font = self.btn_viewer.font()
-        btn_font.setPointSize(int(btn_font.pointSize() * 1.6))
-        btn_font.setBold(True)
+        btn_font.setBold(False)
         self.btn_viewer.setFont(btn_font)
         self.btn_viewer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.btn_viewer.setMinimumHeight(42)
@@ -537,16 +536,17 @@ class MainWindow(QMainWindow):
                 color: #3d6a55;
             }
             QPushButton#btnViewer{
-                background: #123122;
-                border: 2px solid #7cffc6;
+                background: #0f261c;
+                border: 1px solid #4fbf95;
+                color: #8de0b7;
             }
             QPushButton#btnViewer:disabled{
                 background: #0a120f;
-                border: 2px solid #2a6b45;
+                border: 1px solid #2a6b45;
                 color: #2f7a5b;
             }
             QPushButton#btnViewer:hover{
-                background: #184331;
+                background: #153a2a;
             }
             QFrame { border: 1px solid #1c4f33; border-radius: 4px; }
             QFrame#crossCard { border-radius: 8px; }
