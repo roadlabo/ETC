@@ -300,8 +300,8 @@ class CrossCardPerf(QFrame):
 
     def set_stats(self, weekday: int, split: int, target: int, ok: int, unk: int, notpass: int):
         self.data.update({"weekday": weekday, "split": split, "target": target, "ok": ok, "unk": unk, "notpass": notpass})
-        line1 = f"曜日スクリーニング後CSVファイル数{weekday:,}／分割トリップ数{split:,}"
-        line2 = f"対象トリップ数{target:,}／成功トリップ数{ok:,}／枝不明{unk:,}／不通過{notpass:,}"
+        line1 = f"対象曜日のCSVファイル数{weekday:,}／分割トリップ数{split:,}"
+        line2 = f"対象トリップ数{target:,}／成功{ok:,}／枝不明{unk:,}／不通過{notpass:,}"
         self.lbl_stats.setText(line1 + "\n" + line2)
 
     def _launch_branch_viewer(self):
