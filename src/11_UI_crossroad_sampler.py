@@ -441,7 +441,7 @@ class MainWindow(QMainWindow):
         s1.setContentsMargins(0, 0, 0, 0)
         s1.setSpacing(8)
 
-        lbl_s1 = QLabel("プロジェクトフォルダを選択\n（中に「11_交差点(Point)データ」フォルダを作成）")
+        lbl_s1 = QLabel("プロジェクトフォルダを選択")
         lbl_s1.setObjectName("StepBody")
         lbl_s1.setWordWrap(True)
         s1.addWidget(lbl_s1, 1)
@@ -456,7 +456,7 @@ class MainWindow(QMainWindow):
         s2.setContentsMargins(0, 0, 0, 0)
         s2.setSpacing(8)
 
-        lbl_s2 = QLabel("地図：左=中心/方向追加\n右=方向やり直し（中心からはクリア）")
+        lbl_s2 = QLabel("左クリック=中心/方向追加\n右クリック=方向やり直し")
         lbl_s2.setObjectName("StepBody")
         lbl_s2.setWordWrap(True)
         s2.addWidget(lbl_s2, 1)
@@ -485,7 +485,7 @@ class MainWindow(QMainWindow):
         s4.setContentsMargins(0, 0, 0, 0)
         s4.setSpacing(8)
 
-        lbl_s4 = QLabel("次の交差点へ。\n左の一覧から 編集/リネーム/削除 もOK。")
+        lbl_s4 = QLabel("次の交差点へ。\n左の一覧から\n編集/リネーム/削除 もできます。")
         lbl_s4.setObjectName("StepBody")
         lbl_s4.setWordWrap(True)
         s4.addWidget(lbl_s4, 1)
