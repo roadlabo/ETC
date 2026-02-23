@@ -3,7 +3,7 @@ import json
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QMargins, QObject, QPropertyAnimation, Qt, QTimer, QUrl, QUrlQuery, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QPropertyAnimation, Qt, QTimer, QUrl, QUrlQuery, pyqtSignal, pyqtSlot
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWebEngineCore import QWebEngineSettings
 from PyQt6.QtGui import QPixmap
@@ -346,21 +346,10 @@ class MainWindow(QMainWindow):
             x, y = self._logo_corner_pos(splash.width(), splash.height())
             splash.move(x, y)
 
-    def _make_step_card(self, step_title: str, body_widget: QWidget, indent_px: int = 0) -> QWidget:
-        wrap = QWidget()
-        wrap_l = QHBoxLayout(wrap)
-        wrap_l.setContentsMargins(QMargins(indent_px, 0, 0, 0))
-        wrap_l.setSpacing(10)
-
-        if indent_px > 0:
-            arrow = QLabel("↳")
-            arrow.setObjectName("StepArrow")
-            arrow.setAlignment(Qt.AlignmentFlag.AlignTop)
-            arrow.setContentsMargins(0, 8, 0, 0)
-            wrap_l.addWidget(arrow, 0)
-
+    def _make_step_card(self, step_title: str, body_widget: QWidget) -> QFrame:
         card = QFrame()
         card.setObjectName("StepCard")
+
         v = QVBoxLayout(card)
         v.setContentsMargins(12, 10, 12, 10)
         v.setSpacing(6)
@@ -371,8 +360,9 @@ class MainWindow(QMainWindow):
 
         v.addWidget(body_widget)
 
-        wrap_l.addWidget(card, 1)
-        return wrap
+        card.setMinimumWidth(260)
+        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        return card
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -437,35 +427,44 @@ class MainWindow(QMainWindow):
         self.btn_save = QPushButton("交差点ファイル保存")
         self.btn_save.clicked.connect(self.save_clicked)
 
-        # STEP1: project select row
+        # ---------------------------
+        # STEP row (4 cards in a row)
+        # ---------------------------
+        steps_row = QWidget()
+        steps_l = QHBoxLayout(steps_row)
+        steps_l.setContentsMargins(0, 0, 0, 0)
+        steps_l.setSpacing(10)
+
+        # STEP1 body
         step1_body = QWidget()
         s1 = QHBoxLayout(step1_body)
         s1.setContentsMargins(0, 0, 0, 0)
         s1.setSpacing(8)
 
-        lbl_s1 = QLabel("プロジェクトフォルダを選択（中に「11_交差点(Point)データ」フォルダを作成）")
+        lbl_s1 = QLabel("プロジェクトフォルダを選択\n（中に「11_交差点(Point)データ」フォルダを作成）")
         lbl_s1.setObjectName("StepBody")
+        lbl_s1.setWordWrap(True)
         s1.addWidget(lbl_s1, 1)
         s1.addWidget(self.btn_project)
         s1.addWidget(self.project_path_edit, 2)
 
-        header_vbox.addWidget(self._make_step_card("STEP1  プロジェクトフォルダ選択", step1_body, indent_px=0))
+        card1 = self._make_step_card("STEP1  フォルダ選択", step1_body)
 
-        # STEP2: map operation + clear
+        # STEP2 body
         step2_body = QWidget()
         s2 = QHBoxLayout(step2_body)
         s2.setContentsMargins(0, 0, 0, 0)
         s2.setSpacing(8)
 
-        lbl_s2 = QLabel("地図：左クリック＝中心点/方向追加　右クリック＝方向やり直し（中心からやり直す時はクリア）")
+        lbl_s2 = QLabel("地図：左=中心/方向追加\n右=方向やり直し（中心からはクリア）")
         lbl_s2.setObjectName("StepBody")
         lbl_s2.setWordWrap(True)
         s2.addWidget(lbl_s2, 1)
         s2.addWidget(self.btn_clear)
 
-        header_vbox.addWidget(self._make_step_card("STEP2  地図で中心点と方向を指定", step2_body, indent_px=18))
+        card2 = self._make_step_card("STEP2  地図で指定", step2_body)
 
-        # STEP3: name + save
+        # STEP3 body
         step3_body = QWidget()
         s3 = QHBoxLayout(step3_body)
         s3.setContentsMargins(0, 0, 0, 0)
@@ -474,25 +473,32 @@ class MainWindow(QMainWindow):
         lbl_s3 = QLabel("交差点名")
         lbl_s3.setObjectName("StepBody")
         s3.addWidget(lbl_s3)
-
         self.name_edit.setPlaceholderText("例：01○○交差点")
         s3.addWidget(self.name_edit, 1)
         s3.addWidget(self.btn_save)
 
-        header_vbox.addWidget(self._make_step_card("STEP3  交差点名を入力して保存", step3_body, indent_px=36))
+        card3 = self._make_step_card("STEP3  入力して保存", step3_body)
 
-        # STEP4: next action
+        # STEP4 body
         step4_body = QWidget()
         s4 = QHBoxLayout(step4_body)
         s4.setContentsMargins(0, 0, 0, 0)
         s4.setSpacing(8)
 
-        lbl_s4 = QLabel("次の交差点を作成するか、左の一覧を選択して 編集 / リネーム / 削除 を実行してください。")
+        lbl_s4 = QLabel("次の交差点へ。\n左の一覧から 編集/リネーム/削除 もOK。")
         lbl_s4.setObjectName("StepBody")
         lbl_s4.setWordWrap(True)
         s4.addWidget(lbl_s4, 1)
 
-        header_vbox.addWidget(self._make_step_card("STEP4  次へ（一覧から管理もOK）", step4_body, indent_px=54))
+        card4 = self._make_step_card("STEP4  次へ", step4_body)
+
+        # 4枚を横並び投入（均等に伸びる）
+        steps_l.addWidget(card1, 1)
+        steps_l.addWidget(card2, 1)
+        steps_l.addWidget(card3, 1)
+        steps_l.addWidget(card4, 1)
+
+        header_vbox.addWidget(steps_row)
         header_container = QWidget()
         header_hbox = QHBoxLayout(header_container)
         header_hbox.setContentsMargins(0, 0, 0, 0)
