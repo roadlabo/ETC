@@ -630,7 +630,8 @@ class MainWindow(QMainWindow):
         self.btn_project.setMinimumHeight(36)
         self.btn_project.setFixedWidth(90)
         self.lbl_project = QLabel("未選択"); self.lbl_project.setFont(top_font)
-        proj_w = QWidget(); proj_l = QHBoxLayout(proj_w); proj_l.setContentsMargins(0, 0, 0, 0); proj_l.setSpacing(10); proj_l.addWidget(self.btn_project); proj_l.addWidget(self.lbl_project); proj_l.addStretch(1)
+        self.lbl_project.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        proj_w = QWidget(); proj_l = QHBoxLayout(proj_w); proj_l.setContentsMargins(0, 0, 0, 0); proj_l.setSpacing(10); proj_l.addWidget(self.btn_project); proj_l.addWidget(self.lbl_project, 1)
 
         wd_w = QWidget(); wd_l = QHBoxLayout(wd_w); wd_l.setContentsMargins(0, 0, 0, 0); wd_l.setSpacing(8)
         self.chk_all = QCheckBox("ALL"); self.chk_all.setFixedWidth(56); self.chk_all.stateChanged.connect(self._on_all_weekday_changed); wd_l.addWidget(self.chk_all); wd_l.addSpacing(14)
@@ -643,7 +644,7 @@ class MainWindow(QMainWindow):
         self.spin_radius = QSpinBox(); self.spin_radius.setRange(5, 200); self.spin_radius.setValue(30)
         self.spin_radius.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons); self.spin_radius.setFixedWidth(70)
         rad_w = QWidget(); rad_l = QHBoxLayout(rad_w); rad_l.setContentsMargins(0, 0, 0, 0); rad_l.setSpacing(4)
-        m_lbl = QLabel("m（第2スクリーニング時と同一として下さい・既定30m）"); m_lbl.setStyleSheet("border:none;")
+        m_lbl = QLabel("（第2スクリーニング時と同一として下さい・既定30m）"); m_lbl.setStyleSheet("border:none;")
         lbl_radius = QLabel("半径")
         lbl_radius.setStyleSheet("border:none; color:#7cffc6;")
         lbl_m = QLabel("m")
