@@ -274,9 +274,9 @@ class MainWindow(QMainWindow):
         out_row = QHBoxLayout(); out_row.addWidget(self.output_dir); bo = QPushButton("..."); bo.clicked.connect(lambda: self._pick_dir(self.output_dir)); out_row.addWidget(bo)
 
         row = 0
-        self._add_form_row(form_grid, row, "INPUT_DIR", self._wrap(in_row), "様式1-2出力の OUT1-2 フォルダを指定（中に日別ZIP / data.csv）")
+        self._add_form_row(form_grid, row, "生データフォルダ", self._wrap(in_row), "様式1-2出力の OUT1-2 フォルダを指定（中に日別ZIP / data.csv）")
         row += 1
-        self._add_form_row(form_grid, row, "OUTPUT_DIR", self._wrap(out_row), "第1スクリーニング保存先　後続分析で共通利用するのでプロジェクトフォルダ外を推奨")
+        self._add_form_row(form_grid, row, "出力フォルダ", self._wrap(out_row), "第1スクリーニング保存先　後続分析で共通利用するのでプロジェクトフォルダ外を推奨")
         row += 1
         self._add_form_row(form_grid, row, "TERM", self.term_name, "出力ファイル名の先頭識別子（例 R7_2）　第1スクリーニングの出力ファイル名は「[TERM名]_[運行ID].csv」となります。")
         row += 1
