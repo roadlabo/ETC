@@ -274,7 +274,7 @@ class MainWindow(QMainWindow):
         out_row = QHBoxLayout(); out_row.addWidget(self.output_dir); bo = QPushButton("..."); bo.clicked.connect(lambda: self._pick_dir(self.output_dir)); out_row.addWidget(bo)
 
         row = 0
-        self._add_form_row(form_grid, row, "生データフォルダ", self._wrap(in_row), "ETC2.0プローブデータの生データの内、様式1-2出力の「OUT1-2」フォルダを指定  /n この中には data.csv が圧縮されている複数のZIPファイルが格納されているはずです。")
+        self._add_form_row(form_grid, row, "生データフォルダ", self._wrap(in_row), "ETC2.0プローブデータの生データの内、様式1-2出力の「OUT1-2」フォルダを指定  \n この中には data.csv が圧縮されている複数のZIPファイルが格納されているはずです。")
         row += 1
         self._add_form_row(form_grid, row, "出力フォルダ", self._wrap(out_row), "第1スクリーニング保存先　後続分析で共通利用するのでプロジェクトフォルダ外を推奨")
         row += 1
