@@ -209,15 +209,16 @@ class MainWindow(QMainWindow):
                 pass
 
         splash = getattr(self, "splash", None)
-        phase = getattr(self, "_logo_phase", "")
+        if splash is None:
+            return
 
         # 中央表示中
-        if splash and phase == "center":
+        if getattr(self, "_logo_phase", "") == "center":
             x, y = self._logo_center_pos(splash.width(), splash.height())
             splash.move(x, y)
 
         # 右上常駐中
-        if splash and phase == "corner" and getattr(self, "_corner_logo_visible", False):
+        if getattr(self, "_logo_phase", "") == "corner" and getattr(self, "_corner_logo_visible", False):
             x, y = self._logo_corner_pos(splash.width(), splash.height())
             splash.move(x, y)
 

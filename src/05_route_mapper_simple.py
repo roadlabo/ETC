@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import socket
 import sys
@@ -15,7 +16,7 @@ import pandas as pd
 NOGUI_MODE = "--nogui" in sys.argv[1:]
 
 if not NOGUI_MODE:
-    from PyQt6.QtCore import QPropertyAnimation, Qt, QTimer, QUrl
+    from PyQt6.QtCore import QObject, QPropertyAnimation, QThread, Qt, QTimer, QUrl, pyqtSignal
     from PyQt6.QtWebEngineCore import QWebEngineSettings
     from PyQt6.QtGui import QPixmap
     from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -39,10 +40,11 @@ if not NOGUI_MODE:
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 else:
     Figure = FigureCanvas = object
-    QPropertyAnimation = QTimer = Qt = QUrl = QWebEngineSettings = QWebEngineView = object
+    QObject = QPropertyAnimation = QThread = QTimer = Qt = QUrl = QWebEngineSettings = QWebEngineView = object
     QApplication = QFileDialog = QGraphicsOpacityEffect = QHBoxLayout = QLabel = QMainWindow = object
     QMessageBox = QPixmap = QPushButton = QSplitter = QVBoxLayout = QWidget = object
     QListWidget = QListWidgetItem = QProgressDialog = object
+    pyqtSignal = lambda *args, **kwargs: None
 
 
 # ============================================================
@@ -200,6 +202,62 @@ def close_busy_dialog(dlg: Optional[QProgressDialog]) -> None:
         dlg.close()
     except Exception:
         pass
+
+
+class LoadCsvWorker(QObject):
+    finished = pyqtSignal(object, dict, str)  # df, payload, error
+
+    def __init__(self, csv_path: Path):
+        super().__init__()
+        self.csv_path = csv_path
+
+    def run(self) -> None:
+        try:
+            df = read_route_data(self.csv_path)
+            if df is None or df.empty:
+                self.finished.emit(df, {}, "empty")
+                return
+
+            lat0 = float(df.iloc[0]["lat"])
+            lon0 = float(df.iloc[0]["lon"])
+
+            points = []
+            for r in df.itertuples(index=False):
+                dt = parse_gps_time(getattr(r, "time"))
+                time_text = "-"
+                if dt:
+                    time_text = f"{dt.year}/{dt.month:02d}/{dt.day:02d} {dt.hour:02d}:{dt.minute:02d}:{dt.second:02d}"
+
+                sp = getattr(r, "speed")
+                if sp is None or (isinstance(sp, float) and math.isnan(sp)):
+                    spv = None
+                else:
+                    spv = float(sp)
+
+                points.append({
+                    "lat": float(getattr(r, "lat")),
+                    "lon": float(getattr(r, "lon")),
+                    "flag": int(getattr(r, "flag")),
+                    "time_text": time_text,
+                    "speed": spv,
+                })
+
+            segs = split_segments([(p["lat"], p["lon"], p["flag"]) for p in points])
+            segs2 = [[[lat, lon] for (lat, lon) in seg] for seg in segs]
+
+            lats = [p["lat"] for p in points]
+            lons = [p["lon"] for p in points]
+            bounds = [[min(lats), min(lons)], [max(lats), max(lons)]]
+
+            payload = {
+                "center": {"lat": lat0, "lon": lon0},
+                "points": points,
+                "segments": segs2,
+                "bounds": bounds,
+            }
+            self.finished.emit(df, payload, "")
+        except Exception as exc:
+            self.finished.emit(None, {}, str(exc))
 
 
 LEAFLET_HTML = r"""
@@ -621,6 +679,8 @@ class RouteMapperWindow(QMainWindow):
         self.files: List[Path] = []
         self._msg_loading = None
         self.current_df: Optional[pd.DataFrame] = None
+        self._load_thread: Optional[QThread] = None
+        self._worker: Optional[LoadCsvWorker] = None
 
         self._build_ui()
         self.splash = None
@@ -921,76 +981,60 @@ class RouteMapperWindow(QMainWindow):
             return
         csv_path = self.files[row]
 
-        try:
-            df = read_route_data(csv_path)
-        except Exception as exc:
-            QMessageBox.critical(self, "Read error", f"Failed to load CSV:\n{csv_path}\n\n{exc}")
-            self.status.setText(f"{csv_path.name}: failed to load")
-            self._set_info_defaults()
-            self.plot.update_plot(pd.DataFrame())
-            return
+        close_busy_dialog(getattr(self, "_msg_loading", None))
+        self._msg_loading = make_busy_dialog("処理中", "データ読込中…")
 
-        if df.empty:
-            QMessageBox.information(self, "Info", "No valid points inside Japan were found in this file.")
-            self.status.setText(f"{csv_path.name}: no valid points")
-            self._set_info_defaults()
-            self.plot.update_plot(pd.DataFrame())
-            return
+        if getattr(self, "_load_thread", None):
+            try:
+                self._load_thread.quit()
+                self._load_thread.wait(50)
+            except Exception:
+                pass
 
-        # update info (05既存機能維持)
-        self.lbl_count.setText(f"点数: {len(df)}")
+        self._load_thread = QThread(self)
+        self._worker = LoadCsvWorker(csv_path)
+        self._worker.moveToThread(self._load_thread)
+        self._load_thread.started.connect(self._worker.run)
 
-        times = [parse_gps_time(v) for v in df["time"].tolist()]
-        times2 = [t for t in times if t]
-        self.lbl_range.setText(f"GPS時刻: {fmt_range(min(times2), max(times2))}" if times2 else "GPS時刻: -")
+        def on_done(df: Optional[pd.DataFrame], payload: dict, err: str) -> None:
+            close_busy_dialog(self._msg_loading)
+            self._msg_loading = None
 
-        self.lbl_type.setText(f"種別: {summarize_set(df['type'].astype(str).tolist(), TYPE_MAP)}")
-        self.lbl_use.setText(f"用途: {summarize_set(df['use'].astype(str).tolist(), USE_MAP)}")
+            if err == "empty":
+                self.status.setText(f"{csv_path.name}: no valid points")
+                self._set_info_defaults()
+                self.plot.update_plot(pd.DataFrame())
+            elif err:
+                QMessageBox.critical(self, "Read error", f"Failed to load CSV:\n{csv_path}\n\n{err}")
+                self.status.setText(f"{csv_path.name}: failed to load")
+                self._set_info_defaults()
+                self.plot.update_plot(pd.DataFrame())
+            else:
+                self.lbl_count.setText(f"点数: {len(df)}")
 
-        self.status.setText(f"Rendering: {csv_path.name} ({len(df)} points)")
+                times = [parse_gps_time(v) for v in df["time"].tolist()]
+                times2 = [t for t in times if t]
+                self.lbl_range.setText(f"GPS時刻: {fmt_range(min(times2), max(times2))}" if times2 else "GPS時刻: -")
 
-        # map payload
-        lat0 = float(df.iloc[0]["lat"])
-        lon0 = float(df.iloc[0]["lon"])
+                self.lbl_type.setText(f"種別: {summarize_set(df['type'].astype(str).tolist(), TYPE_MAP)}")
+                self.lbl_use.setText(f"用途: {summarize_set(df['use'].astype(str).tolist(), USE_MAP)}")
 
-        points = []
-        for r in df.itertuples(index=False):
-            dt = parse_gps_time(getattr(r, "time"))
-            time_text = "-"
-            if dt:
-                time_text = f"{dt.year}/{dt.month:02d}/{dt.day:02d} {dt.hour:02d}:{dt.minute:02d}:{dt.second:02d}"
+                self.status.setText(f"Rendering: {csv_path.name} ({len(df)} points)")
 
-            points.append({
-                "lat": float(getattr(r, "lat")),
-                "lon": float(getattr(r, "lon")),
-                "flag": int(getattr(r, "flag")),
-                "time_text": time_text,
-                "speed": None if (getattr(r, "speed") is None or (isinstance(getattr(r, "speed"), float) and math.isnan(getattr(r, "speed")))) else float(getattr(r, "speed")),
-            })
+                self._run_js(f"window._routeMapper.showRoute({json.dumps(payload)});")
+                self.plot.update_plot(df)
 
-        segs = split_segments([(p["lat"], p["lon"], p["flag"]) for p in points])
-        segs2 = [[[lat, lon] for (lat, lon) in seg] for seg in segs]
+            try:
+                if self._load_thread is not None:
+                    self._load_thread.quit()
+                    self._load_thread.wait(200)
+            except Exception:
+                pass
+            self._worker = None
+            self._load_thread = None
 
-        # bounds (全点)
-        lats = [p["lat"] for p in points]
-        lons = [p["lon"] for p in points]
-        bounds = [[min(lats), min(lons)], [max(lats), max(lons)]]
-
-        payload = {
-            "center": {"lat": lat0, "lon": lon0},
-            "points": points,
-            "segments": segs2,
-            "bounds": bounds,
-        }
-
-        import json
-        self._run_js(
-            f"window._routeMapper.showRoute({json.dumps(payload)});",
-            on_ready=lambda: (close_busy_dialog(self._msg_loading), setattr(self, "_msg_loading", None)),
-        )
-
-        # plot
-        self.plot.update_plot(df)
+        self._worker.finished.connect(on_done)
+        self._load_thread.start()
 
 
 def main(argv: Sequence[str]) -> None:
