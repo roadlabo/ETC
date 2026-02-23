@@ -35,8 +35,11 @@ from PyQt6.QtWidgets import (
 
 APP_TITLE = "21_第２スクリーニング（指定交差点を通過するトリップの抽出）"
 
-# --- STEP box fixed width tuning ---
-STEP_BOX_W = 360
+# --- STEP box fixed width tuning (independent) ---
+STEP1_W = 420   # プロジェクト
+STEP2_W = 420   # 第1スクリーニング
+STEP3_W = 360   # 半径
+STEP4_W = 260   # 実行ボタン
 
 UI_LOGO_FILENAME = "logo_21_UI_point_trip_extractor.png"
 
@@ -479,8 +482,10 @@ class MainWindow(QMainWindow):
         self.step2_box = StepBox("STEP 2  第1スクリーニングデータの選択", in_w)
         b3 = StepBox("STEP 3  交差点通過判定半径（この半径以内を通過したらHIT）", rad_w)
         b4 = StepBox("STEP 4  実行", self.btn_run)
-        for b in (self.step1_box, self.step2_box, b3, b4):
-            b.setFixedWidth(STEP_BOX_W)
+        self.step1_box.setFixedWidth(STEP1_W)
+        self.step2_box.setFixedWidth(STEP2_W)
+        b3.setFixedWidth(STEP3_W)
+        b4.setFixedWidth(STEP4_W)
         flow_grid.addWidget(self.step1_box, 0, 0); flow_grid.addWidget(self.step2_box, 0, 1); flow_grid.addWidget(b3, 0, 2); flow_grid.addWidget(b4, 0, 3)
         self._flow_spacer = QWidget()
         self._flow_spacer.setFixedWidth(380)
