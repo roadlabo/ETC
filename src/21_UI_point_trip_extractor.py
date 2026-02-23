@@ -456,6 +456,7 @@ class MainWindow(QMainWindow):
         self.chk_recursive = QCheckBox("サブフォルダも含める")
         self.chk_recursive.setChecked(False)
         self.chk_recursive.setStyleSheet("color:#7cffc6;")
+        self.chk_recursive.stateChanged.connect(self._on_recursive_toggled)
         in_w = QWidget(); in_l = QHBoxLayout(in_w)
         in_l.setContentsMargins(0, 0, 0, 0)
         in_l.setSpacing(10)
@@ -478,6 +479,7 @@ class MainWindow(QMainWindow):
         rad_l.addWidget(lbl_m)
         rad_l.addStretch(1)
         self.btn_run = QPushButton("分析スタート"); self.btn_run.clicked.connect(self.run_screening)
+        self.btn_run.setEnabled(False)
         self.step1_box = StepBox("STEP 1  プロジェクトフォルダの選択", proj_w)
         self.step2_box = StepBox("STEP 2  第1スクリーニングデータの選択", in_w)
         b3 = StepBox("STEP 3  交差点通過判定半径（この半径以内を通過したらHIT）", rad_w)
@@ -707,12 +709,53 @@ class MainWindow(QMainWindow):
                 "警告",
                 "第1スクリーニング済みフォルダを選択してください。\n（CSVデータが見つかりません）",
             )
+            self._clear_input_state(reason="input cleared: no CSV found on select_input")
             return
 
         self.input_dir = tmp_dir
         self.lbl_input.setText(self.input_dir.name)
+        self.btn_run.setEnabled(True)
         self.log_info(f"input set: {self.input_dir} (recursive={recursive})")
         self.tele["opid"].setText(f"第1スクリーニング数（運行ID数）: {csv_count:,}")
+
+    def _clear_input_state(self, *, reason: str | None = None) -> None:
+        self.input_dir = None
+        self.lbl_input.setText("未選択")
+        self.tele["opid"].setText("第1スクリーニング数（運行ID数）: -")
+        self.total_files = 0
+        self.done_files = 0
+        self._eta_done = 0
+        self._eta_total = 0
+        self.progress_bar.setValue(0)
+        self.lbl_progress.setText("進捗ファイル: 0/0（0.0%）")
+        self.time_elapsed_big.setText("経過 00:00:00")
+        self.time_eta_big.setText("残り --:--:--")
+        self.btn_run.setEnabled(False)
+
+        if reason:
+            self.log_warn(reason)
+
+    def _on_recursive_toggled(self, _state: int) -> None:
+        if not self.input_dir:
+            return
+
+        recursive = bool(self.chk_recursive.isChecked())
+        csv_count = self._count_first_screening_opids_fast(self.input_dir, recursive)
+
+        if csv_count <= 0:
+            QMessageBox.warning(
+                self,
+                "注意",
+                "この設定ではCSVファイルがありません。\n"
+                "（サブフォルダを含めない設定で0件になりました）\n\n"
+                "第1スクリーニングデータのフォルダを選び直してください。",
+            )
+            self._clear_input_state(reason="input cleared: no CSV under current recursive setting")
+            return
+
+        self.tele["opid"].setText(f"第1スクリーニング数（運行ID数）: {csv_count:,}")
+        self.log_info(f"input re-count: {self.input_dir} recursive={recursive} csv={csv_count:,}")
+        self.btn_run.setEnabled(True)
 
     def _count_first_screening_opids_fast(self, folder: Path, recursive: bool) -> int:
         if recursive:
@@ -850,7 +893,16 @@ class MainWindow(QMainWindow):
         self.proc = QProcess(self)
         self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
         self.proc.setProgram(sys.executable)
-        self.proc.setArguments(["-u", str(script21), "--project", str(self.project_dir), "--input", str(self.input_dir), "--targets", *targets, "--radius-m", str(self.spin_radius.value())])
+        args = [
+            "-u", str(script21),
+            "--project", str(self.project_dir),
+            "--input", str(self.input_dir),
+            "--targets", *targets,
+            "--radius-m", str(self.spin_radius.value()),
+        ]
+        if recursive:
+            args.append("--recursive")
+        self.proc.setArguments(args)
         self.proc.readyReadStandardOutput.connect(self._on_stdout)
         self.proc.readyReadStandardError.connect(self._on_stderr)
         self.proc.finished.connect(self._on_finished)
