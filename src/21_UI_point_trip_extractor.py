@@ -430,10 +430,20 @@ class MainWindow(QMainWindow):
         self.flow_host = QWidget()
         flow_grid = QGridLayout(self.flow_host)
         flow_grid.setContentsMargins(0, 0, 0, 0); flow_grid.setHorizontalSpacing(18)
-        self.btn_project = QPushButton("プロジェクトを選ぶ"); self.btn_project.clicked.connect(self.select_project)
+        self.btn_project = QPushButton("選択")
+        self.btn_project.clicked.connect(self.select_project)
+        self.btn_project.setFixedWidth(90)
         self.lbl_project = QLabel("未選択")
-        proj_w = QWidget(); proj_l = QHBoxLayout(proj_w); proj_l.setContentsMargins(0, 0, 0, 0); proj_l.addWidget(self.btn_project); proj_l.addWidget(self.lbl_project)
-        self.btn_input = QPushButton("第1スクリーニングを選ぶ"); self.btn_input.clicked.connect(self.select_input)
+        proj_w = QWidget()
+        proj_l = QHBoxLayout(proj_w)
+        proj_l.setContentsMargins(0, 0, 0, 0)
+        proj_l.setSpacing(10)
+        proj_l.addWidget(self.btn_project)
+        proj_l.addWidget(self.lbl_project)
+        proj_l.addStretch(1)
+        self.btn_input = QPushButton("選択")
+        self.btn_input.clicked.connect(self.select_input)
+        self.btn_input.setFixedWidth(90)
         self.lbl_input = QLabel("未選択")
         self.chk_recursive = QCheckBox("サブフォルダも含める")
         self.chk_recursive.setChecked(False)
@@ -453,16 +463,18 @@ class MainWindow(QMainWindow):
         rad_l.setSpacing(6)
         lbl_m = QLabel("m")
         lbl_m.setStyleSheet("border: none; color: #7cffc6;")
-        rad_l.addWidget(QLabel("半径"))
+        lbl_radius = QLabel("半径")
+        lbl_radius.setStyleSheet("border:none; color:#7cffc6;")
+        rad_l.addWidget(lbl_radius)
         rad_l.addWidget(self.spin_radius)
         rad_l.addWidget(lbl_m)
         rad_l.addStretch(1)
         self.btn_run = QPushButton("分析スタート"); self.btn_run.clicked.connect(self.run_screening)
-        b1 = StepBox("STEP1 プロジェクトフォルダの選択", proj_w)
-        b2 = StepBox("STEP2 第1スクリーニングデータの選択", in_w)
+        self.step1_box = StepBox("STEP1 プロジェクトフォルダの選択", proj_w)
+        self.step2_box = StepBox("STEP2 第1スクリーニングデータの選択", in_w)
         b3 = StepBox("STEP3 交差点通過判定半径（この半径以内を通過したトリップを抽出します）", rad_w)
         b4 = StepBox("STEP4 第2スクリーニング実行", self.btn_run)
-        flow_grid.addWidget(b1, 0, 0); flow_grid.addWidget(b2, 0, 1); flow_grid.addWidget(b3, 0, 2); flow_grid.addWidget(b4, 0, 3)
+        flow_grid.addWidget(self.step1_box, 0, 0); flow_grid.addWidget(self.step2_box, 0, 1); flow_grid.addWidget(b3, 0, 2); flow_grid.addWidget(b4, 0, 3)
         self._flow_spacer = QWidget()
         self._flow_spacer.setFixedWidth(380)
         flow_grid.addWidget(self._flow_spacer, 0, 4)
@@ -471,7 +483,7 @@ class MainWindow(QMainWindow):
         flow_grid.setColumnStretch(2, 0)
         flow_grid.setColumnStretch(3, 0)
         flow_grid.setColumnStretch(4, 0)
-        self.flow.set_steps([b1, b2, b3, b4])
+        self.flow.set_steps([self.step1_box, self.step2_box, b3, b4])
         flow_stack = QFrame()
         flow_stack.setObjectName("flowStack")
         stack_l = QStackedLayout(flow_stack)
@@ -479,6 +491,7 @@ class MainWindow(QMainWindow):
         stack_l.setStackingMode(QStackedLayout.StackingMode.StackAll)
         stack_l.addWidget(self.flow_host)
         stack_l.addWidget(self.flow)
+        QTimer.singleShot(0, self._sync_step12_width)
         v.addWidget(flow_stack)
 
         mid_split = QSplitter(Qt.Orientation.Horizontal)
@@ -551,9 +564,31 @@ class MainWindow(QMainWindow):
             }
             /* カード内のビューアーボタンは高さが低いので padding だけ詰める（色・枠・挙動は共通のまま） */
             QPushButton#btnViewer { padding: 2px 10px; }
+            QCheckBox { color: #7cffc6; spacing: 8px; }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border: 2px solid #00ff99;
+                border-radius: 4px;
+                background: #0a120f;
+            }
+            QCheckBox::indicator:checked {
+                background: #00ff99;
+            }
+            QCheckBox::indicator:checked:hover { background: #7cffc6; }
             QFrame { border: 1px solid #1c4f33; border-radius: 4px; }
             QFrame#crossCard { border-radius: 8px; }
         """)
+
+    def _sync_step12_width(self) -> None:
+        if not getattr(self, "step1_box", None) or not getattr(self, "step2_box", None):
+            return
+        w = int(self.step1_box.sizeHint().width() * 0.9)
+        w = max(260, w)
+        self.step1_box.setFixedWidth(w)
+        self.step2_box.setFixedWidth(w)
+        self.step1_box.updateGeometry()
+        self.step2_box.updateGeometry()
 
     def _open_trip_viewer(self, cross_name: str) -> None:
         if not self.project_dir:
