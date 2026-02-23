@@ -276,8 +276,8 @@ class CrossCard(QFrame):
         self.locked = False
         self.state = "待機"
         self.setObjectName("crossCard")
-        self.setMinimumWidth(190)
-        self.setMaximumWidth(215)
+        self.setMinimumWidth(260)
+        self.setMaximumWidth(260)
         self.setFixedHeight(220)
         v = QVBoxLayout(self)
         self.title = QLabel(name)
@@ -439,7 +439,7 @@ class MainWindow(QMainWindow):
         lv.addWidget(QLabel("交差点アイコン一覧"))
         self.cross_container = QWidget()
         self.cross_container.setContentsMargins(0, 0, 0, 0)
-        self.cross_flow = FlowLayout(self.cross_container, spacing=2)
+        self.cross_flow = FlowLayout(self.cross_container, margin=0, spacing=4)
         self.cross_container.setLayout(self.cross_flow)
         self.cross_scroll = QScrollArea(); self.cross_scroll.setWidgetResizable(True); self.cross_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); self.cross_scroll.setWidget(self.cross_container)
         lv.addWidget(self.cross_scroll)
@@ -552,7 +552,18 @@ class MainWindow(QMainWindow):
         d = QFileDialog.getExistingDirectory(self, "プロジェクトフォルダを選択", str(Path.cwd()))
         if not d:
             return
-        self.project_dir = Path(d).resolve(); self.lbl_project.setText(self.project_dir.name)
+        tmp_dir = Path(d).resolve()
+        cross_dir, _ = resolve_project_paths(tmp_dir)
+        if not cross_dir.exists():
+            QMessageBox.warning(
+                self,
+                "警告",
+                "プロジェクトフォルダを指定してください。\n（11_交差点(Point)データ フォルダが見つかりません）",
+            )
+            return
+
+        self.project_dir = tmp_dir
+        self.lbl_project.setText(self.project_dir.name)
         self.log_info(f"project set: {self.project_dir}")
         self.scan_crossroads()
 
@@ -560,10 +571,20 @@ class MainWindow(QMainWindow):
         d = QFileDialog.getExistingDirectory(self, "第1スクリーニングデータフォルダを選択", str(Path.cwd()))
         if not d:
             return
-        self.input_dir = Path(d).resolve(); self.lbl_input.setText(self.input_dir.name)
+        tmp_dir = Path(d).resolve()
+        csv_count = sum(1 for _ in tmp_dir.rglob("*.csv"))
+        if csv_count == 0:
+            QMessageBox.warning(
+                self,
+                "警告",
+                "第1スクリーニング済みフォルダを選択してください。\n（CSVデータが見つかりません）",
+            )
+            return
+
+        self.input_dir = tmp_dir
+        self.lbl_input.setText(self.input_dir.name)
         self.log_info(f"input set: {self.input_dir}")
-        n = self._count_first_screening_opids_fast(self.input_dir)
-        self.tele["opid"].setText(f"第1スクリーニング数（運行ID数）: {n:,}")
+        self.tele["opid"].setText(f"第1スクリーニング数（運行ID数）: {csv_count:,}")
 
     def _count_first_screening_opids_fast(self, folder: Path) -> int:
         return sum(1 for _ in folder.rglob("*.csv"))
@@ -636,6 +657,25 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "未設定", "②第1スクリーニングデータフォルダを選択してください。")
             return
         targets = self._collect_targets()
+        _cross_dir, out_dir = resolve_project_paths(self.project_dir)
+        exists_any = False
+        for name in targets:
+            p = out_dir / name
+            if p.exists() and any(p.glob("*.csv")):
+                exists_any = True
+                break
+
+        if exists_any:
+            ret = QMessageBox.question(
+                self,
+                "確認",
+                "既に第2スクリーニングデータが存在します。\nすべて上書きしますか？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+
         if not targets:
             QMessageBox.information(self, "対象なし", "実行対象の交差点が選択されていません。")
             return
