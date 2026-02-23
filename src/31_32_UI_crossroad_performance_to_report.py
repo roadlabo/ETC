@@ -1,16 +1,17 @@
 import os
 import re
 import sys
+import math
+import time
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
 os.environ.setdefault("QT_LOGGING_RULES", "qt.text.font.db=false")
 
-from PyQt6.QtCore import QProcess, QPropertyAnimation, QPoint, QRect, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QProcess, QPropertyAnimation, QPoint, QRect, QSize, Qt, QTimer
 from PyQt6.QtGui import QFont, QFontMetrics, QPainter, QPixmap, QColor, QPen
 from PyQt6.QtWidgets import (
-    QAbstractItemView,
     QApplication,
     QCheckBox,
     QDialog,
@@ -19,18 +20,18 @@ from PyQt6.QtWidgets import (
     QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
-    QHeaderView,
+    QLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
+    QScrollArea,
+    QSplitter,
     QSizePolicy,
     QSpinBox,
-    QStyle,
-    QStyleOptionButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
@@ -43,80 +44,10 @@ FOLDER_32OUT = "32_交差点レポート"
 WEEKDAY_KANJI = ["月", "火", "水", "木", "金", "土", "日"]
 WEEKDAY_KANJI_TO_ABBR = {"月": "MON", "火": "TUE", "水": "WED", "木": "THU", "金": "FRI", "土": "SAT", "日": "SUN"}
 
-COL_RUN = 0
-COL_NAME = 1
-COL_CROSS_CSV = 2
-COL_CROSS_JPG = 3
-COL_S2_DIR = 4
-COL_S2_CSV = 5
-COL_OUT31 = 6
-COL_OUT32 = 7
-COL_STATUS = 8
-COL_DONE_FILES = 9
-COL_TOTAL_FILES = 10
-COL_WEEKDAY = 11
-COL_SPLIT = 12
-COL_TARGET = 13
-COL_OK = 14
-COL_UNK = 15
-COL_NOTPASS = 16
-
-CENTER_ALIGN_COLS = {COL_RUN, COL_CROSS_CSV, COL_CROSS_JPG, COL_S2_DIR, COL_S2_CSV, COL_OUT31, COL_OUT32}
-RIGHT_ALIGN_COLS = {COL_DONE_FILES, COL_TOTAL_FILES, COL_WEEKDAY, COL_SPLIT, COL_TARGET, COL_OK, COL_UNK, COL_NOTPASS}
 RE_PROGRESS = re.compile(r"進捗:\s*(\d+)\s*/\s*(\d+)")
 RE_STATS = re.compile(r"曜日後:\s*(\d+).*?行数:\s*(\d+).*?成功:\s*(\d+).*?不明:\s*(\d+).*?不通過:\s*(\d+)")
 RE_DONE = re.compile(r"完了:\s*ファイル=(\d+).*?曜日後=(\d+).*?行数=(\d+).*?成功=(\d+).*?不明=(\d+).*?不通過=(\d+)")
 RE_LEVEL = re.compile(r"\[(INFO|WARN|WARNING|ERROR|DEBUG)\]")
-
-
-class RunHeaderView(QHeaderView):
-    toggle_all_requested = pyqtSignal(bool)
-
-    def __init__(self, orientation, parent=None, run_col=0):
-        super().__init__(orientation, parent)
-        self.run_col = run_col
-        self._state = Qt.CheckState.Unchecked
-        self.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setSectionsClickable(True)
-
-    def set_run_state(self, state: Qt.CheckState):
-        self._state = state
-        self.viewport().update()
-
-    def _checkbox_rect(self, rect: QRect) -> QRect:
-        return QRect(rect.center().x() - 26, rect.center().y() + 6, 16, 16)
-
-    def paintSection(self, painter: QPainter, rect: QRect, logicalIndex: int):
-        super().paintSection(painter, rect, logicalIndex)
-        if logicalIndex != self.run_col:
-            return
-        painter.save()
-        painter.drawText(rect.adjusted(2, 2, -2, -2), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, "分析対象")
-        opt = QStyleOptionButton()
-        opt.state = QStyle.StateFlag.State_Enabled
-        opt.state |= {
-            Qt.CheckState.Checked: QStyle.StateFlag.State_On,
-            Qt.CheckState.PartiallyChecked: QStyle.StateFlag.State_NoChange,
-            Qt.CheckState.Unchecked: QStyle.StateFlag.State_Off,
-        }[self._state]
-        cb_rect = self._checkbox_rect(rect)
-        opt.rect = cb_rect
-        self.style().drawControl(QStyle.ControlElement.CE_CheckBox, opt, painter, self)
-        painter.drawText(QRect(cb_rect.right() + 4, cb_rect.top() - 1, rect.right() - cb_rect.right() - 6, cb_rect.height() + 2), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "ALL")
-        painter.restore()
-
-    def _section_rect(self, logical_index: int) -> QRect:
-        return QRect(self.sectionViewportPosition(logical_index), 0, self.sectionSize(logical_index), self.height())
-
-    def mousePressEvent(self, event):
-        idx = self.logicalIndexAt(event.pos())
-        if idx == self.run_col:
-            sec_rect = self._section_rect(idx)
-            if self._checkbox_rect(sec_rect).contains(event.pos()) or sec_rect.contains(event.pos()):
-                self.toggle_all_requested.emit(self._state != Qt.CheckState.Checked)
-                event.accept()
-                return
-        super().mousePressEvent(event)
 
 
 class StepBox(QFrame):
@@ -209,6 +140,165 @@ class FlowGuide(QWidget):
         p.end()
 
 
+
+
+def format_hhmmss(total_sec: float) -> str:
+    sec = max(0, int(total_sec + 0.5))
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    s = sec % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+class FlowLayout(QLayout):
+    def __init__(self, parent=None, margin=0, spacing=4):
+        super().__init__(parent)
+        self.item_list = []
+        self.setContentsMargins(margin, margin, margin, margin)
+        self._hspace = spacing
+        self._vspace = spacing
+
+    def addItem(self, item): self.item_list.append(item)
+    def count(self): return len(self.item_list)
+    def itemAt(self, index): return self.item_list[index] if 0 <= index < len(self.item_list) else None
+    def takeAt(self, index): return self.item_list.pop(index) if 0 <= index < len(self.item_list) else None
+    def expandingDirections(self): return Qt.Orientation(0)
+    def hasHeightForWidth(self): return True
+    def heightForWidth(self, width): return self.do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self.do_layout(rect, False)
+
+    def sizeHint(self): return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self.item_list:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def do_layout(self, rect, test_only):
+        x = rect.x(); y = rect.y(); line_height = 0
+        for item in self.item_list:
+            next_x = x + item.sizeHint().width() + self._hspace
+            if next_x - self._hspace > rect.right() and line_height > 0:
+                x = rect.x(); y += line_height + self._vspace
+                next_x = x + item.sizeHint().width() + self._hspace
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
+            x = next_x
+            line_height = max(line_height, item.sizeHint().height())
+        return y + line_height - rect.y()
+
+
+class SweepWidget(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.angle = 0
+        self.setMinimumHeight(140)
+
+    def tick(self) -> None:
+        self.angle = (self.angle + 7) % 360
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor("#050b09"))
+        p.setPen(QPen(QColor("#1b4f2f")))
+        r = min(self.width(), self.height()) // 2 - 8
+        c = self.rect().center()
+        p.drawEllipse(c, r, r)
+        p.drawEllipse(c, int(r * 0.66), int(r * 0.66))
+        p.drawEllipse(c, int(r * 0.33), int(r * 0.33))
+        p.setPen(QPen(QColor("#56d27f"), 2))
+        rad = self.angle * math.pi / 180
+        x = int(c.x() + r * math.cos(rad))
+        y = int(c.y() - r * math.sin(rad))
+        p.drawLine(c.x(), c.y(), x, y)
+
+
+class CrossCardPerf(QFrame):
+    def __init__(self, name: str):
+        super().__init__()
+        self.name = name
+        self.selected = True
+        self.locked = False
+        self.data = {"done": 0, "total": 0, "weekday": 0, "split": 0, "target": 0, "ok": 0, "unk": 0, "notpass": 0}
+        self.flags = {"has_csv": False, "has_jpg": False, "has_s2_dir": False, "s2_csv": 0, "has_out31": False, "has_out32": False}
+        self.paths: dict[str, str] = {}
+        self.state = "待機"
+        self.setObjectName("crossCard")
+        self.setMinimumWidth(270); self.setMaximumWidth(270); self.setFixedHeight(300)
+        v = QVBoxLayout(self); v.setSpacing(6); v.setContentsMargins(8, 8, 8, 8)
+        self.title = QLabel(name)
+        ft = self.title.font(); ft.setPointSize(max(12, ft.pointSize() + 2)); ft.setBold(True); self.title.setFont(ft)
+        self.lbl_select = QLabel()
+        self.lbl_flags = QLabel(); self.lbl_s2 = QLabel(); self.lbl_out = QLabel(); self.lbl_progress = QLabel(); self.lbl_stats = QLabel(); self.lbl_state = QLabel()
+        self.btn_report = QPushButton("report.xlsx を開く"); self.btn_perf = QPushButton("performance.csv を開く")
+        for b in (self.btn_report, self.btn_perf):
+            b.setMinimumHeight(28); b.setEnabled(False)
+        self.btn_report.clicked.connect(lambda: self._open_path("out32", "report.xlsx"))
+        self.btn_perf.clicked.connect(lambda: self._open_path("out31", "performance.csv"))
+        for w in [self.title, self.lbl_select, self.lbl_flags, self.lbl_s2, self.lbl_out, self.lbl_progress, self.lbl_stats, self.lbl_state, self.btn_report, self.btn_perf]:
+            v.addWidget(w)
+        self.apply_state("待機")
+
+    def mousePressEvent(self, event):
+        w = self.childAt(event.pos())
+        if isinstance(w, QPushButton) or self.locked:
+            return
+        self.selected = not self.selected
+        self.apply_state(self.state)
+
+    def _open_path(self, key: str, label: str):
+        p = Path(self.paths.get(key, ""))
+        if not p.exists():
+            QMessageBox.information(self, "情報", f"{label} が見つかりません。")
+            return
+        os.startfile(str(p))
+
+    def set_locked(self, locked: bool):
+        self.locked = locked
+
+    def set_flags(self, *, has_csv: bool, has_jpg: bool, has_s2_dir: bool, s2_csv: int, has_out31: bool, has_out32: bool):
+        self.flags.update(locals())
+        self.flags.pop('self',None)
+        self.lbl_flags.setText(f"交差点CSV/JPG: {'有' if has_csv else '無'} / {'有' if has_jpg else '無'}")
+        self.lbl_s2.setText(f"S2フォルダ/S2 CSV数: {'有' if has_s2_dir else '無'} / {s2_csv:,}")
+        self.lbl_out.setText(f"performance.csv/report.xlsx: {'有' if has_out31 else '無'} / {'有' if has_out32 else '無'}")
+        self.btn_perf.setEnabled(has_out31)
+        self.btn_report.setEnabled(has_out32)
+
+    def set_progress(self, done: int, total: int):
+        self.data['done']=done; self.data['total']=total
+        pct = (done / total * 100.0) if total else 0.0
+        self.lbl_progress.setText(f"進捗ファイル: {done:,}/{total:,} ({pct:.1f}%)")
+
+    def set_stats(self, weekday: int, split: int, target: int, ok: int, unk: int, notpass: int):
+        self.data.update({"weekday": weekday, "split": split, "target": target, "ok": ok, "unk": unk, "notpass": notpass})
+        self.lbl_stats.setText(f"曜日後:{weekday:,} / 分割:{split:,} / 対象:{target:,} / 成功:{ok:,} / 不明:{unk:,} / 不通過:{notpass:,}")
+
+    def set_state(self, state: str):
+        self.state = state
+        self.apply_state(state)
+
+    def apply_state(self, state: str):
+        self.lbl_select.setText("分析対象" if self.selected else "非対象")
+        self.lbl_state.setText(f"状態: {state}")
+        if self.selected:
+            style = "border:1px solid #1ee6a8;background:#07120e;color:#7cffc6;"
+            if state in {"31 実行中", "32 実行中"}: style = "border:2px solid #9cffbe;background:#0f1e17;color:#b5ffd0;"
+            if state == "完了": style = "border:2px solid #68d088;background:#0c1712;color:#a2f0be;"
+            if "failed" in state or "エラー" in state: style = "border:2px solid #d96f6f;background:#261010;color:#ffaaaa;"
+        else:
+            style = "border:1px solid #0c5a41;background:#040806;color:#2f7a5b;"
+        self.setStyleSheet(f"QFrame#crossCard{{{style}}}")
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -230,6 +320,12 @@ class MainWindow(QMainWindow):
         self.batch_ended_at: datetime | None = None
         self.batch_start_perf: float | None = None
         self.cross_start_perf: dict[str, float] = {}
+        self.cards: dict[str, CrossCardPerf] = {}
+        self.target_count = 0
+        self.started_at = 0.0
+        self._eta_done = 0
+        self._eta_total = 0
+        self._telemetry_running = False
 
         self._waiting_lock_dialog: QDialog | None = None
         self._waiting_lock_timer: QTimer | None = None
@@ -239,6 +335,9 @@ class MainWindow(QMainWindow):
         self._logo_phase = "none"
 
         self._build_ui()
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self._tick_animation)
+        self.anim_timer.start(120)
         self._corner_logo_visible = False
         self._pix_small = None
         self.LOGO_CORNER_PAD = 8
@@ -429,150 +528,127 @@ class MainWindow(QMainWindow):
             self.lbl_project.setToolTip(name)
 
     def _build_ui(self) -> None:
-        root = QWidget()
-        self.setCentralWidget(root)
+        root = QWidget(); self.setCentralWidget(root)
         v = QVBoxLayout(root)
+        top_font = QFont(); top_font.setPointSize(10)
 
-        top_font = QFont()
-        top_font.setPointSize(10)
-
-        # --- 説明文（ネオン色／2行・改行は1回のみ） ---
         self.lbl_about = QLabel(
             "本ソフトは、「11_交差点(Point)データ」と「20_第２スクリーニング」の様式1-2由来第2スクリーニング後データを用い、複数交差点を一括解析するETC2.0交差点分析ツールです。1トリップで指定交差点を複数回通過する場合は、トリップを分割して分析します。\n"
             "トリップを進入方向→退出方向別に分類し通過トリップ数を集計するとともに、スムーズ通過時間との差からトリップ毎の遅れ時間を算出し、方向別および総遅れ時間（交差点負荷指標）を算出します。その結果を1交差点につき1レポートとしてExcel形式で出力します。"
         )
-        self.lbl_about.setWordWrap(True)
-        self.lbl_about.setStyleSheet("color: #00ff99; font-weight: 600;")
-        self.lbl_about.setFont(top_font)
+        self.lbl_about.setWordWrap(True); self.lbl_about.setFont(top_font)
         v.addWidget(self.lbl_about)
 
-        # --- フローUI（ネオン四角＋接続線） ---
-        self.flow = FlowGuide()
-        flow_grid = QGridLayout(self.flow)
-        flow_grid.setContentsMargins(0, 0, 0, 0)
-        flow_grid.setHorizontalSpacing(18)
-        flow_grid.setVerticalSpacing(8)
+        self.flow = FlowGuide(); self.flow.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.flow_host = QWidget()
+        flow_grid = QGridLayout(self.flow_host); flow_grid.setContentsMargins(0, 0, 0, 0); flow_grid.setHorizontalSpacing(18)
 
-        self.btn_project = QPushButton("プロジェクトを選ぶ")
-        self.btn_project.setFont(top_font)
-        self.btn_project.clicked.connect(self.select_project)
+        self.btn_project = QPushButton("プロジェクトを選ぶ"); self.btn_project.setFont(top_font); self.btn_project.clicked.connect(self.select_project)
+        self.lbl_project = QLabel("未選択"); self.lbl_project.setFont(top_font)
+        proj_w = QWidget(); proj_l = QHBoxLayout(proj_w); proj_l.setContentsMargins(0, 0, 0, 0); proj_l.addWidget(self.btn_project); proj_l.addWidget(self.lbl_project)
 
-        self.lbl_project = QLabel("未選択")
-        self.lbl_project.setFont(top_font)
-        self.lbl_project.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.lbl_project.setMinimumWidth(0)
-
-        proj_w = QWidget()
-        proj_l = QHBoxLayout(proj_w)
-        proj_l.setContentsMargins(0, 0, 0, 0)
-        proj_l.setSpacing(8)
-        proj_l.addWidget(self.btn_project)
-        proj_l.addWidget(self.lbl_project)
-
-        wd_w = QWidget()
-        wd_l = QHBoxLayout(wd_w)
-        wd_l.setContentsMargins(0, 0, 0, 0)
-        wd_l.setSpacing(8)
-
-        self.chk_all = QCheckBox("ALL")
-        self.chk_all.setFont(top_font)
-        self.chk_all.setMinimumWidth(50)
-        self.chk_all.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.chk_all.stateChanged.connect(self._on_all_weekday_changed)
-        wd_l.addWidget(self.chk_all)
-
+        wd_w = QWidget(); wd_l = QHBoxLayout(wd_w); wd_l.setContentsMargins(0, 0, 0, 0); wd_l.setSpacing(8)
+        self.chk_all = QCheckBox("ALL"); self.chk_all.stateChanged.connect(self._on_all_weekday_changed); wd_l.addWidget(self.chk_all)
         self.weekday_checks: dict[str, QCheckBox] = {}
         for wd in WEEKDAY_KANJI:
-            chk = QCheckBox(wd)
-            chk.setFont(top_font)
-            chk.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-            chk.stateChanged.connect(self._on_single_weekday_changed)
-            self.weekday_checks[wd] = chk
-            wd_l.addWidget(chk)
-
+            chk = QCheckBox(wd); chk.stateChanged.connect(self._on_single_weekday_changed)
+            self.weekday_checks[wd] = chk; wd_l.addWidget(chk)
         self._set_weekdays_from_all(True)
 
-        self.spin_radius = QSpinBox()
-        self.spin_radius.setFont(top_font)
-        self.spin_radius.setRange(5, 200)
-        self.spin_radius.setValue(30)
+        self.spin_radius = QSpinBox(); self.spin_radius.setRange(5, 200); self.spin_radius.setValue(30)
+        self.spin_radius.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons); self.spin_radius.setFixedWidth(90)
+        rad_w = QWidget(); rad_l = QHBoxLayout(rad_w); rad_l.setContentsMargins(0, 0, 0, 0); rad_l.setSpacing(4)
+        m_lbl = QLabel("m（第2スクリーニング時と同一として下さい・既定30m）"); m_lbl.setStyleSheet("border:none;")
+        rad_l.addWidget(QLabel("半径")); rad_l.addWidget(self.spin_radius); rad_l.addWidget(QLabel("m")); rad_l.addWidget(m_lbl)
 
-        rad_w = QWidget()
-        rad_l = QHBoxLayout(rad_w)
-        rad_l.setContentsMargins(0, 0, 0, 0)
-        rad_l.setSpacing(2)
-        rad_l.addWidget(QLabel("半径"))
-        rad_l.addWidget(self.spin_radius)
-        rad_l.addWidget(QLabel("m（第2スクリーニング時と同一として下さい・既定30m）"))
+        self.btn_run = QPushButton("31→32 一括実行（分析スタート）"); self.btn_run.clicked.connect(self.start_batch)
+        run_w = QWidget(); run_l = QHBoxLayout(run_w); run_l.setContentsMargins(0, 0, 0, 0); run_l.addWidget(self.btn_run)
 
-        self.btn_run = QPushButton("31→32 一括実行（分析スタート）")
-        self.btn_run.setFont(top_font)
-        self.btn_run.clicked.connect(self.start_batch)
+        box1 = StepBox("STEP 1  プロジェクトフォルダの選択", proj_w); box1.setMinimumWidth(360)
+        box2 = StepBox("STEP 2  分析対象とする曜日を選択", wd_w); box2.setFixedWidth(410)
+        box3 = StepBox("STEP 3  交差点通過判定半径（この半径以内を通過したらHIT）", rad_w); box3.setFixedWidth(410)
+        box4 = StepBox("STEP 4  実行", run_w); box4.setFixedWidth(280)
+        flow_grid.addWidget(box1, 0, 0); flow_grid.addWidget(box2, 0, 1); flow_grid.addWidget(box3, 0, 2); flow_grid.addWidget(box4, 0, 3)
+        self._flow_spacer = QWidget(); self._flow_spacer.setFixedWidth(260); flow_grid.addWidget(self._flow_spacer, 0, 4)
 
-        run_w = QWidget()
-        run_l = QHBoxLayout(run_w)
-        run_l.setContentsMargins(0, 0, 0, 0)
-        run_l.addWidget(self.btn_run)
-
-        box1 = StepBox("STEP 1  プロジェクトフォルダの選択", proj_w)
-        box1.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        box1.setMinimumWidth(360)
-        box1.setMaximumWidth(720)
-        box2 = StepBox("STEP 2  分析対象とする曜日を選択", wd_w)
-        box2.setFixedWidth(410)
-        box3 = StepBox("STEP 3  交差点通過判定半径（この半径以内を通過したらHIT）", rad_w)
-        box3.setFixedWidth(410)
-        box4 = StepBox("STEP 4  実行", run_w)
-        box4.setFixedWidth(260)
-
-        flow_grid.addWidget(box1, 0, 0)
-        flow_grid.addWidget(box2, 0, 1)
-        flow_grid.addWidget(box3, 0, 2)
-        flow_grid.addWidget(box4, 0, 3)
-        # 右側に余白（ロゴ干渉回避）※固定幅で制御
-        self._flow_spacer = QWidget()
-        self._flow_spacer.setFixedWidth(260)
-        flow_grid.addWidget(self._flow_spacer, 0, 4)
-        flow_grid.setColumnStretch(0, 1)
-        flow_grid.setColumnStretch(1, 0)
-        flow_grid.setColumnStretch(2, 0)
-        flow_grid.setColumnStretch(3, 0)
-        flow_grid.setColumnStretch(4, 0)
-
+        flow_stack_host = QWidget(); stack = QStackedLayout(flow_stack_host); stack.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        stack.addWidget(self.flow_host); stack.addWidget(self.flow)
         self.flow.set_steps([box1, box2, box3, box4])
-        v.addWidget(self.flow)
+        v.addWidget(flow_stack_host)
 
-        self.lbl_summary = QLabel("")
-        v.addWidget(self.lbl_summary)
+        self.lbl_summary = QLabel(""); v.addWidget(self.lbl_summary)
 
-        self.table = QTableWidget(0, 17)
-        self.table.setHorizontalHeaderLabels(["", "交差点名", "交差点CSV", "交差点jpg", "第2スクリーニング\n(フォルダ)", "第2スクリーニング\n(CSV)", "出力\n(performance.csv)", "出力\n(report)", "状態", "分析済み\nファイル数", "対象\nファイル数", "曜日フィルター後\nファイル数", "トリップ分割数", "対象トリップ数", "枝判定成功", "枝不明", "交差点不通過"])
-        run_header = RunHeaderView(Qt.Orientation.Horizontal, self.table, run_col=COL_RUN)
-        self.table.setHorizontalHeader(run_header)
-        run_header.toggle_all_requested.connect(self._toggle_all_runs_from_header)
-        self._run_header = run_header
-        header = self.table.horizontalHeader()
-        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        header.setStretchLastSection(False)
-        header.setMinimumSectionSize(24)
-        header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.setFixedHeight(44)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(self.table.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(self.table.EditTrigger.NoEditTriggers)
-        v.addWidget(self.table, stretch=3)
+        mid_split = QSplitter(Qt.Orientation.Horizontal)
+        v.addWidget(mid_split, stretch=1)
+        left_panel = QFrame(); lv = QVBoxLayout(left_panel)
+        self.cross_container = QWidget(); self.cross_flow = FlowLayout(self.cross_container, margin=0, spacing=4); self.cross_container.setLayout(self.cross_flow)
+        self.cross_scroll = QScrollArea(); self.cross_scroll.setWidgetResizable(True); self.cross_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); self.cross_scroll.setWidget(self.cross_container)
+        lv.addWidget(self.cross_scroll); mid_split.addWidget(left_panel)
 
-        self.lbl_progress = QLabel("")
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setStyleSheet("background-color: black; color: #00ff66;")
-        self.log.setFont(QFont("Consolas", 10))
-        self.log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.log.setMaximumBlockCount(5000)
-        v.addWidget(self.lbl_progress)
-        v.addWidget(self.log, stretch=2)
+        right_panel = QFrame(); rv = QVBoxLayout(right_panel)
+        rv.addWidget(QLabel("CYBER TELEMETRY"))
+        self.tele = {"cross_total": QLabel("交差点数: 0"), "status": QLabel("状態: IDLE"), "current": QLabel("現在: -")}
+        self.lbl_progress = QLabel("進捗ファイル: 0/0（0.0%）")
+        self.progress_bar = QProgressBar(); self.progress_bar.setRange(0, 100); self.progress_bar.setValue(0)
+        self.time_elapsed_big = QLabel("経過 00:00:00"); self.time_eta_big = QLabel("残り --:--:--")
+        self.time_elapsed_big.setFont(QFont("Consolas", 16, QFont.Weight.Bold)); self.time_eta_big.setFont(QFont("Consolas", 16, QFont.Weight.Bold))
+        for k in ["cross_total", "status", "current"]: rv.addWidget(self.tele[k])
+        rv.addWidget(self.lbl_progress); rv.addWidget(self.progress_bar); rv.addWidget(self.time_elapsed_big); rv.addWidget(self.time_eta_big)
+        self.sweep = SweepWidget(); rv.addWidget(self.sweep); rv.addStretch(1); mid_split.addWidget(right_panel)
+        mid_split.setSizes([1700, 380]); mid_split.setStretchFactor(0, 4); mid_split.setStretchFactor(1, 1)
+
+        self.log = QPlainTextEdit(); self.log.setReadOnly(True); self.log.setFont(QFont("Consolas", 10)); self.log.setMaximumBlockCount(5000); self.log.setFixedHeight(160)
+        v.addWidget(self.log, stretch=0)
+        self._set_style()
+
+    def _set_style(self) -> None:
+        self.setStyleSheet("""
+            QWidget { background: #050908; color: #79d58f; }
+            QPlainTextEdit, QSpinBox, QProgressBar, QScrollArea { background: #0a120f; border: 1px solid #1f3f2d; }
+            QPushButton { background: #0f2a1c; border: 2px solid #00ff99; padding: 8px 12px; border-radius: 12px; color: #eafff4; font-weight: 900; }
+            QPushButton:hover { background: #153a26; }
+            QPushButton:pressed { background: #0b1f14; }
+            QPushButton:disabled { background: #0a120f; border: 2px solid #2a6b45; color: #3d6a55; }
+            QFrame { border: 1px solid #1c4f33; border-radius: 4px; }
+            QFrame#crossCard { border-radius: 8px; }
+        """)
+
+
+
+    def _update_time_boxes(self) -> None:
+        if self.started_at <= 0:
+            self.time_elapsed_big.setText("経過 00:00:00")
+            self.time_eta_big.setText("残り --:--:--")
+            return
+        elapsed = time.time() - self.started_at
+        self.time_elapsed_big.setText(f"経過 {format_hhmmss(elapsed)}")
+        if self._eta_total > 0 and self._eta_done > 0 and self._eta_done <= self._eta_total:
+            remain = elapsed / max(1, self._eta_done) * (self._eta_total - self._eta_done)
+            self.time_eta_big.setText(f"残り {format_hhmmss(remain)}")
+        else:
+            self.time_eta_big.setText("残り --:--:--")
+
+    def _tick_animation(self) -> None:
+        if hasattr(self, "sweep"):
+            self.sweep.tick()
+        self._update_time_boxes()
+
+    def _refresh_telemetry(self) -> None:
+        done = sum(1 for c in self.cards.values() if c.state == "完了")
+        total = self.target_count if self.target_count else len([c for c in self.cards.values() if c.selected])
+        self.tele["cross_total"].setText(f"交差点数: {total}")
+        current = self.current_name if self.current_name else "-"
+        self.tele["current"].setText(f"現在: {current}")
+        if self.current_name and self.current_name in self.cards:
+            cd = self.cards[self.current_name].data
+            done_f = cd["done"]; total_f = cd["total"]
+        else:
+            done_f = done; total_f = max(1, total)
+        pct = (done_f / total_f * 100.0) if total_f else 0.0
+        self.lbl_progress.setText(f"進捗ファイル: {done_f:,}/{total_f:,}（{pct:.1f}%）")
+        self.progress_bar.setValue(int(pct))
+        self._eta_done = done_f
+        self._eta_total = total_f
 
     def _timestamp(self) -> str:
         return datetime.now().strftime("%Y/%m/%d %H:%M:%S")
@@ -630,7 +706,7 @@ class MainWindow(QMainWindow):
             self._apply_done_summary(text)
         if from_cr or "進捗:" in text:
             self.lbl_progress.setText(text)
-            self._update_table_progress(text)
+            self._update_card_progress(text)
             return
         self._recent_process_lines.append(text)
         self._recent_process_lines = self._recent_process_lines[-200:]
@@ -662,57 +738,18 @@ class MainWindow(QMainWindow):
             self._handle_stream_line(self._stderr_buf, False, True)
             self._stderr_buf = ""
 
-    def _column_alignment(self, column: int) -> Qt.AlignmentFlag:
-        if column in CENTER_ALIGN_COLS:
-            return Qt.AlignmentFlag.AlignCenter
-        if column in RIGHT_ALIGN_COLS:
-            return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-
-    def _set_text_item(self, row: int, col: int, text: str) -> None:
-        item = QTableWidgetItem(text)
-        item.setTextAlignment(self._column_alignment(col))
-        self.table.setItem(row, col, item)
-
-    def _set_run_item(self, row: int, checked: bool) -> None:
-        cb = QCheckBox()
-        cb.setChecked(checked)
-        cb.stateChanged.connect(self._sync_run_header_state)
-        w = QWidget()
-        lay = QHBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(cb)
-        self.table.setCellWidget(row, COL_RUN, w)
-
-    def _toggle_all_runs_from_header(self, check_all: bool):
-        for row in range(self.table.rowCount()):
-            cell = self.table.cellWidget(row, COL_RUN)
-            cb = cell.findChild(QCheckBox) if cell else None
-            if cb:
-                cb.setChecked(check_all)
-        self._sync_run_header_state()
-
-    def _sync_run_header_state(self):
-        total = checked = 0
-        for row in range(self.table.rowCount()):
-            cell = self.table.cellWidget(row, COL_RUN)
-            cb = cell.findChild(QCheckBox) if cell else None
-            if cb:
-                total += 1
-                checked += int(cb.isChecked())
-        if total == 0 or checked == 0:
-            state = Qt.CheckState.Unchecked
-        elif checked == total:
-            state = Qt.CheckState.Checked
-        else:
-            state = Qt.CheckState.PartiallyChecked
-        self._run_header.set_run_state(state)
+    def _clear_cards(self) -> None:
+        while self.cross_flow.count():
+            item = self.cross_flow.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+        self.cards.clear()
 
     def _set_run_controls_enabled(self, enabled: bool) -> None:
         self.btn_project.setEnabled(enabled)
         self.btn_run.setEnabled(enabled)
         self.chk_all.setEnabled(enabled)
+        self.spin_radius.setEnabled(enabled)
         for chk in self.weekday_checks.values():
             chk.setEnabled(enabled)
 
@@ -768,7 +805,7 @@ class MainWindow(QMainWindow):
         return self.project_dir / FOLDER_32OUT / f"{name}_report.xlsx"
 
     def scan_crossroads(self) -> None:
-        self.table.setRowCount(0)
+        self._clear_cards()
         if not self.project_dir:
             self.log_warn("project not selected.")
             return
@@ -778,7 +815,6 @@ class MainWindow(QMainWindow):
         out32_dir = self.project_dir / FOLDER_32OUT
         out31_dir.mkdir(parents=True, exist_ok=True)
         out32_dir.mkdir(parents=True, exist_ok=True)
-
         csvs = sorted(cross_dir.glob("*.csv")) if cross_dir.exists() else []
         if not cross_dir.exists():
             QMessageBox.critical(self, "エラー", f"交差点フォルダが見つかりません:\n{cross_dir}")
@@ -786,7 +822,6 @@ class MainWindow(QMainWindow):
         if not csvs:
             QMessageBox.warning(self, "注意", f"交差点CSVが見つかりません:\n{cross_dir}")
             return
-
         sum_s2 = 0
         for csv_path in csvs:
             name = csv_path.stem
@@ -796,52 +831,25 @@ class MainWindow(QMainWindow):
             sum_s2 += n_csv
             out31 = out31_dir / f"{name}_performance.csv"
             out32 = self._report_output_path(name)
-
-            r = self.table.rowCount()
-            self.table.insertRow(r)
-            self._set_run_item(r, csv_path.exists() and jpg.exists() and s2_cross.exists() and n_csv > 0)
-            self._set_text_item(r, COL_NAME, name)
-            self._set_text_item(r, COL_CROSS_CSV, "✔" if csv_path.exists() else "×")
-            self._set_text_item(r, COL_CROSS_JPG, "✔" if jpg.exists() else "×")
-            self._set_text_item(r, COL_S2_DIR, "✔" if s2_cross.exists() else "×")
-            self._set_text_item(r, COL_S2_CSV, "✔" if n_csv > 0 else "×")
-            self._set_text_item(r, COL_OUT31, "✔" if out31.exists() else "×")
-            self._set_text_item(r, COL_OUT32, "✔" if out32.exists() else "×")
-            self._set_text_item(r, COL_STATUS, "")
-            for col in [COL_DONE_FILES, COL_WEEKDAY, COL_SPLIT, COL_TARGET, COL_OK, COL_UNK, COL_NOTPASS]:
-                self._set_text_item(r, col, "0")
-            self._set_text_item(r, COL_TOTAL_FILES, str(n_csv))
-            info = {"cross_csv": str(csv_path), "cross_jpg": str(jpg), "s2_dir": str(s2_cross), "out31": str(out31), "out32": str(out32), "name": name}
-            self.table.item(r, COL_NAME).setData(Qt.ItemDataRole.UserRole, info)
-
+            card = CrossCardPerf(name)
+            card.paths = {"out31": str(out31), "out32": str(out32), "cross_csv": str(csv_path), "cross_jpg": str(jpg), "s2_dir": str(s2_cross)}
+            card.set_flags(has_csv=csv_path.exists(), has_jpg=jpg.exists(), has_s2_dir=s2_cross.exists(), s2_csv=n_csv, has_out31=out31.exists(), has_out32=out32.exists())
+            card.set_progress(0, n_csv)
+            card.set_stats(0, 0, 0, 0, 0, 0)
+            self.cards[name] = card
+            self.cross_flow.addWidget(card)
         self.lbl_summary.setText(f"Crossroads: {len(csvs)} / S2 CSV total: {sum_s2}")
+        self._refresh_telemetry()
         self.log_info(f"scanned: {len(csvs)} crossroads")
         self.log_info(f"s2 total csv files: {sum_s2}")
-        self._sync_run_header_state()
 
     def _collect_targets(self) -> list[str]:
-        out: list[str] = []
-        for r in range(self.table.rowCount()):
-            cell = self.table.cellWidget(r, COL_RUN)
-            cb = cell.findChild(QCheckBox) if cell else None
-            name_item = self.table.item(r, COL_NAME)
-            if cb and name_item and cb.isChecked():
-                out.append(name_item.text())
-        return out
+        return [name for name, card in self.cards.items() if card.selected]
 
-    def _row_index_by_name(self, name: str) -> int:
-        for r in range(self.table.rowCount()):
-            item = self.table.item(r, COL_NAME)
-            if item and item.text() == name:
-                return r
-        return -1
-
-    def _set_status_for_current_row(self, status: str) -> None:
-        if self.current_name is None:
-            return
-        row = self._row_index_by_name(self.current_name)
-        if row >= 0:
-            self._set_text_item(row, COL_STATUS, status)
+    def _set_status_for_current_card(self, status: str) -> None:
+        if self.current_name and self.current_name in self.cards:
+            self.cards[self.current_name].set_state(status)
+            self._refresh_telemetry()
 
     def start_batch(self) -> None:
         if not self.project_dir:
@@ -889,6 +897,15 @@ class MainWindow(QMainWindow):
         self.log_info(f"start: targets={len(targets)}")
         self.log_info("========================================")
         self._set_run_controls_enabled(False)
+        self.target_count = len(targets)
+        self.started_at = time.time()
+        self._telemetry_running = True
+        self.tele["status"].setText("状態: RUNNING")
+        for card in self.cards.values():
+            card.set_locked(True)
+            if card.selected:
+                card.set_state("待機")
+        self._refresh_telemetry()
         self._start_next_crossroad()
 
     def _start_next_crossroad(self) -> None:
@@ -899,18 +916,16 @@ class MainWindow(QMainWindow):
         self.current_step = "31"
         self.cross_start_perf[self.current_name] = perf_counter()
         self.log_info(f"交差点開始: {self.current_name}")
-        self._set_status_for_current_row("31 実行中")
+        self._set_status_for_current_card("31 実行中")
         self._start_step31(self.current_name)
 
     def _ensure_file_unlock(self, path: Path, on_ok) -> None:
         if not path.exists():
-            on_ok()
-            return
+            on_ok(); return
         try:
             with open(path, "a", encoding="utf-8"):
                 pass
-            on_ok()
-            return
+            on_ok(); return
         except PermissionError:
             self._waiting_lock_path = path
             self._waiting_lock_dialog = QDialog(self)
@@ -933,41 +948,24 @@ class MainWindow(QMainWindow):
         except PermissionError:
             return
         if self._waiting_lock_timer:
-            self._waiting_lock_timer.stop()
-            self._waiting_lock_timer.deleteLater()
-            self._waiting_lock_timer = None
+            self._waiting_lock_timer.stop(); self._waiting_lock_timer.deleteLater(); self._waiting_lock_timer = None
         if self._waiting_lock_dialog:
-            self._waiting_lock_dialog.accept()
-            self._waiting_lock_dialog.deleteLater()
-            self._waiting_lock_dialog = None
+            self._waiting_lock_dialog.accept(); self._waiting_lock_dialog.deleteLater(); self._waiting_lock_dialog = None
         self._waiting_lock_path = None
         on_ok()
 
     def _start_step31(self, name: str) -> None:
-        row = self._row_index_by_name(name)
-        if row < 0:
-            self._start_next_crossroad()
-            return
-        info = self.table.item(row, COL_NAME).data(Qt.ItemDataRole.UserRole) or {}
-        out31 = Path(info["out31"])
+        card = self.cards.get(name)
+        if not card:
+            self._start_next_crossroad(); return
+        out31 = Path(card.paths["out31"])
         script31 = Path(__file__).resolve().parent / "31_crossroad_trip_performance.py"
         if not script31.exists():
             self.log_error(f"31 script not found: {script31}")
-            self._start_next_crossroad()
-            return
+            self._start_next_crossroad(); return
 
         def _launch():
-            args = [
-                str(script31),
-                "--project",
-                str(self.project_dir),
-                "--targets",
-                name,
-                "--progress-step",
-                "1",
-                "--radius-m",
-                str(self.spin_radius.value()),
-            ]
+            args = [str(script31), "--project", str(self.project_dir), "--targets", name, "--progress-step", "1", "--radius-m", str(self.spin_radius.value())]
             selected = self._selected_weekdays_for_cli()
             if selected:
                 args.extend(["--weekdays", *selected])
@@ -976,37 +974,27 @@ class MainWindow(QMainWindow):
         self._ensure_file_unlock(out31, _launch)
 
     def _start_step32(self, name: str) -> None:
-        row = self._row_index_by_name(name)
-        if row < 0:
-            self._start_next_crossroad()
-            return
-        info = self.table.item(row, COL_NAME).data(Qt.ItemDataRole.UserRole) or {}
-        out32 = Path(info["out32"])
+        card = self.cards.get(name)
+        if not card:
+            self._start_next_crossroad(); return
+        out32 = Path(card.paths["out32"])
         script32 = Path(__file__).resolve().parent / "32_crossroad_report.py"
         if not script32.exists():
             self.log_error(f"32 script not found: {script32}")
-            self._start_next_crossroad()
-            return
+            self._start_next_crossroad(); return
 
         def _launch():
             self._launch_process([str(script32), "--project", str(self.project_dir), "--targets", name])
 
-        if out32.exists():
-            self._ensure_file_unlock(out32, _launch)
-        else:
-            _launch()
+        self._ensure_file_unlock(out32, _launch) if out32.exists() else _launch()
 
     def _launch_process(self, args: list[str]) -> None:
         if self.proc:
-            self.proc.kill()
-            self.proc = None
+            self.proc.kill(); self.proc = None
         self.proc = QProcess(self)
-        self._stdout_buf = ""
-        self._stderr_buf = ""
-        self._recent_process_lines = []
+        self._stdout_buf = ""; self._stderr_buf = ""; self._recent_process_lines = []
         self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
-        self.proc.setProgram(sys.executable)
-        self.proc.setArguments(["-u", *args])
+        self.proc.setProgram(sys.executable); self.proc.setArguments(["-u", *args])
         self.log_info(f"launch: {sys.executable} -u {' '.join(args)}")
         self.proc.readyReadStandardOutput.connect(self._on_proc_stdout)
         self.proc.readyReadStandardError.connect(self._on_proc_stderr)
@@ -1015,29 +1003,24 @@ class MainWindow(QMainWindow):
         self.proc.start()
         if not self.proc.waitForStarted(3000):
             self.log_error(f"QProcess failed to start: {self.proc.errorString()}")
-            self._set_status_for_current_row(f"{self.current_step} failed (start error)")
+            self._set_status_for_current_card(f"{self.current_step} failed (start error)")
             self._start_next_crossroad()
 
     def _on_proc_stdout(self) -> None:
-        if self.proc:
-            self._append_stream_chunk(self._decode_qbytearray(self.proc.readAllStandardOutput()), False)
+        if self.proc: self._append_stream_chunk(self._decode_qbytearray(self.proc.readAllStandardOutput()), False)
 
     def _on_proc_stderr(self) -> None:
-        if self.proc:
-            self._append_stream_chunk(self._decode_qbytearray(self.proc.readAllStandardError()), True)
+        if self.proc: self._append_stream_chunk(self._decode_qbytearray(self.proc.readAllStandardError()), True)
 
     def _on_proc_error(self, err) -> None:
-        if self.proc:
-            self.log_error(f"QProcess errorOccurred: {err} / {self.proc.errorString()}")
+        if self.proc: self.log_error(f"QProcess errorOccurred: {err} / {self.proc.errorString()}")
 
-    def _update_row_outputs(self, name: str) -> None:
-        row = self._row_index_by_name(name)
-        if row < 0:
+    def _update_card_outputs(self, name: str) -> None:
+        card = self.cards.get(name)
+        if not card:
             return
-        info = self.table.item(row, COL_NAME).data(Qt.ItemDataRole.UserRole) or {}
-        self._set_text_item(row, COL_OUT31, "✔" if Path(info["out31"]).exists() else "×")
-        has_report = Path(info["out32"]).exists()
-        self._set_text_item(row, COL_OUT32, "✔" if has_report else "×")
+        out31 = Path(card.paths["out31"]); out32 = Path(card.paths["out32"])
+        card.set_flags(has_csv=Path(card.paths["cross_csv"]).exists(), has_jpg=Path(card.paths["cross_jpg"]).exists(), has_s2_dir=Path(card.paths["s2_dir"]).exists(), s2_csv=card.flags.get("s2_csv", 0), has_out31=out31.exists(), has_out32=out32.exists())
 
     def _extract_last_error_line(self) -> str:
         for line in reversed(self._recent_process_lines):
@@ -1049,56 +1032,40 @@ class MainWindow(QMainWindow):
         return ""
 
     def _on_finished(self, code: int, status) -> None:
-        self._flush_process_buffers()
-        self.lbl_progress.setText("")
+        self._flush_process_buffers(); self.lbl_progress.setText("")
         if self.current_name is None:
-            self._start_next_crossroad()
-            return
-
+            self._start_next_crossroad(); return
         if code != 0:
             reason = self._extract_last_error_line()
             msg = f"{self.current_step} failed (code={code})"
-            if reason:
-                msg = f"{msg} / {reason}"
-            self._set_status_for_current_row(msg)
-            self.log_error(msg)
-            self._start_next_crossroad()
-            return
-
+            if reason: msg = f"{msg} / {reason}"
+            self._set_status_for_current_card(msg); self.log_error(msg); self._start_next_crossroad(); return
         if self.current_step == "31":
-            self._update_row_outputs(self.current_name)
-            self._set_status_for_current_row("32 実行中")
+            self._update_card_outputs(self.current_name)
+            self._set_status_for_current_card("32 実行中")
             self.current_step = "32"
             self._start_step32(self.current_name)
             return
 
-        self._update_row_outputs(self.current_name)
-        row = self._row_index_by_name(self.current_name)
-        info = self.table.item(row, COL_NAME).data(Qt.ItemDataRole.UserRole) or {}
-        if not Path(info["out32"]).exists():
+        self._update_card_outputs(self.current_name)
+        card = self.cards.get(self.current_name)
+        if not card or not Path(card.paths["out32"]).exists():
             msg = f"32 failed: report not created: {self.current_name}"
-            self._set_status_for_current_row(msg)
-            self.log_error(msg)
-            self._start_next_crossroad()
-            return
+            self._set_status_for_current_card(msg); self.log_error(msg); self._start_next_crossroad(); return
 
-        self._set_text_item(row, COL_OUT32, "✔")
-        self._set_status_for_current_row("完了")
+        self._set_status_for_current_card("完了")
         dt = perf_counter() - self.cross_start_perf.get(self.current_name, perf_counter())
         self.log_info(f"交差点: {self.current_name} 所要時間: {dt:.1f}s")
         self.log_info(f"交差点完了: {self.current_name}")
         self._start_next_crossroad()
 
-    def _update_table_progress(self, text: str) -> None:
-        if not self.current_name:
+    def _update_card_progress(self, text: str) -> None:
+        if not self.current_name or self.current_name not in self.cards:
             return
-        row = self._row_index_by_name(self.current_name)
-        if row < 0:
-            return
+        card = self.cards[self.current_name]
         m = RE_PROGRESS.search(text)
         if m:
-            self._set_text_item(row, COL_DONE_FILES, m.group(1))
-            self._set_text_item(row, COL_TOTAL_FILES, m.group(2))
+            card.set_progress(int(m.group(1)), int(m.group(2)))
         m2 = RE_STATS.search(text)
         if m2:
             weekday, rows, ok, unk, notpass = map(int, m2.groups())
@@ -1106,12 +1073,8 @@ class MainWindow(QMainWindow):
             split = rows + notpass - weekday
             if ok + unk != rows:
                 self.log_warn(f"rows mismatch: ok({ok}) + unk({unk}) != rows({rows}) for {self.current_name}")
-            self._set_text_item(row, COL_WEEKDAY, str(weekday))
-            self._set_text_item(row, COL_SPLIT, str(split))
-            self._set_text_item(row, COL_TARGET, str(target))
-            self._set_text_item(row, COL_OK, str(ok))
-            self._set_text_item(row, COL_UNK, str(unk))
-            self._set_text_item(row, COL_NOTPASS, str(notpass))
+            card.set_stats(weekday, split, target, ok, unk, notpass)
+        self._refresh_telemetry()
 
     def _maybe_update_realtime_from_buffer(self, buf: str) -> None:
         idx = buf.rfind("進捗:")
@@ -1119,14 +1082,10 @@ class MainWindow(QMainWindow):
             return
         tail = buf[idx:].strip()
         if RE_PROGRESS.search(tail) or RE_STATS.search(tail):
-            self.lbl_progress.setText(tail)
-            self._update_table_progress(tail)
+            self._update_card_progress(tail)
 
     def _apply_done_summary(self, text: str) -> None:
-        if not self.current_name:
-            return
-        row = self._row_index_by_name(self.current_name)
-        if row < 0:
+        if not self.current_name or self.current_name not in self.cards:
             return
         m = RE_DONE.search(text)
         if not m:
@@ -1134,37 +1093,17 @@ class MainWindow(QMainWindow):
         total, weekday, rows, ok, unk, notpass = map(int, m.groups())
         target = rows + notpass
         split = rows + notpass - weekday
-        self._set_text_item(row, COL_DONE_FILES, str(total))
-        self._set_text_item(row, COL_TOTAL_FILES, str(total))
-        self._set_text_item(row, COL_WEEKDAY, str(weekday))
-        self._set_text_item(row, COL_SPLIT, str(split))
-        self._set_text_item(row, COL_TARGET, str(target))
-        self._set_text_item(row, COL_OK, str(ok))
-        self._set_text_item(row, COL_UNK, str(unk))
-        self._set_text_item(row, COL_NOTPASS, str(notpass))
+        card = self.cards[self.current_name]
+        card.set_progress(total, total)
+        card.set_stats(weekday, split, target, ok, unk, notpass)
+        self._refresh_telemetry()
 
-    def _format_hms(self, sec: float) -> str:
-        total = int(sec)
-        h = total // 3600
-        m = (total % 3600) // 60
-        s = total % 60
-        return f"{h:02d}:{m:02d}:{s:02d}"
-
-    def _table_dump_lines(self) -> list[str]:
-        headers = [self.table.horizontalHeaderItem(i).text().replace("\n", " ").strip() for i in range(self.table.columnCount())]
-        out = ["\t".join(headers)]
-        for r in range(self.table.rowCount()):
-            row_vals: list[str] = []
-            for c in range(self.table.columnCount()):
-                if c == COL_RUN:
-                    cell = self.table.cellWidget(r, COL_RUN)
-                    cb = cell.findChild(QCheckBox) if cell else None
-                    row_vals.append("1" if cb and cb.isChecked() else "0")
-                else:
-                    item = self.table.item(r, c)
-                    row_vals.append(item.text() if item else "")
-            out.append("\t".join(row_vals))
-        return out
+    def _card_dump_lines(self) -> list[str]:
+        lines = ["name	selected	status	done/total	weekday_after	split	target	ok	unk	notpass	has_out31	has_out32"]
+        for n, c in self.cards.items():
+            d = c.data
+            lines.append(f"{n}	{int(c.selected)}	{c.state}	{d['done']}/{d['total']}	{d['weekday']}	{d['split']}	{d['target']}	{d['ok']}	{d['unk']}	{d['notpass']}	{int(c.flags.get('has_out31', False))}	{int(c.flags.get('has_out32', False))}")
+        return lines
 
     def _write_batch_log_files(self, total_sec: float) -> None:
         if not self.project_dir:
@@ -1174,10 +1113,10 @@ class MainWindow(QMainWindow):
             f"Project: {self.project_dir}",
             f"開始時刻: {self.batch_started_at.strftime('%Y/%m/%d %H:%M:%S') if self.batch_started_at else ''}",
             f"終了時刻: {self.batch_ended_at.strftime('%Y/%m/%d %H:%M:%S') if self.batch_ended_at else ''}",
-            f"総所要時間: {self._format_hms(total_sec)}",
+            f"総所要時間: {format_hhmmss(total_sec)}",
             "",
-            "[UI表]",
-            *self._table_dump_lines(),
+            "[UIカード]",
+            *self._card_dump_lines(),
             "",
             "[実行ログ]",
             *self.log_lines,
@@ -1191,14 +1130,16 @@ class MainWindow(QMainWindow):
     def _finish_batch(self) -> None:
         self.batch_ended_at = datetime.now()
         total_sec = perf_counter() - self.batch_start_perf if self.batch_start_perf else 0.0
-        self.log_info("========================================")
-        self.log_info("🎉🎉🎉 全件処理完了 🎉🎉🎉")
-        self.log_info("========================================")
-        self.log_info(f"総所要時間: {self._format_hms(total_sec)}")
+        self.log_info("🎉 おめでとうございます。全件処理完了です。")
+        self.log_info(f"総所要時間: {format_hhmmss(total_sec)}")
         self._write_batch_log_files(total_sec)
-        self.current_name = None
-        self.current_step = ""
+        self.current_name = None; self.current_step = ""
         self._set_run_controls_enabled(True)
+        for card in self.cards.values():
+            card.set_locked(False)
+        self._telemetry_running = False
+        self.tele["status"].setText("状態: DONE")
+        self.time_eta_big.setText("残り 00:00:00")
 
 
 def main() -> None:
