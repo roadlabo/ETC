@@ -501,6 +501,7 @@ class MainWindow(QMainWindow):
         header_hbox.addSpacerItem(QSpacerItem(360, 1, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum))
 
         right_vbox.addWidget(header_container, stretch=0)
+        right_vbox.addSpacing(2)  # ← 数字を増やすとさらに下がる
 
         self.web = QWebEngineView()
         # --- allow file:// HTML to load https resources (Leaflet/OSM tiles) ---
