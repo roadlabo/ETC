@@ -3,7 +3,7 @@ import json
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QPropertyAnimation, Qt, QTimer, QUrl, QUrlQuery, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QMargins, QObject, QPropertyAnimation, Qt, QTimer, QUrl, QUrlQuery, pyqtSignal, pyqtSlot
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWebEngineCore import QWebEngineSettings
 from PyQt6.QtGui import QPixmap
@@ -27,6 +27,8 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QSpacerItem,
     QSizePolicy,
+    QFrame,
+    QGridLayout,
 )
 
 APP_TITLE = "11 交差点ファイル作成ツール"
@@ -126,6 +128,27 @@ QScrollBar::handle:vertical:hover {
 }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
   height: 0px;
+}
+
+/* --- step cards --- */
+QFrame#StepCard {
+  background: rgba(5, 10, 16, 0.88);
+  border: 2px solid rgba(0, 255, 136, 0.55);
+  border-radius: 14px;
+}
+QLabel#StepTitle {
+  color: #00ff88;
+  font-weight: 900;
+  font-size: 13px;
+}
+QLabel#StepBody {
+  color: rgba(230, 241, 255, 0.92);
+  font-weight: 600;
+  font-size: 12px;
+}
+QLabel#StepArrow {
+  color: rgba(42, 115, 255, 0.95);
+  font-weight: 900;
 }
 """
 
@@ -323,6 +346,34 @@ class MainWindow(QMainWindow):
             x, y = self._logo_corner_pos(splash.width(), splash.height())
             splash.move(x, y)
 
+    def _make_step_card(self, step_title: str, body_widget: QWidget, indent_px: int = 0) -> QWidget:
+        wrap = QWidget()
+        wrap_l = QHBoxLayout(wrap)
+        wrap_l.setContentsMargins(QMargins(indent_px, 0, 0, 0))
+        wrap_l.setSpacing(10)
+
+        if indent_px > 0:
+            arrow = QLabel("↳")
+            arrow.setObjectName("StepArrow")
+            arrow.setAlignment(Qt.AlignmentFlag.AlignTop)
+            arrow.setContentsMargins(0, 8, 0, 0)
+            wrap_l.addWidget(arrow, 0)
+
+        card = QFrame()
+        card.setObjectName("StepCard")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(6)
+
+        ttl = QLabel(step_title)
+        ttl.setObjectName("StepTitle")
+        v.addWidget(ttl)
+
+        v.addWidget(body_widget)
+
+        wrap_l.addWidget(card, 1)
+        return wrap
+
     def _build_ui(self) -> None:
         root = QWidget()
         self.setCentralWidget(root)
@@ -374,55 +425,79 @@ class MainWindow(QMainWindow):
         header_vbox.setContentsMargins(0, 0, 0, 0)
         header_vbox.setSpacing(6)
 
-        # --- ①プロジェクトフォルダ選択（横並び・改行なし） ---
-        row_project = QHBoxLayout()
-        lbl_project_title = QLabel("①プロジェクトフォルダ選択（この中に「11_交差点(Point)データ」フォルダを作成します）")
-        lbl_project_title.setStyleSheet(NEON_LABEL_QSS)
-        row_project.addWidget(lbl_project_title)
-
-        row_project.addWidget(self.btn_project)
-        row_project.addWidget(self.project_path_edit, 1)
-        row_project.addStretch(0)
-        header_vbox.addLayout(row_project)
-
-        row_map = QHBoxLayout()
-        self.lbl_guide = QLabel("②地図上を左クリック：中心点指定・方向追加　右クリック：方向指定やり直し　中心点の指定から全てやり直しは右のクリアボタン　=>")
-        self.lbl_guide.setStyleSheet(NEON_LABEL_QSS)
-        row_map.addWidget(self.lbl_guide)
-        row_map.addStretch(1)
+        # ---------------------------
+        # STEP cards (mindmap style)
+        # ---------------------------
 
         self.btn_clear = QPushButton("クリア")
         self.btn_clear.clicked.connect(self.clear_clicked)
-        row_map.addWidget(self.btn_clear)
-        header_vbox.addLayout(row_map)
-
-        row_name = QHBoxLayout()
-
-        lbl_name = QLabel("③交差点名")
-        lbl_name.setStyleSheet(NEON_LABEL_QSS)
-        row_name.addWidget(lbl_name)
 
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("例：01○○交差点")
-        row_name.addWidget(self.name_edit, 1)
 
         self.btn_save = QPushButton("交差点ファイル保存")
         self.btn_save.clicked.connect(self.save_clicked)
-        row_name.addWidget(self.btn_save)
 
-        row_name.addStretch(0)
-        header_vbox.addLayout(row_name)
+        # STEP1: project select row
+        step1_body = QWidget()
+        s1 = QHBoxLayout(step1_body)
+        s1.setContentsMargins(0, 0, 0, 0)
+        s1.setSpacing(8)
 
-        lbl_next = QLabel("④次の交差点を作成してください。または、左の一覧をクリックして、編集・リネーム・削除を行って下さい。")
-        lbl_next.setStyleSheet(NEON_LABEL_QSS)
-        lbl_next.setWordWrap(True)
-        header_vbox.addWidget(lbl_next)
+        lbl_s1 = QLabel("プロジェクトフォルダを選択（中に「11_交差点(Point)データ」フォルダを作成）")
+        lbl_s1.setObjectName("StepBody")
+        s1.addWidget(lbl_s1, 1)
+        s1.addWidget(self.btn_project)
+        s1.addWidget(self.project_path_edit, 2)
 
+        header_vbox.addWidget(self._make_step_card("STEP1  プロジェクトフォルダ選択", step1_body, indent_px=0))
+
+        # STEP2: map operation + clear
+        step2_body = QWidget()
+        s2 = QHBoxLayout(step2_body)
+        s2.setContentsMargins(0, 0, 0, 0)
+        s2.setSpacing(8)
+
+        lbl_s2 = QLabel("地図：左クリック＝中心点/方向追加　右クリック＝方向やり直し（中心からやり直す時はクリア）")
+        lbl_s2.setObjectName("StepBody")
+        lbl_s2.setWordWrap(True)
+        s2.addWidget(lbl_s2, 1)
+        s2.addWidget(self.btn_clear)
+
+        header_vbox.addWidget(self._make_step_card("STEP2  地図で中心点と方向を指定", step2_body, indent_px=18))
+
+        # STEP3: name + save
+        step3_body = QWidget()
+        s3 = QHBoxLayout(step3_body)
+        s3.setContentsMargins(0, 0, 0, 0)
+        s3.setSpacing(8)
+
+        lbl_s3 = QLabel("交差点名")
+        lbl_s3.setObjectName("StepBody")
+        s3.addWidget(lbl_s3)
+
+        self.name_edit.setPlaceholderText("例：01○○交差点")
+        s3.addWidget(self.name_edit, 1)
+        s3.addWidget(self.btn_save)
+
+        header_vbox.addWidget(self._make_step_card("STEP3  交差点名を入力して保存", step3_body, indent_px=36))
+
+        # STEP4: next action
+        step4_body = QWidget()
+        s4 = QHBoxLayout(step4_body)
+        s4.setContentsMargins(0, 0, 0, 0)
+        s4.setSpacing(8)
+
+        lbl_s4 = QLabel("次の交差点を作成するか、左の一覧を選択して 編集 / リネーム / 削除 を実行してください。")
+        lbl_s4.setObjectName("StepBody")
+        lbl_s4.setWordWrap(True)
+        s4.addWidget(lbl_s4, 1)
+
+        header_vbox.addWidget(self._make_step_card("STEP4  次へ（一覧から管理もOK）", step4_body, indent_px=54))
         header_container = QWidget()
         header_hbox = QHBoxLayout(header_container)
         header_hbox.setContentsMargins(0, 0, 0, 0)
         header_hbox.addWidget(header_panel, 1)
-        header_hbox.addSpacerItem(QSpacerItem(320, 1, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum))
+        header_hbox.addSpacerItem(QSpacerItem(360, 1, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum))
 
         right_vbox.addWidget(header_container, stretch=0)
 
