@@ -360,7 +360,6 @@ class MainWindow(QMainWindow):
 
         v.addWidget(body_widget)
 
-        card.setMinimumWidth(260)
         card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         return card
 
@@ -441,12 +440,8 @@ class MainWindow(QMainWindow):
         s1.setContentsMargins(0, 0, 0, 0)
         s1.setSpacing(8)
 
-        lbl_s1 = QLabel("選択")
-        lbl_s1.setObjectName("StepBody")
-        lbl_s1.setWordWrap(True)
-        s1.addWidget(lbl_s1, 1)
         s1.addWidget(self.btn_project)
-        s1.addWidget(self.project_path_edit, 2)
+        s1.addWidget(self.project_path_edit, 1)
 
         card1 = self._make_step_card("STEP1  プロジェクトフォルダ選択", step1_body)
 
@@ -492,11 +487,11 @@ class MainWindow(QMainWindow):
 
         card4 = self._make_step_card("STEP4  次へ", step4_body)
 
-        # 4枚を横並び投入（均等に伸びる）
-        steps_l.addWidget(card1, 1)
-        steps_l.addWidget(card2, 1)
-        steps_l.addWidget(card3, 1)
-        steps_l.addWidget(card4, 1)
+        # 4枚を横並び投入（10:7:15:7 = 1:0.7:1.5:0.7）
+        steps_l.addWidget(card1, 10)
+        steps_l.addWidget(card2, 7)
+        steps_l.addWidget(card3, 15)
+        steps_l.addWidget(card4, 7)
 
         header_vbox.addWidget(steps_row)
         header_container = QWidget()
