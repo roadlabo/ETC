@@ -38,11 +38,102 @@ COL_NAME = 0
 COL_CSV = 1
 COL_JPG = 2
 
-GREEN_LABEL_STYLE = """
+CYBER_QSS = """
+QMainWindow, QWidget {
+  background: #0b0f14;
+  color: #e6f1ff;
+  font-family: "Segoe UI", "Meiryo UI", "Consolas";
+  font-size: 12px;
+}
+
+/* --- buttons --- */
+QPushButton {
+  background: rgba(10, 18, 26, 0.92);
+  border: 1px solid rgba(0, 255, 136, 0.55);
+  border-radius: 10px;
+  padding: 7px 12px;
+  color: #e6f1ff;
+  font-weight: 700;
+}
+QPushButton:hover {
+  border: 1px solid rgba(0, 255, 136, 0.95);
+  background: rgba(0, 255, 136, 0.08);
+}
+QPushButton:pressed {
+  background: rgba(0, 255, 136, 0.16);
+}
+QPushButton:disabled {
+  color: rgba(230, 241, 255, 0.35);
+  border-color: rgba(0, 255, 136, 0.18);
+  background: rgba(10, 18, 26, 0.55);
+}
+
+/* --- line edits --- */
+QLineEdit {
+  background: rgba(5, 10, 16, 0.9);
+  border: 1px solid rgba(42, 115, 255, 0.55);
+  border-radius: 10px;
+  padding: 7px 10px;
+  selection-background-color: rgba(0, 255, 136, 0.35);
+}
+QLineEdit:focus {
+  border: 1px solid rgba(42, 115, 255, 0.95);
+}
+
+/* --- table --- */
+QTableWidget {
+  background: rgba(5, 10, 16, 0.85);
+  border: 1px solid rgba(42, 115, 255, 0.35);
+  border-radius: 12px;
+  gridline-color: rgba(42, 115, 255, 0.18);
+}
+QHeaderView::section {
+  background: rgba(10, 18, 26, 0.95);
+  color: #00ff88;
+  border: 0px;
+  padding: 8px 10px;
+  font-weight: 900;
+}
+QTableWidget::item {
+  padding: 6px 8px;
+}
+QTableWidget::item:selected {
+  background: rgba(0, 255, 136, 0.18);
+  color: #e6f1ff;
+}
+
+/* --- splitter handle --- */
+QSplitter::handle {
+  background: rgba(42, 115, 255, 0.20);
+}
+QSplitter::handle:hover {
+  background: rgba(42, 115, 255, 0.45);
+}
+
+/* --- scrollbars --- */
+QScrollBar:vertical {
+  background: rgba(5, 10, 16, 0.3);
+  width: 12px;
+  margin: 0px;
+}
+QScrollBar::handle:vertical {
+  background: rgba(0, 255, 136, 0.35);
+  border-radius: 6px;
+  min-height: 24px;
+}
+QScrollBar::handle:vertical:hover {
+  background: rgba(0, 255, 136, 0.55);
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+  height: 0px;
+}
+"""
+
+NEON_LABEL_QSS = """
 QLabel {
-    color: #00d26a;
-    font-weight: bold;
-    font-size: 13px;
+  color: #00ff88;
+  font-weight: 900;
+  font-size: 13px;
 }
 """
 
@@ -236,6 +327,8 @@ class MainWindow(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
         main_hbox = QHBoxLayout(root)
+        main_hbox.setContentsMargins(8, 8, 8, 8)
+        main_hbox.setSpacing(8)
 
         left_panel = QWidget()
         left_vbox = QVBoxLayout(left_panel)
@@ -284,7 +377,7 @@ class MainWindow(QMainWindow):
         # --- ①プロジェクトフォルダ選択（横並び・改行なし） ---
         row_project = QHBoxLayout()
         lbl_project_title = QLabel("①プロジェクトフォルダ選択（この中に「11_交差点(Point)データ」フォルダを作成します）")
-        lbl_project_title.setStyleSheet(GREEN_LABEL_STYLE)
+        lbl_project_title.setStyleSheet(NEON_LABEL_QSS)
         row_project.addWidget(lbl_project_title)
 
         row_project.addWidget(self.btn_project)
@@ -294,7 +387,7 @@ class MainWindow(QMainWindow):
 
         row_map = QHBoxLayout()
         self.lbl_guide = QLabel("②地図上を左クリック：中心点指定・方向追加　右クリック：方向指定やり直し　中心点の指定から全てやり直しは右のクリアボタン　=>")
-        self.lbl_guide.setStyleSheet(GREEN_LABEL_STYLE)
+        self.lbl_guide.setStyleSheet(NEON_LABEL_QSS)
         row_map.addWidget(self.lbl_guide)
         row_map.addStretch(1)
 
@@ -306,7 +399,7 @@ class MainWindow(QMainWindow):
         row_name = QHBoxLayout()
 
         lbl_name = QLabel("③交差点名")
-        lbl_name.setStyleSheet(GREEN_LABEL_STYLE)
+        lbl_name.setStyleSheet(NEON_LABEL_QSS)
         row_name.addWidget(lbl_name)
 
         self.name_edit = QLineEdit()
@@ -321,7 +414,7 @@ class MainWindow(QMainWindow):
         header_vbox.addLayout(row_name)
 
         lbl_next = QLabel("④次の交差点を作成してください。または、左の一覧をクリックして、編集・リネーム・削除を行って下さい。")
-        lbl_next.setStyleSheet(GREEN_LABEL_STYLE)
+        lbl_next.setStyleSheet(NEON_LABEL_QSS)
         lbl_next.setWordWrap(True)
         header_vbox.addWidget(lbl_next)
 
@@ -539,6 +632,7 @@ class MainWindow(QMainWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
+    app.setStyleSheet(CYBER_QSS)
     win = MainWindow()
     win.showMaximized()
     sys.exit(app.exec())
