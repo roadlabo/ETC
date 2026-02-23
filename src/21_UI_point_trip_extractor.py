@@ -175,7 +175,7 @@ class FlowGuide(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._steps: list[QWidget] = []
-        self.setMinimumHeight(86)
+        self.setMinimumHeight(140)
 
     def set_steps(self, steps: list[QWidget]):
         self._steps = steps
@@ -548,19 +548,8 @@ class MainWindow(QMainWindow):
                 border: 2px solid #2a6b45;
                 color: #3d6a55;
             }
-            QPushButton#btnViewer{
-                background: #0f261c;
-                border: 1px solid #4fbf95;
-                color: #8de0b7;
-            }
-            QPushButton#btnViewer:disabled{
-                background: #0a120f;
-                border: 1px solid #2a6b45;
-                color: #2f7a5b;
-            }
-            QPushButton#btnViewer:hover{
-                background: #153a2a;
-            }
+            /* カード内のビューアーボタンは高さが低いので padding だけ詰める（色・枠・挙動は共通のまま） */
+            QPushButton#btnViewer { padding: 2px 10px; }
             QFrame { border: 1px solid #1c4f33; border-radius: 4px; }
             QFrame#crossCard { border-radius: 8px; }
         """)
