@@ -37,7 +37,7 @@ from PyQt6.QtWidgets import (
 )
 
 APP_TITLE = "31_交差点パフォーマンス分析ツール + 32レポート作成ツール（一括実行）"
-UI_LOGO_FILENAME = "logo_31_32_crossroad_performance.png"
+UI_LOGO_FILENAME = "logo_31_32_crossroad_performance_to_report.png"
 FOLDER_CROSS = "11_交差点(Point)データ"
 FOLDER_S2 = "20_第２スクリーニング"
 FOLDER_31OUT = "31_交差点パフォーマンス"
