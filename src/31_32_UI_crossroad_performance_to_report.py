@@ -238,12 +238,14 @@ class CrossCardPerf(QFrame):
         ft = self.title.font(); ft.setPointSize(max(12, ft.pointSize() + 2)); ft.setBold(True); self.title.setFont(ft)
         self.lbl_select = QLabel()
         self.lbl_flags = QLabel(); self.lbl_s2 = QLabel(); self.lbl_out = QLabel(); self.lbl_progress = QLabel(); self.lbl_stats = QLabel(); self.lbl_state = QLabel()
-        self.btn_report = QPushButton("report.xlsx を開く"); self.btn_perf = QPushButton("performance.csv を開く")
-        for b in (self.btn_report, self.btn_perf):
+        self.btn_report = QPushButton("report.xlsx を開く")
+        self.btn_branch = QPushButton("IN/OUT枝 判定ビューアー起動")
+        for b in (self.btn_report, self.btn_branch):
             b.setMinimumHeight(28); b.setEnabled(False)
         self.btn_report.clicked.connect(lambda: self._open_path("out32", "report.xlsx"))
-        self.btn_perf.clicked.connect(lambda: self._open_path("out31", "performance.csv"))
-        for w in [self.title, self.lbl_select, self.lbl_flags, self.lbl_s2, self.lbl_out, self.lbl_progress, self.lbl_stats, self.lbl_state, self.btn_report, self.btn_perf]:
+        self.btn_branch.clicked.connect(self._launch_branch_viewer)
+        self.lbl_stats.setWordWrap(True)
+        for w in [self.title, self.lbl_select, self.lbl_flags, self.lbl_s2, self.lbl_out, self.lbl_progress, self.lbl_stats, self.lbl_state, self.btn_report, self.btn_branch]:
             v.addWidget(w)
         self.apply_state("待機")
 
@@ -270,7 +272,7 @@ class CrossCardPerf(QFrame):
         self.lbl_flags.setText(f"交差点CSV/JPG: {'有' if has_csv else '無'} / {'有' if has_jpg else '無'}")
         self.lbl_s2.setText(f"S2フォルダ/S2 CSV数: {'有' if has_s2_dir else '無'} / {s2_csv:,}")
         self.lbl_out.setText(f"performance.csv/report.xlsx: {'有' if has_out31 else '無'} / {'有' if has_out32 else '無'}")
-        self.btn_perf.setEnabled(has_out31)
+        self.btn_branch.setEnabled(has_out31)
         self.btn_report.setEnabled(has_out32)
 
     def set_progress(self, done: int, total: int):
@@ -280,7 +282,24 @@ class CrossCardPerf(QFrame):
 
     def set_stats(self, weekday: int, split: int, target: int, ok: int, unk: int, notpass: int):
         self.data.update({"weekday": weekday, "split": split, "target": target, "ok": ok, "unk": unk, "notpass": notpass})
-        self.lbl_stats.setText(f"曜日後:{weekday:,} / 分割:{split:,} / 対象:{target:,} / 成功:{ok:,} / 不明:{unk:,} / 不通過:{notpass:,}")
+        line1 = f"曜日スクリーニング後CSVファイル数{weekday:,}／分割トリップ数{split:,}"
+        line2 = f"対象トリップ数{target:,}／成功トリップ数{ok:,}／枝不明{unk:,}／不通過{notpass:,}"
+        self.lbl_stats.setText(line1 + "\n" + line2)
+
+    def _launch_branch_viewer(self):
+        perf = Path(self.paths.get("out31", ""))
+        if not perf.exists():
+            QMessageBox.information(self, "情報", "performance.csv が見つかりません。先に31を実行してください。")
+            return
+
+        bat = Path(__file__).resolve().parent.parent / "bat" / "33_branch_check.bat"
+        if not bat.exists():
+            QMessageBox.critical(self, "エラー", f"33_branch_check.bat が見つかりません:\n{bat}")
+            return
+
+        ok = QProcess.startDetached(str(bat), [str(perf)])
+        if not ok:
+            QMessageBox.critical(self, "エラー", "33の起動に失敗しました。")
 
     def set_state(self, state: str):
         self.state = state
@@ -326,6 +345,9 @@ class MainWindow(QMainWindow):
         self._eta_done = 0
         self._eta_total = 0
         self._telemetry_running = False
+        self._global_total_files = 0
+        self._global_done_files = 0
+        self._elapsed_frozen_text = "経過 00:00:00"
 
         self._waiting_lock_dialog: QDialog | None = None
         self._waiting_lock_timer: QTimer | None = None
@@ -629,24 +651,31 @@ class MainWindow(QMainWindow):
             self.time_eta_big.setText("残り --:--:--")
 
     def _tick_animation(self) -> None:
-        if hasattr(self, "sweep"):
-            self.sweep.tick()
-        self._update_time_boxes()
+        if self._telemetry_running:
+            if hasattr(self, "sweep"):
+                self.sweep.tick()
+            self._update_time_boxes()
+            self._elapsed_frozen_text = self.time_elapsed_big.text()
+        else:
+            self.time_elapsed_big.setText(self._elapsed_frozen_text)
 
     def _refresh_telemetry(self) -> None:
-        done = sum(1 for c in self.cards.values() if c.state == "完了")
-        total = self.target_count if self.target_count else len([c for c in self.cards.values() if c.selected])
-        self.tele["cross_total"].setText(f"交差点数: {total}")
-        current = self.current_name if self.current_name else "-"
+        selected_names = [n for n, c in self.cards.items() if c.selected]
+        total_cross = len(selected_names)
+        self.tele["cross_total"].setText(f"交差点数: {total_cross}")
+
+        current = self.current_name if (self._telemetry_running and self.current_name) else "---"
         self.tele["current"].setText(f"現在: {current}")
-        if self.current_name and self.current_name in self.cards:
-            cd = self.cards[self.current_name].data
-            done_f = cd["done"]; total_f = cd["total"]
-        else:
-            done_f = done; total_f = max(1, total)
+
+        done_f = sum(self.cards[n].data.get("done", 0) for n in selected_names)
+        total_f = sum(self.cards[n].flags.get("s2_csv", 0) for n in selected_names)
+        if total_f <= 0:
+            total_f = max(1, self._global_total_files)
+
+        self._global_done_files = done_f
         pct = (done_f / total_f * 100.0) if total_f else 0.0
         self.lbl_progress.setText(f"進捗ファイル: {done_f:,}/{total_f:,}（{pct:.1f}%）")
-        self.progress_bar.setValue(int(pct))
+        self.progress_bar.setValue(max(0, min(100, int(pct))))
         self._eta_done = done_f
         self._eta_total = total_f
 
@@ -898,7 +927,10 @@ class MainWindow(QMainWindow):
         self.log_info("========================================")
         self._set_run_controls_enabled(False)
         self.target_count = len(targets)
+        self._global_total_files = sum(self.cards[n].flags.get("s2_csv", 0) for n in targets)
+        self._global_done_files = 0
         self.started_at = time.time()
+        self._elapsed_frozen_text = "経過 00:00:00"
         self._telemetry_running = True
         self.tele["status"].setText("状態: RUNNING")
         for card in self.cards.values():
@@ -1139,7 +1171,10 @@ class MainWindow(QMainWindow):
             card.set_locked(False)
         self._telemetry_running = False
         self.tele["status"].setText("状態: DONE")
+        self.tele["current"].setText("現在: ---")
         self.time_eta_big.setText("残り 00:00:00")
+        self._refresh_telemetry()
+        self.progress_bar.setValue(100)
 
 
 def main() -> None:
