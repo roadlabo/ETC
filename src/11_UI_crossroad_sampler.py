@@ -489,7 +489,7 @@ class MainWindow(QMainWindow):
 
         # 4枚を横並び投入（10:7:15:7 = 1:0.7:1.5:0.7）
         steps_l.addWidget(card1, 10)
-        steps_l.addWidget(card2, 7)
+        steps_l.addWidget(card2, 10)
         steps_l.addWidget(card3, 15)
         steps_l.addWidget(card4, 7)
 
