@@ -623,6 +623,7 @@ class RouteMapperWindow(QMainWindow):
         self.current_df: Optional[pd.DataFrame] = None
 
         self._build_ui()
+        self.splash = None
         self._corner_logo_visible = False
         self._pix_small = None
         self._logo_phase = ""
@@ -758,6 +759,9 @@ class RouteMapperWindow(QMainWindow):
         if not self._pix_small:
             return
 
+        if hasattr(self, "splash") and self.splash:
+            self.splash.deleteLater()
+
         self.splash = QLabel(self)
         self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.splash.setStyleSheet("background: transparent;")
@@ -794,11 +798,18 @@ class RouteMapperWindow(QMainWindow):
             except Exception:
                 pass
 
-        if self.splash and getattr(self, "_logo_phase", "") == "center":
+        # splash が未生成なら何もしない
+        if not hasattr(self, "splash") or self.splash is None:
+            return
+
+        if getattr(self, "_logo_phase", "") == "center":
             x, y = self._logo_center_pos(self.splash.width(), self.splash.height())
             self.splash.move(x, y)
 
-        if self.splash and getattr(self, "_logo_phase", "") == "corner" and getattr(self, "_corner_logo_visible", False):
+        if (
+            getattr(self, "_logo_phase", "") == "corner"
+            and getattr(self, "_corner_logo_visible", False)
+        ):
             x, y = self._logo_corner_pos(self.splash.width(), self.splash.height())
             self.splash.move(x, y)
 
