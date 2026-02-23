@@ -770,7 +770,6 @@ def run_second_screening(
     total_matched = 0
 
     overall_start = time.time()
-    last_len = 0
 
     for idx, trip_path in enumerate(trip_files, 1):
         cand, matched = process_file_for_all_crossroads(
@@ -786,28 +785,10 @@ def run_second_screening(
         )
         total_candidate += cand
         total_matched += matched
-        elapsed = time.time() - overall_start
         percent = (idx / total_files) * 100 if total_files else 100.0
-        eta = (elapsed / idx) * (total_files - idx) if idx else 0.0
+        print(f"進捗ファイル: {idx}/{total_files} ({percent:.1f}%)", flush=True)
 
-        cross_summary = ", ".join(
-            f"{name[:2]}:{hits_per_cross[name]}" for name in sorted(hits_per_cross.keys())
-        )
-        max_summary_len = 120
-        if len(cross_summary) > max_summary_len:
-            cross_summary = cross_summary[: max_summary_len - 3] + "..."
-
-        line = (
-            f"{percent:3.0f}% ({idx}/{total_files} files)  "
-            f"total_hits={total_matched}  "
-            f"[{cross_summary}]  "
-            f"elapsed {format_hms(elapsed)}  "
-            f"eta {format_hms(eta)}"
-        )
-        last_len = _update_progress(line, last_len)
-
-    _clear_progress(last_len)
-    print(f"進捗: {total_files}/{total_files}", flush=True)
+    print(f"進捗ファイル: {total_files}/{total_files} (100.0%)", flush=True)
 
     total_elapsed = time.time() - overall_start
     print(f"TOTAL 所要時間: {format_hms(total_elapsed)}")

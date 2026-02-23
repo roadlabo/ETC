@@ -42,7 +42,7 @@ FOLDER_CROSS = "11_交差点(Point)データ"
 FOLDER_OUT = "20_第２スクリーニング"
 
 RE_LEVEL = re.compile(r"\[(INFO|WARN|WARNING|ERROR|DEBUG)\]")
-RE_FILE_DONE = re.compile(r"進捗:\s*(\d+)\s*/\s*(\d+)")
+RE_FILE_DONE = re.compile(r"進捗ファイル:\s*([0-9,]+)\s*/\s*([0-9,]+)")
 RE_HIT = re.compile(r"HIT:\s*(\S+)\s+(\d+)")
 RE_NEAR = re.compile(r"中心最近接距離\(m\):\s*(\S+)\s+([0-9.]+)")
 RE_OPID = re.compile(r"運行ID総数:\s*(\d+)")
@@ -276,8 +276,8 @@ class CrossCard(QFrame):
         self.locked = False
         self.state = "待機"
         self.setObjectName("crossCard")
-        self.setMinimumWidth(220)
-        self.setMaximumWidth(260)
+        self.setMinimumWidth(190)
+        self.setMaximumWidth(215)
         self.setFixedHeight(220)
         v = QVBoxLayout(self)
         self.title = QLabel(name)
@@ -396,10 +396,17 @@ class MainWindow(QMainWindow):
         self.lbl_input = QLabel("未選択")
         in_w = QWidget(); in_l = QHBoxLayout(in_w); in_l.setContentsMargins(0, 0, 0, 0); in_l.addWidget(self.btn_input); in_l.addWidget(self.lbl_input)
         self.spin_radius = QSpinBox(); self.spin_radius.setRange(5, 200); self.spin_radius.setValue(30); self.spin_radius.valueChanged.connect(self._on_radius_changed)
-        self.spin_radius.setButtonSymbols(QSpinBox.ButtonSymbols.UpDownArrows)
+        self.spin_radius.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.spin_radius.setFixedWidth(90)
-        rad_w = QWidget(); rad_l = QHBoxLayout(rad_w); rad_l.setContentsMargins(0, 0, 0, 0)
-        rad_l.addWidget(QLabel("半径")); rad_l.addWidget(self.spin_radius); rad_l.addWidget(QLabel("m"))
+        rad_w = QWidget(); rad_l = QHBoxLayout(rad_w)
+        rad_l.setContentsMargins(0, 0, 0, 0)
+        rad_l.setSpacing(6)
+        lbl_m = QLabel("m")
+        lbl_m.setStyleSheet("border: none; color: #7cffc6;")
+        rad_l.addWidget(QLabel("半径"))
+        rad_l.addWidget(self.spin_radius)
+        rad_l.addWidget(lbl_m)
+        rad_l.addStretch(1)
         self.btn_run = QPushButton("分析スタート"); self.btn_run.clicked.connect(self.run_screening)
         b1 = StepBox("STEP1 プロジェクトフォルダの選択", proj_w)
         b2 = StepBox("STEP2 第1スクリーニングデータの選択", in_w)
@@ -425,10 +432,15 @@ class MainWindow(QMainWindow):
         v.addWidget(flow_stack)
 
         mid_split = QSplitter(Qt.Orientation.Horizontal)
-        v.addWidget(mid_split, stretch=5)
+        v.addWidget(mid_split, stretch=9)
         left_panel = QFrame(); lv = QVBoxLayout(left_panel)
+        lv.setContentsMargins(4, 4, 4, 4)
+        lv.setSpacing(4)
         lv.addWidget(QLabel("交差点アイコン一覧"))
-        self.cross_container = QWidget(); self.cross_flow = FlowLayout(self.cross_container, spacing=4); self.cross_container.setLayout(self.cross_flow)
+        self.cross_container = QWidget()
+        self.cross_container.setContentsMargins(0, 0, 0, 0)
+        self.cross_flow = FlowLayout(self.cross_container, spacing=2)
+        self.cross_container.setLayout(self.cross_flow)
         self.cross_scroll = QScrollArea(); self.cross_scroll.setWidgetResizable(True); self.cross_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); self.cross_scroll.setWidget(self.cross_container)
         lv.addWidget(self.cross_scroll)
         mid_split.addWidget(left_panel)
@@ -465,7 +477,8 @@ class MainWindow(QMainWindow):
 
         self.log = QPlainTextEdit(); self.log.setReadOnly(True)
         self.log.setFont(QFont("Consolas", 10)); self.log.setMaximumBlockCount(2000)
-        v.addWidget(self.log, stretch=2)
+        self.log.setFixedHeight(160)
+        v.addWidget(self.log, stretch=0)
 
     def _set_style(self):
         self.setStyleSheet("""
@@ -549,6 +562,11 @@ class MainWindow(QMainWindow):
             return
         self.input_dir = Path(d).resolve(); self.lbl_input.setText(self.input_dir.name)
         self.log_info(f"input set: {self.input_dir}")
+        n = self._count_first_screening_opids_fast(self.input_dir)
+        self.tele["opid"].setText(f"第1スクリーニング数（運行ID数）: {n:,}")
+
+    def _count_first_screening_opids_fast(self, folder: Path) -> int:
+        return sum(1 for _ in folder.rglob("*.csv"))
 
     def scan_crossroads(self):
         self._clear_cards()
@@ -688,9 +706,10 @@ class MainWindow(QMainWindow):
             return
         m_file = RE_FILE_DONE.search(text)
         if m_file:
-            self.done_files = int(m_file.group(1)); self.total_files = int(m_file.group(2))
+            self.done_files = int(m_file.group(1).replace(",", "")); self.total_files = int(m_file.group(2).replace(",", ""))
             self._eta_done = self.done_files; self._eta_total = self.total_files
             self._update_progress_label()
+            return
 
         m_hit = RE_HIT.search(text)
         if m_hit:
@@ -712,52 +731,26 @@ class MainWindow(QMainWindow):
             self.tele["opid"].setText(f"第1スクリーニング数（運行ID数）: {int(m_opid.group(1)):,}")
             return
 
-        if from_cr and RE_FILE_DONE.search(text):
-            return
-        self._log_process_line(text, is_err)
-
-    def _maybe_update_realtime_from_buffer(self, buf: str) -> None:
-        idx = buf.rfind("進捗:")
-        if idx < 0:
-            return
-        m = RE_FILE_DONE.search(buf[idx:].strip())
-        if m:
-            self.done_files = int(m.group(1)); self.total_files = int(m.group(2))
-            self._eta_done = self.done_files; self._eta_total = self.total_files
-            self._update_progress_label()
-
-    def _append_stream_chunk(self, chunk: str, is_err: bool) -> None:
-        if not chunk:
-            return
-        buf = (self._stderr_buf if is_err else self._stdout_buf) + chunk
-        self._maybe_update_realtime_from_buffer(buf)
-        start = 0
-        for idx, ch in enumerate(buf):
-            if ch in ("\r", "\n"):
-                prev_is_cr = idx > 0 and buf[idx - 1] == "\r"
-                self._handle_stream_line(buf[start:idx], ch == "\r" or prev_is_cr, is_err)
-                start = idx + 1
-        if is_err:
-            self._stderr_buf = buf[start:]; self._maybe_update_realtime_from_buffer(self._stderr_buf)
-        else:
-            self._stdout_buf = buf[start:]; self._maybe_update_realtime_from_buffer(self._stdout_buf)
-
-    def _flush_process_buffers(self) -> None:
-        if self._stdout_buf:
-            self._handle_stream_line(self._stdout_buf, False, False); self._stdout_buf = ""
-        if self._stderr_buf:
-            self._handle_stream_line(self._stderr_buf, False, True); self._stderr_buf = ""
+        if is_err or "[ERROR]" in text:
+            self._log_process_line(text, is_err)
 
     def _on_stdout(self):
         if self.proc:
-            self._append_stream_chunk(self._decode_qbytearray(self.proc.readAllStandardOutput()), False)
+            text = self._decode_qbytearray(self.proc.readAllStandardOutput())
+            text = text.replace("\r", "\n")
+            for line in text.split("\n"):
+                if line.strip():
+                    self._handle_stream_line(line.strip(), False, False)
 
     def _on_stderr(self):
         if self.proc:
-            self._append_stream_chunk(self._decode_qbytearray(self.proc.readAllStandardError()), True)
+            text = self._decode_qbytearray(self.proc.readAllStandardError())
+            text = text.replace("\r", "\n")
+            for line in text.split("\n"):
+                if line.strip():
+                    self._handle_stream_line(line.strip(), False, True)
 
     def _on_finished(self, code: int, _status):
-        self._flush_process_buffers()
         self.is_running = False
         self._telemetry_running = False
         self.tele["status"].setText("状態: DONE" if code == 0 else "状態: ERROR")
