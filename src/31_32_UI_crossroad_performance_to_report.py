@@ -241,7 +241,16 @@ class CrossCardPerf(QFrame):
         self.btn_report = QPushButton("report.xlsx を開く")
         self.btn_branch = QPushButton("IN/OUT枝 判定ビューアー起動")
         for b in (self.btn_report, self.btn_branch):
-            b.setMinimumHeight(28); b.setEnabled(False)
+            b.setMinimumHeight(36)
+            b.setEnabled(False)
+            b.setStyleSheet(
+                """
+                QPushButton {
+                    padding: 6px 10px;
+                    margin: 0px;
+                }
+                """
+            )
         self.btn_report.clicked.connect(lambda: self._open_path("out32", "report.xlsx"))
         self.btn_branch.clicked.connect(self._launch_branch_viewer)
         self.lbl_stats.setWordWrap(True)
@@ -266,14 +275,23 @@ class CrossCardPerf(QFrame):
     def set_locked(self, locked: bool):
         self.locked = locked
 
+    def set_buttons_enabled(self, enabled: bool):
+        if not enabled:
+            self.btn_report.setEnabled(False)
+            self.btn_branch.setEnabled(False)
+            return
+
+        has_out32 = Path(self.paths.get("out32", "")).exists()
+        has_out31 = Path(self.paths.get("out31", "")).exists()
+        self.btn_report.setEnabled(has_out32)
+        self.btn_branch.setEnabled(has_out31)
+
     def set_flags(self, *, has_csv: bool, has_jpg: bool, has_s2_dir: bool, s2_csv: int, has_out31: bool, has_out32: bool):
         self.flags.update(locals())
         self.flags.pop('self',None)
         self.lbl_flags.setText(f"交差点CSV/JPG: {'有' if has_csv else '無'} / {'有' if has_jpg else '無'}")
         self.lbl_s2.setText(f"S2フォルダ/S2 CSV数: {'有' if has_s2_dir else '無'} / {s2_csv:,}")
         self.lbl_out.setText(f"performance.csv/report.xlsx: {'有' if has_out31 else '無'} / {'有' if has_out32 else '無'}")
-        self.btn_branch.setEnabled(has_out31)
-        self.btn_report.setEnabled(has_out32)
 
     def set_progress(self, done: int, total: int):
         self.data['done']=done; self.data['total']=total
@@ -566,6 +584,7 @@ class MainWindow(QMainWindow):
         flow_grid = QGridLayout(self.flow_host); flow_grid.setContentsMargins(0, 0, 0, 0); flow_grid.setHorizontalSpacing(18)
 
         self.btn_project = QPushButton("プロジェクトを選ぶ"); self.btn_project.setFont(top_font); self.btn_project.clicked.connect(self.select_project)
+        self.btn_project.setMinimumHeight(36)
         self.lbl_project = QLabel("未選択"); self.lbl_project.setFont(top_font)
         proj_w = QWidget(); proj_l = QHBoxLayout(proj_w); proj_l.setContentsMargins(0, 0, 0, 0); proj_l.addWidget(self.btn_project); proj_l.addWidget(self.lbl_project)
 
@@ -584,6 +603,7 @@ class MainWindow(QMainWindow):
         rad_l.addWidget(QLabel("半径")); rad_l.addWidget(self.spin_radius); rad_l.addWidget(QLabel("m")); rad_l.addWidget(m_lbl)
 
         self.btn_run = QPushButton("31→32 一括実行（分析スタート）"); self.btn_run.clicked.connect(self.start_batch)
+        self.btn_run.setMinimumHeight(36)
         run_w = QWidget(); run_l = QHBoxLayout(run_w); run_l.setContentsMargins(0, 0, 0, 0); run_l.addWidget(self.btn_run)
 
         box1 = StepBox("STEP 1  プロジェクトフォルダの選択", proj_w); box1.setMinimumWidth(360)
@@ -863,6 +883,7 @@ class MainWindow(QMainWindow):
             card = CrossCardPerf(name)
             card.paths = {"out31": str(out31), "out32": str(out32), "cross_csv": str(csv_path), "cross_jpg": str(jpg), "s2_dir": str(s2_cross)}
             card.set_flags(has_csv=csv_path.exists(), has_jpg=jpg.exists(), has_s2_dir=s2_cross.exists(), s2_csv=n_csv, has_out31=out31.exists(), has_out32=out32.exists())
+            card.set_buttons_enabled(True)
             card.set_progress(0, n_csv)
             card.set_stats(0, 0, 0, 0, 0, 0)
             self.cards[name] = card
@@ -880,6 +901,13 @@ class MainWindow(QMainWindow):
             self.cards[self.current_name].set_state(status)
             self._refresh_telemetry()
 
+    def _is_file_locked(self, path: Path) -> bool:
+        try:
+            with open(path, "a", encoding="utf-8"):
+                return False
+        except OSError:
+            return True
+
     def start_batch(self) -> None:
         if not self.project_dir:
             QMessageBox.warning(self, "未設定", "①プロジェクトフォルダを選択してください。")
@@ -887,6 +915,19 @@ class MainWindow(QMainWindow):
         targets = self._collect_targets()
         if not targets:
             QMessageBox.information(self, "対象なし", "実行対象の交差点が選択されていません。")
+            return
+
+        locked_reports: list[str] = []
+        for name in targets:
+            p = Path(self.cards[name].paths.get("out32", ""))
+            if p.exists() and self._is_file_locked(p):
+                locked_reports.append(p.name)
+
+        if locked_reports:
+            msg = "Excelを閉じて下さい。\n\n開いている可能性があるファイル:\n" + "\n".join(locked_reports[:20])
+            if len(locked_reports) > 20:
+                msg += f"\n... 他 {len(locked_reports)-20} 件"
+            QMessageBox.warning(self, "ファイルが開かれています", msg)
             return
 
         # 設計原則：
@@ -935,6 +976,7 @@ class MainWindow(QMainWindow):
         self.tele["status"].setText("状態: RUNNING")
         for card in self.cards.values():
             card.set_locked(True)
+            card.set_buttons_enabled(False)
             if card.selected:
                 card.set_state("待機")
         self._refresh_telemetry()
@@ -1086,6 +1128,7 @@ class MainWindow(QMainWindow):
             self._set_status_for_current_card(msg); self.log_error(msg); self._start_next_crossroad(); return
 
         self._set_status_for_current_card("完了")
+        card.set_buttons_enabled(True)
         dt = perf_counter() - self.cross_start_perf.get(self.current_name, perf_counter())
         self.log_info(f"交差点: {self.current_name} 所要時間: {dt:.1f}s")
         self.log_info(f"交差点完了: {self.current_name}")
@@ -1169,6 +1212,7 @@ class MainWindow(QMainWindow):
         self._set_run_controls_enabled(True)
         for card in self.cards.values():
             card.set_locked(False)
+            card.set_buttons_enabled(True)
         self._telemetry_running = False
         self.tele["status"].setText("状態: DONE")
         self.tele["current"].setText("現在: ---")
