@@ -330,9 +330,18 @@ class CrossCardPerf(QFrame):
             QMessageBox.critical(self, "エラー", f"33_branch_check.bat が見つかりません:\n{bat}")
             return
 
-        ok = QProcess.startDetached(str(bat), [str(perf)])
+        # Windowsは bat を直接起動できないことがあるため、cmd.exe 経由で起動する
+        ok = QProcess.startDetached("cmd.exe", ["/c", str(bat), str(perf)])
         if not ok:
-            QMessageBox.critical(self, "エラー", "33の起動に失敗しました。")
+            # フォールバック（より確実）
+            try:
+                import subprocess
+
+                subprocess.Popen(["cmd.exe", "/c", str(bat), str(perf)], close_fds=True)
+                ok = True
+            except Exception as e:
+                QMessageBox.critical(self, "エラー", f"33の起動に失敗しました。\n{e}")
+                return
 
     def set_state(self, state: str):
         self.state = state
