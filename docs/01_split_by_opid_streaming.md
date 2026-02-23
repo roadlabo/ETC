@@ -1,10 +1,10 @@
-# 01_split_by_opid_streaming（OPID分割・時系列整列）
+# 01_split_by_opid_streaming（運行ID（OPID）分割・時系列整列）
 
 ## このスクリプトで何をしているか（結論）
 `01_split_by_opid_streaming.py` は、ETC2.0 の ZIP を順に読み、ZIP内の指定CSV（既定 `data.csv`）を**ストリーミング処理**して、`OPID` ごとのCSVに分割保存します。最後に、必要であれば出力CSVを**タイムスタンプ列で外部ソート**して時系列整列します。
 
 - 巨大データを一括でメモリに載せない設計（逐次読み出し + チャンクソート + マージ）。
-- 同じ OPID が複数 ZIP にまたがっていても、`TERM_OPID.csv` に追記集約。
+- 同じ 運行ID（OPID） が複数 ZIP にまたがっていても、`TERM_OPID.csv` に追記集約。
 
 ---
 
@@ -15,7 +15,7 @@
 - 各 ZIP の中にある `--inner_csv` で指定したファイル名（既定 `data.csv`）。
 
 ### 出力
-- `--output_dir` に OPID ごとのCSVを生成。
+- `--output_dir` に 運行ID（OPID） ごとのCSVを生成。
 - ファイル名: `TERM_OPID.csv`（例: `R7_2_ABC12345.csv`）
 
 ---
@@ -34,9 +34,9 @@
 - `TextIOWrapper` + `csv.reader` で 1 行ずつ処理。
 - `UnicodeDecodeError` / `csv.Error` は行スキップして継続。
 
-### 4) OPIDで分割して追記
-- OPID は **4列目（index 3）固定**で抽出（現実装に `--opid_col` 引数はない）。
-- OPID ごとの `TERM_OPID.csv` を開き、行を追記。
+### 4) 運行ID（OPID）で分割して追記
+- 運行ID（OPID） は **4列目（index 3）固定**で抽出（現実装に `--opid_col` 引数はない）。
+- 運行ID（OPID） ごとの `TERM_OPID.csv` を開き、行を追記。
   - 初回出現: 新規作成
   - 既存あり: 追記
 
