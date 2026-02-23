@@ -34,11 +34,13 @@ from PyQt6.QtWidgets import (
 )
 
 APP_TITLE = "21_第２スクリーニング（指定交差点を通過するトリップの抽出）"
+
+# --- STEP box fixed width tuning ---
+STEP_BOX_W = 360
+
 UI_LOGO_FILENAME = "logo_21_UI_point_trip_extractor.png"
 
 # --- UI width tuning ---
-STEP12_MIN_W = 360
-
 CORNER_LOGO_MARGIN = 18
 CORNER_LOGO_OFFSET_TOP = -4
 CORNER_LOGO_OFFSET_RIGHT = -10
@@ -159,7 +161,7 @@ class StepBox(QFrame):
     def __init__(self, title: str, content: QWidget, parent=None):
         super().__init__(parent)
         self.setObjectName("stepBox")
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         t = QLabel(title)
         t.setObjectName("stepTitle")
         lay = QVBoxLayout(self)
@@ -473,20 +475,20 @@ class MainWindow(QMainWindow):
         rad_l.addWidget(lbl_m)
         rad_l.addStretch(1)
         self.btn_run = QPushButton("分析スタート"); self.btn_run.clicked.connect(self.run_screening)
-        self.step1_box = StepBox("STEP1 プロジェクトフォルダの選択", proj_w)
-        self.step2_box = StepBox("STEP2 第1スクリーニングデータの選択", in_w)
-        self.step1_box.setMinimumWidth(STEP12_MIN_W)
-        self.step2_box.setMinimumWidth(STEP12_MIN_W)
-        b3 = StepBox("STEP3 交差点通過判定半径（この半径以内を通過したトリップを抽出します）", rad_w)
-        b4 = StepBox("STEP4 第2スクリーニング実行", self.btn_run)
+        self.step1_box = StepBox("STEP 1  プロジェクトフォルダの選択", proj_w)
+        self.step2_box = StepBox("STEP 2  第1スクリーニングデータの選択", in_w)
+        b3 = StepBox("STEP 3  交差点通過判定半径（この半径以内を通過したらHIT）", rad_w)
+        b4 = StepBox("STEP 4  実行", self.btn_run)
+        for b in (self.step1_box, self.step2_box, b3, b4):
+            b.setFixedWidth(STEP_BOX_W)
         flow_grid.addWidget(self.step1_box, 0, 0); flow_grid.addWidget(self.step2_box, 0, 1); flow_grid.addWidget(b3, 0, 2); flow_grid.addWidget(b4, 0, 3)
         self._flow_spacer = QWidget()
         self._flow_spacer.setFixedWidth(380)
         flow_grid.addWidget(self._flow_spacer, 0, 4)
-        flow_grid.setColumnStretch(0, 1)
-        flow_grid.setColumnStretch(1, 1)
-        flow_grid.setColumnStretch(2, 2)
-        flow_grid.setColumnStretch(3, 1)
+        flow_grid.setColumnStretch(0, 0)
+        flow_grid.setColumnStretch(1, 0)
+        flow_grid.setColumnStretch(2, 0)
+        flow_grid.setColumnStretch(3, 0)
         flow_grid.setColumnStretch(4, 0)
         self.flow.set_steps([self.step1_box, self.step2_box, b3, b4])
         flow_stack = QFrame()
@@ -496,7 +498,6 @@ class MainWindow(QMainWindow):
         stack_l.setStackingMode(QStackedLayout.StackingMode.StackAll)
         stack_l.addWidget(self.flow_host)
         stack_l.addWidget(self.flow)
-        QTimer.singleShot(0, self._sync_step12_width)
         v.addWidget(flow_stack)
 
         mid_split = QSplitter(Qt.Orientation.Horizontal)
