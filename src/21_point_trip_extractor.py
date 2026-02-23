@@ -28,8 +28,6 @@ DEFAULT_THRESH_M = 30.0  # 交差点中心からの判定距離[m]（デフォ�
 MIN_HITS = 1         # HITとみなす最小ヒット数（点＋線分の合計）
 DRY_RUN = False
 VERBOSE = False
-# 入力ディレクトリ配下のサブフォルダも含めて探索するかどうか
-RECURSIVE = True
 AUDIT_MODE = False   # （必要なら距離計算回数などの統計用）
 
 
@@ -643,6 +641,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_THRESH_M,
         help=f"交差点中心からの判定半径[m]（デフォルト: {DEFAULT_THRESH_M}）",
     )
+    parser.add_argument("--recursive", action="store_true", help="入力フォルダ配下のサブフォルダも探索する")
     parser.add_argument("--dry-run", action="store_true", help="一覧表示のみ（処理しない）")
     return parser.parse_args(list(argv) if argv is not None else None)
 
@@ -714,6 +713,7 @@ def run_second_screening(
     output_dir: Path,
     targets: Optional[List[str]],
     radius_m: float,
+    recursive: bool,
     dry_run: bool,
 ) -> int:
     print(f"[INFO] Input  : {input_dir}")
@@ -748,7 +748,7 @@ def run_second_screening(
         print("No valid crossroad points could be loaded.")
         return 1
 
-    trip_files = list_csv_files(input_dir, recursive=RECURSIVE)
+    trip_files = list_csv_files(input_dir, recursive=bool(recursive))
     if not trip_files:
         print(f"No trip CSV files found under {input_dir}")
         return 0
@@ -819,6 +819,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir=output_dir,
         targets=args.targets,
         radius_m=args.radius_m,
+        recursive=args.recursive,
         dry_run=args.dry_run,
     )
 
