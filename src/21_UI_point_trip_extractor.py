@@ -270,15 +270,15 @@ class DistHistogram(QWidget):
 
 
 class CrossCard(QFrame):
-    def __init__(self, name: str, radius: int = 30):
+    def __init__(self, name: str, radius: int = 30, on_viewer=None):
         super().__init__()
         self.name = name
         self.selected = True
         self.locked = False
         self.state = "待機"
         self.setObjectName("crossCard")
-        self.setMinimumWidth(273)
-        self.setMaximumWidth(273)
+        self.setMinimumWidth(287)
+        self.setMaximumWidth(287)
         self.setFixedHeight(220)
         v = QVBoxLayout(self)
         self.title = QLabel(name)
@@ -290,9 +290,19 @@ class CrossCard(QFrame):
         self.hist = DistHistogram(radius)
         for w in [self.title, self.sel_label, self.flags, self.flags2, self.hit, self.hist_title, self.hist]:
             v.addWidget(w)
+        self.btn_viewer = QPushButton("トリップビューアー")
+        self.btn_viewer.setObjectName("btnViewer")
+        self.btn_viewer.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_viewer.setEnabled(False)
+        if on_viewer:
+            self.btn_viewer.clicked.connect(lambda: on_viewer(self.name))
+        v.addWidget(self.btn_viewer)
         self.apply_state("待機")
 
-    def mousePressEvent(self, _event):
+    def mousePressEvent(self, event):
+        w = self.childAt(event.pos())
+        if isinstance(w, QPushButton):
+            return
         if self.locked:
             return
         self.selected = not self.selected
@@ -300,6 +310,9 @@ class CrossCard(QFrame):
 
     def set_locked(self, locked: bool) -> None:
         self.locked = locked
+
+    def set_viewer_enabled(self, enabled: bool) -> None:
+        self.btn_viewer.setEnabled(bool(enabled))
 
     def set_flags(self, *, has_csv: bool, has_jpg: bool, has_s2_dir: bool, has_s2_csv: bool) -> None:
         self.flags.setText(f"交差点定義ファイルJPG／CSV: {'有' if has_jpg else '無'} / {'有' if has_csv else '無'}")
@@ -355,6 +368,7 @@ class MainWindow(QMainWindow):
         self.batch_ended_at: datetime | None = None
         self.batch_start_perf: float | None = None
         self.is_running = False
+        self._next_pct_log = 10
 
         self.cards: dict[str, CrossCard] = {}
         self.errors = 0
@@ -494,11 +508,47 @@ class MainWindow(QMainWindow):
         self.setStyleSheet("""
             QWidget { background: #050908; color: #79d58f; }
             QPlainTextEdit, QSpinBox, QProgressBar, QScrollArea { background: #0a120f; border: 1px solid #1f3f2d; }
-            QPushButton { background: #112116; border: 1px solid #2a6b45; padding: 6px 10px; }
-            QPushButton:hover { background: #18321f; }
+            QPushButton {
+                background: #0f2a1c;
+                border: 2px solid #00ff99;
+                padding: 10px 14px;
+                border-radius: 12px;
+                color: #eafff4;
+                font-weight: 900;
+            }
+            QPushButton:hover { background: #153a26; }
+            QPushButton:pressed { background: #0b1f14; }
+            QPushButton:disabled {
+                background: #0a120f;
+                border: 2px solid #2a6b45;
+                color: #3d6a55;
+            }
+            QPushButton#btnViewer{
+                background: #123122;
+                border: 2px solid #7cffc6;
+            }
+            QPushButton#btnViewer:hover{
+                background: #184331;
+            }
             QFrame { border: 1px solid #1c4f33; border-radius: 4px; }
             QFrame#crossCard { border-radius: 8px; }
         """)
+
+    def _open_trip_viewer(self, cross_name: str) -> None:
+        if not self.project_dir:
+            return
+        _cross_dir, out_dir = resolve_project_paths(self.project_dir)
+        folder = out_dir / cross_name
+        if (not folder.exists()) or (not any(folder.glob("*.csv"))):
+            QMessageBox.information(self, "情報", "第2スクリーニング済みCSVが見つかりません。")
+            return
+
+        script05 = Path(__file__).resolve().parent / "05_route_mapper_simple.py"
+        if not script05.exists():
+            QMessageBox.critical(self, "エラー", f"05が見つかりません:\n{script05}")
+            return
+
+        QProcess.startDetached(sys.executable, [str(script05), str(folder)])
 
     def _fmt_hms(self, sec: float) -> str:
         sec = max(0, int(sec)); h = sec // 3600; m = (sec % 3600) // 60; s = sec % 60
@@ -620,8 +670,9 @@ class MainWindow(QMainWindow):
             jpg_path = cross_dir / f"{name}.jpg"
             out_path = out_dir / name
             n_s2_csv = len(list(out_path.glob("*.csv"))) if out_path.exists() else 0
-            card = CrossCard(name, self.spin_radius.value())
+            card = CrossCard(name, self.spin_radius.value(), on_viewer=self._open_trip_viewer)
             card.set_flags(has_csv=True, has_jpg=jpg_path.exists(), has_s2_dir=out_path.exists(), has_s2_csv=n_s2_csv > 0)
+            card.set_viewer_enabled(n_s2_csv > 0)
             card.set_hit_count(0)
             self.cards[name] = card
             self.cross_flow.addWidget(card)
@@ -700,6 +751,7 @@ class MainWindow(QMainWindow):
             self.proc.kill(); self.proc = None
 
         self.log_lines = []; self._last_log_line = None
+        self._next_pct_log = 10
         self.batch_started_at = datetime.now(); self.batch_start_perf = perf_counter(); self.batch_ended_at = None
         self._stdout_buf = ""; self._stderr_buf = ""
         recursive = bool(getattr(self, "chk_recursive", None) and self.chk_recursive.isChecked())
@@ -715,6 +767,7 @@ class MainWindow(QMainWindow):
         for card in self.cards.values():
             card.set_state("待機")
             card.set_locked(True)
+            card.set_viewer_enabled(False)
 
         self.is_running = True
         self.btn_run.setEnabled(False)
@@ -764,9 +817,17 @@ class MainWindow(QMainWindow):
             return
         m_file = RE_FILE_DONE.search(text)
         if m_file:
-            self.done_files = int(m_file.group(1).replace(",", "")); self.total_files = int(m_file.group(2).replace(",", ""))
-            self._eta_done = self.done_files; self._eta_total = self.total_files
+            self.done_files = int(m_file.group(1).replace(",", ""))
+            self.total_files = int(m_file.group(2).replace(",", ""))
+            self._eta_done = self.done_files
+            self._eta_total = self.total_files
             self._update_progress_label()
+
+            if self.total_files > 0:
+                pct = int((self.done_files / self.total_files) * 100)
+                while self._next_pct_log <= 100 and pct >= self._next_pct_log:
+                    self.log_info(f"{self._next_pct_log}%完了")
+                    self._next_pct_log += 10
             return
 
         m_hit = RE_HIT.search(text)
@@ -816,6 +877,12 @@ class MainWindow(QMainWindow):
         for card in self.cards.values():
             card.set_state("完了" if code == 0 else "エラー")
             card.set_locked(False)
+        if self.project_dir:
+            _cross_dir, out_dir = resolve_project_paths(self.project_dir)
+            for name, card in self.cards.items():
+                p = out_dir / name
+                has_csv = p.exists() and any(p.glob("*.csv"))
+                card.set_viewer_enabled(has_csv)
         self.log_info(f"process finished: code={code}")
         self.log_info("🎉 おめでとうございます。全件処理完了です。")
         self.btn_run.setEnabled(True)
