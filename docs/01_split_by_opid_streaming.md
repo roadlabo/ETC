@@ -1,32 +1,94 @@
-# 01_split_by_opid_streaming
-## 目的（何をする）
-ZIP に格納された ETC2.0 生データをストリーミングで読み出し、運行 ID（OPID）ごとに CSV を分割する。必要に応じて時系列ソートまで自動化し、後続の第1/第2スクリーニングが扱いやすい粒度に整える。
-## 位置づけ（分析フロー上のどこ）
-- **前処理**: 第1スクリーニング前のデータ整形。
-- **PDF 用語**: 「対象エリアを含む2次メッシュのデータを全検索」→「運行ID毎に集計→時系列ソート」の担当。
-## 入力
-- INPUT_DIR に置かれた ZIP 群（ファイル名に `ZIP_DIGIT_KEYS` のいずれかを含むものだけを対象）。
-- 各 ZIP に含まれる `INNER_CSV`（既定: `data.csv`）。
-- 列前提（0 始まり）: D列=OPID(3), G列=GPS時刻(6)。他列は無加工で透過。
-## 出力
-- `OUTPUT_DIR/{TERM_NAME}_{opid}.csv` : OPID ごとの分割結果。書き込み時は追記モード。
-- `DO_FINAL_SORT=True` の場合、`SORT_GLOB` に一致するファイルをチャンク分割→マージし、時刻列（`TIMESTAMP_COL`）でソート済みに置換。作業ディレクトリ `_sort_tmp` を自動生成/掃除。
-## 実行方法
-- スクリプト先頭の設定（入力/出力パス、ZIP_DIGIT_KEYS、INNER_CSV、エンコーディング、ソート有無）を編集。
-- コマンド例: `python 01_split_by_opid_streaming.py`
-- 進捗は標準出力にパーセント表示。
-## 判定ロジック（重要なものだけ）
-- ZIP 内 CSV をストリーミング読み込みし、行ごとの OPID を確認してファイルを切替。
-- 時刻ソートはチャンクサイズ `CHUNK_ROWS` ごとに外部ソートし、ヒープでマージ（メモリ節約型）。
-- 不正行（列不足・デコード失敗）はスキップし、処理継続を優先。
-## できること / できないこと（行政向けの注意）
-- できること: 大容量 ZIP を展開せずに分割、運行単位の欠損なく保存、時系列整列済み CSV を後段へ渡す。
-- できないこと: 測位誤差や欠損値の補正、OPID の欠落推定、ZIP 名の規則性チェック。ZIP 内に `INNER_CSV` が無い場合は自動で探しに行かない。
-## よくあるミス
-- `ZIP_DIGIT_KEYS` が一致せずファイルが無視される。
-- `TIMESTAMP_COL` の列番号を誤り、ソートが無効になる。
-- `OUTPUT_DIR` の空き容量不足（OPID 数だけファイルが増える）。
-## 関連スクリプト
-- 前段: なし（生データ起点）。
-- 後段: [docs/20_route_trip_extractor.md](./20_route_trip_extractor.md), [docs/21_point_trip_extractor.md](./21_point_trip_extractor.md)（第1/第2スクリーニングの入力）。
-- フロー全体: [docs/01_pipeline.md](./01_pipeline.md)
+# 01_split_by_opid_streaming（OPID分割・時系列整列）
+
+## このスクリプトで何をしているか（結論）
+`01_split_by_opid_streaming.py` は、ETC2.0 の ZIP を順に読み、ZIP内の指定CSV（既定 `data.csv`）を**ストリーミング処理**して、`OPID` ごとのCSVに分割保存します。最後に、必要であれば出力CSVを**タイムスタンプ列で外部ソート**して時系列整列します。
+
+- 巨大データを一括でメモリに載せない設計（逐次読み出し + チャンクソート + マージ）。
+- 同じ OPID が複数 ZIP にまたがっていても、`TERM_OPID.csv` に追記集約。
+
+---
+
+## 入力と出力
+
+### 入力
+- `--input_dir` 配下の ZIP ファイル（※現実装は**直下のみ**探索。再帰探索ではない）。
+- 各 ZIP の中にある `--inner_csv` で指定したファイル名（既定 `data.csv`）。
+
+### 出力
+- `--output_dir` に OPID ごとのCSVを生成。
+- ファイル名: `TERM_OPID.csv`（例: `R7_2_ABC12345.csv`）
+
+---
+
+## 処理フロー
+
+### 1) ZIP探索（SCAN）
+- `input_dir` 直下の `.zip` を列挙。
+- `--zip_digit_keys`（カンマ区切り）に含まれる文字列のいずれかが ZIP 名に含まれるものだけを対象化。
+
+### 2) ZIP内CSVの取得
+- 対象 ZIP から `--inner_csv` で指定したファイル名を `getinfo()` で取得。
+- ZIP 内に該当ファイルが無ければ、その ZIP は missing としてスキップ。
+
+### 3) CSVをストリーミング読み込み
+- `TextIOWrapper` + `csv.reader` で 1 行ずつ処理。
+- `UnicodeDecodeError` / `csv.Error` は行スキップして継続。
+
+### 4) OPIDで分割して追記
+- OPID は **4列目（index 3）固定**で抽出（現実装に `--opid_col` 引数はない）。
+- OPID ごとの `TERM_OPID.csv` を開き、行を追記。
+  - 初回出現: 新規作成
+  - 既存あり: 追記
+
+### 5) 最終整列（SORT）
+- `--do_final_sort` が有効なとき、`TERM_*.csv` をソート。
+- ソートキー列は `--timestamp_col`（既定 **6列目 index=6**）。
+- 外部ソート方式:
+  1. `--chunk_rows` 行ずつ読み、各チャンクをソートして一時CSV出力
+  2. 一時CSV群を k-way merge（ヒープ）で統合
+- 一時ディレクトリは `--temp_sort_dir`（既定 `_sort_tmp`）。完了後に削除。
+
+---
+
+## 主な引数
+
+### 必須（実運用上）
+- `--input_dir`
+- `--output_dir`
+- `--term_name`
+
+### 任意
+- `--inner_csv`（既定 `data.csv`）
+- `--zip_digit_keys`（例: `523357,523347`）
+- `--encoding`（既定 `utf-8`）
+- `--delim`（既定 `,`）
+- `--do_final_sort` / `--no_final_sort`
+- `--timestamp_col`（既定 `6`）
+- `--chunk_rows`（既定 `200000`）
+- `--temp_sort_dir`（既定 `_sort_tmp`）
+
+---
+
+## 実行例
+
+```bash
+python src/01_split_by_opid_streaming.py \
+  --input_dir "D:\\ETC\\00_受領データ" \
+  --output_dir "D:\\ETC\\01_OPID分割" \
+  --term_name "R7_2" \
+  --zip_digit_keys "523357,523347" \
+  --timestamp_col 6
+```
+
+---
+
+## 例外・スキップの扱い
+- ZIP内に `inner_csv` がない: その ZIP はスキップして継続。
+- CSV 行で decode/csv エラー: その行のみスキップして継続。
+- 出力先ディレクトリがない: 自動作成。
+
+---
+
+## 補足（タイムスタンプ列について）
+- 現実装の既定値は `--timestamp_col=6`（0始まり）です。
+- 受領CSV仕様が変わる可能性があるなら、ドキュメントには「通常は6列目（index 6）」のように書くのが安全です。
