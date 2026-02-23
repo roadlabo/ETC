@@ -278,7 +278,7 @@ class MainWindow(QMainWindow):
         row += 1
         self._add_form_row(form_grid, row, "OUTPUT_DIR", self._wrap(out_row), "第1スクリーニング保存先　後続分析で共通利用するのでプロジェクトフォルダ外を推奨")
         row += 1
-        self._add_form_row(form_grid, row, "TERM", self.term_name, "出力ファイル名の先頭識別子（例 R7_2）")
+        self._add_form_row(form_grid, row, "TERM", self.term_name, "出力ファイル名の先頭識別子（例 R7_2）　第1スクリーニングの出力ファイル名は「[TERM名]_[運行ID].csv」となります。")
         row += 1
         self._add_form_row(form_grid, row, "2次メッシュコード", self.zip_keys, "2次メッシュ番号を記入　複数ある場合はカンマ（,）で区切って下さい　詳細は2次メッシュマップ参照")
         row += 1
