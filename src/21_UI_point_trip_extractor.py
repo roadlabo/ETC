@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
 )
 
 APP_TITLE = "21_第２スクリーニング（指定交差点を通過するトリップの抽出）"
-UI_LOGO_FILENAME = "logo_21_point_trip_extractor.png"
+UI_LOGO_FILENAME = "logo_21_UI_point_trip_extractor.png"
 
 CORNER_LOGO_MARGIN = 18
 CORNER_LOGO_OFFSET_TOP = -4
