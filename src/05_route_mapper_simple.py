@@ -54,6 +54,7 @@ else:
 # ============================================================
 
 # CSV column indices (0-based)  ※05の既存仕様を維持
+UI_LOGO_FILENAME = "logo_05_route_mapper_simple.png"
 LON_COL = 15    # 16列目（経度）
 LAT_COL = 14    # 15列目（緯度）
 FLAG_COL = 12   # 13列目（フラグ）
@@ -768,9 +769,18 @@ class RouteMapperWindow(QMainWindow):
         layout = QVBoxLayout(root)
         layout.addWidget(splitter)
 
+    def _resolve_logo_path(self) -> Path | None:
+        base = Path(__file__).resolve().parent
+        cand1 = base / "assets" / "logos" / UI_LOGO_FILENAME
+        cand2 = base / "logo.png"
+        for p in (cand1, cand2):
+            if p.exists():
+                return p
+        return None
+
     def _init_logo_overlay(self) -> None:
-        logo_path = Path(__file__).resolve().parent / "logo.png"
-        if not logo_path.exists():
+        logo_path = self._resolve_logo_path()
+        if not logo_path:
             return
 
         pixmap = QPixmap(str(logo_path))

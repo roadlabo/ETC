@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
 )
 
 APP_TITLE = "11 交差点ファイル作成ツール"
+UI_LOGO_FILENAME = "logo_11_crossroad_sampler.png"
 FOLDER_CROSS = "11_交差点(Point)データ"
 DUPLICATE_MSG = "その交差点名は既に存在します。別名で保存してください。"
 
@@ -120,9 +121,18 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._init_logo_overlay)
         self._setup_web_channel()
 
+    def _resolve_logo_path(self) -> Path | None:
+        base = Path(__file__).resolve().parent
+        cand1 = base / "assets" / "logos" / UI_LOGO_FILENAME
+        cand2 = base / "logo.png"
+        for p in (cand1, cand2):
+            if p.exists():
+                return p
+        return None
+
     def _init_logo_overlay(self) -> None:
-        logo_path = Path(__file__).resolve().parent / "logo.png"
-        if not logo_path.exists():
+        logo_path = self._resolve_logo_path()
+        if not logo_path:
             return
 
         pixmap = QPixmap(str(logo_path))

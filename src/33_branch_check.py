@@ -12,16 +12,21 @@ import folium
 
 NOGUI_MODE = "--nogui" in sys.argv[1:]
 
+UI_LOGO_FILENAME = "logo_33_branch_check.png"
+
 if not NOGUI_MODE:
     from PyQt6.QtCore import Qt
-    from PyQt6.QtCore import QTimer
+    from PyQt6.QtCore import QTimer, QPropertyAnimation
     from PyQt6.QtCore import QUrl
     from PyQt6.QtWebEngineCore import QWebEngineSettings
+    from PyQt6.QtGui import QPixmap, QColor
     from PyQt6.QtWidgets import (
         QApplication,
         QFileDialog,
         QHBoxLayout,
         QLabel,
+        QGraphicsOpacityEffect,
+        QGraphicsDropShadowEffect,
         QMainWindow,
         QMessageBox,
         QPushButton,
@@ -36,8 +41,9 @@ if not NOGUI_MODE:
     )
     from PyQt6.QtWebEngineWidgets import QWebEngineView
 else:
-    Qt = QUrl = QWebEngineSettings = QTimer = object
-    QApplication = QFileDialog = QHBoxLayout = QLabel = QMainWindow = object
+    Qt = QUrl = QWebEngineSettings = QTimer = QPropertyAnimation = object
+    QPixmap = QColor = object
+    QApplication = QFileDialog = QHBoxLayout = QLabel = QGraphicsOpacityEffect = QGraphicsDropShadowEffect = QMainWindow = object
     QMessageBox = QPushButton = QProgressDialog = QSplitter = QTableWidget = object
     QTableWidgetItem = QVBoxLayout = QWidget = QGridLayout = object
     QHeaderView = QWebEngineView = object
@@ -982,6 +988,15 @@ class BranchCheckWindow(QMainWindow):
         self._report_progress("一覧表を作成中…")
         self._build_ui()
 
+        self.splash_logo: QLabel | None = None
+        self.corner_logo: QLabel | None = None
+        self._corner_logo_visible = False
+        self._pix_small = None
+        self.LOGO_CORNER_PAD = 8
+        self.LOGO_CORNER_DX = -10
+        self.LOGO_CORNER_DY = -4
+        QTimer.singleShot(0, self._init_logo_overlay)
+
         # インターネット未接続時は通知のみ（地図ロジックは既存のまま）
         if not is_internet_available():
             QMessageBox.information(
@@ -994,6 +1009,94 @@ class BranchCheckWindow(QMainWindow):
         if len(self.df) > 0:
             self.table.selectRow(0)
             self._on_selection_changed()
+
+
+    def _resolve_logo_path(self) -> Path | None:
+        base = Path(__file__).resolve().parent
+        cand1 = base / "assets" / "logos" / UI_LOGO_FILENAME
+        cand2 = base / "logo.png"
+        for p in (cand1, cand2):
+            if p.exists():
+                return p
+        return None
+
+    def _center_splash_logo(self) -> None:
+        if not self.splash_logo:
+            return
+        parent_rect = self.rect()
+        logo_rect = self.splash_logo.rect()
+        self.splash_logo.move((parent_rect.width() - logo_rect.width()) // 2, (parent_rect.height() - logo_rect.height()) // 2)
+
+    def _show_corner_logo(self) -> None:
+        if not self._pix_small:
+            return
+
+        self.corner_logo = QLabel(self)
+        self.corner_logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.corner_logo.setStyleSheet("background: transparent;")
+        self.corner_logo.setPixmap(self._pix_small)
+        self.corner_logo.adjustSize()
+
+        pad = getattr(self, "LOGO_CORNER_PAD", 8)
+        dx = getattr(self, "LOGO_CORNER_DX", -10)
+        dy = getattr(self, "LOGO_CORNER_DY", -4)
+        x = self.rect().width() - self.corner_logo.width() - pad + dx
+        y = pad + dy
+        self.corner_logo.move(x, y)
+        self.corner_logo.show()
+        self._corner_logo_visible = True
+
+        glow = QGraphicsDropShadowEffect(self.corner_logo)
+        glow.setBlurRadius(24)
+        glow.setOffset(0, 0)
+        glow.setColor(QColor(0, 255, 180, 120))
+        self.corner_logo.setGraphicsEffect(glow)
+
+    def _init_logo_overlay(self) -> None:
+        logo_path = self._resolve_logo_path()
+        if not logo_path:
+            return
+
+        pixmap = QPixmap(str(logo_path))
+        if pixmap.isNull():
+            return
+
+        pix_big = pixmap.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
+        self._pix_small = pixmap.scaledToHeight(110, Qt.TransformationMode.SmoothTransformation)
+
+        self.splash_logo = QLabel(self)
+        self.splash_logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash_logo.setStyleSheet("background: transparent;")
+        self.splash_logo.setPixmap(pix_big)
+        self.splash_logo.adjustSize()
+        self._center_splash_logo()
+        self.splash_logo.show()
+
+        effect = QGraphicsOpacityEffect(self.splash_logo)
+        self.splash_logo.setGraphicsEffect(effect)
+
+        fade_in = QPropertyAnimation(effect, b"opacity", self)
+        fade_in.setDuration(500)
+        fade_in.setStartValue(0.0)
+        fade_in.setEndValue(1.0)
+
+        def start_fade_out():
+            fade_out = QPropertyAnimation(effect, b"opacity", self)
+            fade_out.setDuration(500)
+            fade_out.setStartValue(1.0)
+            fade_out.setEndValue(0.0)
+
+            def show_corner_logo():
+                if self.splash_logo:
+                    self.splash_logo.deleteLater()
+                    self.splash_logo = None
+                self._show_corner_logo()
+
+            fade_out.finished.connect(show_corner_logo)
+            fade_out.start()
+
+        fade_in.finished.connect(lambda: QTimer.singleShot(3000, start_fade_out))
+        fade_in.start()
 
     def _report_progress(self, text: str) -> None:
         if self._progress_callback is not None:
@@ -1480,6 +1583,24 @@ class BranchCheckWindow(QMainWindow):
         selected_row = self.table.currentRow()
         if selected_row >= 0:
             self.statusBar().showMessage(f"Selected: {selected_row + 1}/{len(self.df)}")
+
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.splash_logo and self.splash_logo.isVisible():
+            self._center_splash_logo()
+        if self.corner_logo and self.corner_logo.isVisible():
+            pad = getattr(self, "LOGO_CORNER_PAD", 8)
+            dx = getattr(self, "LOGO_CORNER_DX", -10)
+            dy = getattr(self, "LOGO_CORNER_DY", -4)
+            x = self.rect().width() - self.corner_logo.width() - pad + dx
+            y = pad + dy
+            self.corner_logo.move(x, y)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.splash_logo:
+            self._center_splash_logo()
 
     def _reload_csv_dialog(self):
         path, _ = QFileDialog.getOpenFileName(

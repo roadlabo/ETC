@@ -46,6 +46,7 @@ SplitConfig = split_mod.SplitConfig
 run_split = split_mod.run_split
 
 STAGES = ["SCAN", "EXTRACT", "SORT", "VERIFY"]
+UI_LOGO_FILENAME = "logo_01_1stScr_UI.png"
 
 
 @dataclass
@@ -377,9 +378,18 @@ class MainWindow(QMainWindow):
         """)
         self.setFont(QFont("Consolas", 10))
 
+    def _resolve_logo_path(self) -> Path | None:
+        base = Path(__file__).resolve().parent
+        cand1 = base / "assets" / "logos" / UI_LOGO_FILENAME
+        cand2 = base / "logo.png"
+        for p in (cand1, cand2):
+            if p.exists():
+                return p
+        return None
+
     def _init_logo_overlay(self) -> None:
-        logo_path = Path(__file__).resolve().parent / "logo.png"
-        if not logo_path.exists():
+        logo_path = self._resolve_logo_path()
+        if not logo_path:
             return
 
         pixmap = QPixmap(str(logo_path))
