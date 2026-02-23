@@ -491,7 +491,7 @@ class MainWindow(QMainWindow):
         steps_l.addWidget(card1, 10)
         steps_l.addWidget(card2, 10)
         steps_l.addWidget(card3, 15)
-        steps_l.addWidget(card4, 7)
+        steps_l.addWidget(card4, 8)
 
         header_vbox.addWidget(steps_row)
         header_container = QWidget()
