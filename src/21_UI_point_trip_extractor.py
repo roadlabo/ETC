@@ -10,6 +10,7 @@ from PyQt6.QtCore import QPoint, QProcess, QPropertyAnimation, QRect, QSize, Qt,
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
@@ -276,8 +277,8 @@ class CrossCard(QFrame):
         self.locked = False
         self.state = "待機"
         self.setObjectName("crossCard")
-        self.setMinimumWidth(260)
-        self.setMaximumWidth(260)
+        self.setMinimumWidth(273)
+        self.setMaximumWidth(273)
         self.setFixedHeight(220)
         v = QVBoxLayout(self)
         self.title = QLabel(name)
@@ -334,7 +335,7 @@ class CrossCard(QFrame):
             else:
                 style = "border:1px solid #0c5a41;background:#040806;color:#2f7a5b;"
         self.setStyleSheet(f"QFrame#crossCard{{{style}}}")
-        self.title.setText(f"{self.name} [{state}]")
+        self.title.setText(f"{self.name}")
 
 
 class MainWindow(QMainWindow):
@@ -394,7 +395,16 @@ class MainWindow(QMainWindow):
         proj_w = QWidget(); proj_l = QHBoxLayout(proj_w); proj_l.setContentsMargins(0, 0, 0, 0); proj_l.addWidget(self.btn_project); proj_l.addWidget(self.lbl_project)
         self.btn_input = QPushButton("第1スクリーニングを選ぶ"); self.btn_input.clicked.connect(self.select_input)
         self.lbl_input = QLabel("未選択")
-        in_w = QWidget(); in_l = QHBoxLayout(in_w); in_l.setContentsMargins(0, 0, 0, 0); in_l.addWidget(self.btn_input); in_l.addWidget(self.lbl_input)
+        self.chk_recursive = QCheckBox("サブフォルダも含める")
+        self.chk_recursive.setChecked(False)
+        self.chk_recursive.setStyleSheet("color:#7cffc6;")
+        in_w = QWidget(); in_l = QHBoxLayout(in_w)
+        in_l.setContentsMargins(0, 0, 0, 0)
+        in_l.setSpacing(10)
+        in_l.addWidget(self.btn_input)
+        in_l.addWidget(self.lbl_input)
+        in_l.addWidget(self.chk_recursive)
+        in_l.addStretch(1)
         self.spin_radius = QSpinBox(); self.spin_radius.setRange(5, 200); self.spin_radius.setValue(30); self.spin_radius.valueChanged.connect(self._on_radius_changed)
         self.spin_radius.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.spin_radius.setFixedWidth(90)
@@ -572,7 +582,8 @@ class MainWindow(QMainWindow):
         if not d:
             return
         tmp_dir = Path(d).resolve()
-        csv_count = sum(1 for _ in tmp_dir.rglob("*.csv"))
+        recursive = bool(getattr(self, "chk_recursive", None) and self.chk_recursive.isChecked())
+        csv_count = self._count_first_screening_opids_fast(tmp_dir, recursive)
         if csv_count == 0:
             QMessageBox.warning(
                 self,
@@ -583,11 +594,13 @@ class MainWindow(QMainWindow):
 
         self.input_dir = tmp_dir
         self.lbl_input.setText(self.input_dir.name)
-        self.log_info(f"input set: {self.input_dir}")
+        self.log_info(f"input set: {self.input_dir} (recursive={recursive})")
         self.tele["opid"].setText(f"第1スクリーニング数（運行ID数）: {csv_count:,}")
 
-    def _count_first_screening_opids_fast(self, folder: Path) -> int:
-        return sum(1 for _ in folder.rglob("*.csv"))
+    def _count_first_screening_opids_fast(self, folder: Path, recursive: bool) -> int:
+        if recursive:
+            return sum(1 for _ in folder.rglob("*.csv"))
+        return sum(1 for _ in folder.glob("*.csv"))
 
     def scan_crossroads(self):
         self._clear_cards()
@@ -689,7 +702,9 @@ class MainWindow(QMainWindow):
         self.log_lines = []; self._last_log_line = None
         self.batch_started_at = datetime.now(); self.batch_start_perf = perf_counter(); self.batch_ended_at = None
         self._stdout_buf = ""; self._stderr_buf = ""
-        self.total_files = len(list(self.input_dir.rglob("*.csv"))); self.done_files = 0
+        recursive = bool(getattr(self, "chk_recursive", None) and self.chk_recursive.isChecked())
+        pattern_iter = self.input_dir.rglob("*.csv") if recursive else self.input_dir.glob("*.csv")
+        self.total_files = sum(1 for _ in pattern_iter); self.done_files = 0
         self.errors = 0; self.tele["errors"].setText("エラー数: 0")
         self.started_at = time.time(); self._eta_done = 0; self._eta_total = self.total_files
         self.tele["status"].setText("状態: RUNNING")
@@ -703,6 +718,9 @@ class MainWindow(QMainWindow):
 
         self.is_running = True
         self.btn_run.setEnabled(False)
+        self.btn_project.setEnabled(False)
+        self.btn_input.setEnabled(False)
+        self.chk_recursive.setEnabled(False)
         self.spin_radius.setEnabled(False)
         if hasattr(self, "anim_timer"):
             self.anim_timer.start(120)
@@ -801,6 +819,9 @@ class MainWindow(QMainWindow):
         self.log_info(f"process finished: code={code}")
         self.log_info("🎉 おめでとうございます。全件処理完了です。")
         self.btn_run.setEnabled(True)
+        self.btn_project.setEnabled(True)
+        self.btn_input.setEnabled(True)
+        self.chk_recursive.setEnabled(True)
         self.spin_radius.setEnabled(True)
         if hasattr(self, "anim_timer"):
             self.anim_timer.stop()
