@@ -303,7 +303,8 @@ class CrossCard(QFrame):
         btn_font.setBold(False)
         self.btn_viewer.setFont(btn_font)
         self.btn_viewer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.btn_viewer.setMinimumHeight(42)
+        self.btn_viewer.setMinimumHeight(32)
+        self.btn_viewer.setMaximumHeight(32)
         self.btn_viewer.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_viewer.setEnabled(False)
         if on_viewer:
@@ -360,6 +361,18 @@ class CrossCard(QFrame):
             else:
                 style = "border:1px solid #0c5a41;background:#040806;color:#2f7a5b;"
         self.setStyleSheet(f"QFrame#crossCard{{{style}}}")
+
+        if self.selected:
+            fg_title = "#d8ffe8"
+            fg_text = "#7cffc6"
+        else:
+            fg_title = "#3b6a55"
+            fg_text = "#2f7a5b"
+
+        self.title.setStyleSheet(f"color:{fg_title};")
+        for w in [self.sel_label, self.flags, self.flags2, self.hit, self.hist_title]:
+            w.setStyleSheet(f"color:{fg_text};")
+
         self.title.setText(f"{self.name}")
 
 
