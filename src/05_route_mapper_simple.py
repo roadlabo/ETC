@@ -670,7 +670,7 @@ class SpeedPlot(QWidget):
 class RouteMapperWindow(QMainWindow):
     def __init__(self, directory: Path, pattern: str) -> None:
         super().__init__()
-        self.setWindowTitle("第１・２スクリーニングデータ　ビューアー")
+        self.setWindowTitle("第２スクリーニング　トリップビューアー")
         self.resize(1500, 900)
 
         self.directory = directory
