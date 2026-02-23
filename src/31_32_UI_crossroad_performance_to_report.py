@@ -331,13 +331,13 @@ class CrossCardPerf(QFrame):
             return
 
         # Windowsは bat を直接起動できないことがあるため、cmd.exe 経由で起動する
-        ok = QProcess.startDetached("cmd.exe", ["/c", str(bat), str(perf)])
+        ok = QProcess.startDetached("cmd.exe", ["/c", str(bat), "--csv", str(perf)])
         if not ok:
             # フォールバック（より確実）
             try:
                 import subprocess
 
-                subprocess.Popen(["cmd.exe", "/c", str(bat), str(perf)], close_fds=True)
+                subprocess.Popen(["cmd.exe", "/c", str(bat), "--csv", str(perf)], close_fds=True)
                 ok = True
             except Exception as e:
                 QMessageBox.critical(self, "エラー", f"33の起動に失敗しました。\n{e}")
