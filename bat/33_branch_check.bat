@@ -12,6 +12,9 @@ set "APP=%ROOT_DIR%\src\33_branch_check.py"
 set "LOGDIR=%ROOT_DIR%\logs"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 set "LOG=%LOGDIR%\33_branch_check_console.log"
+echo [%date% %time%] 33_branch_check.bat ARGS: %*>>"%LOG%"
+echo [%date% %time%]   ARG1=%1>>"%LOG%"
+echo [%date% %time%]   ARG2=%2>>"%LOG%"
 
 rem --- normalize args (backward compatible) ---
 set "ARGS=%*"
