@@ -424,7 +424,7 @@ class MainWindow(QMainWindow):
 
         self.name_edit = QLineEdit()
 
-        self.btn_save = QPushButton("交差点ファイル保存")
+        self.btn_save = QPushButton("保存")
         self.btn_save.clicked.connect(self.save_clicked)
 
         # ---------------------------
@@ -441,14 +441,14 @@ class MainWindow(QMainWindow):
         s1.setContentsMargins(0, 0, 0, 0)
         s1.setSpacing(8)
 
-        lbl_s1 = QLabel("プロジェクトフォルダを選択")
+        lbl_s1 = QLabel("選択")
         lbl_s1.setObjectName("StepBody")
         lbl_s1.setWordWrap(True)
         s1.addWidget(lbl_s1, 1)
         s1.addWidget(self.btn_project)
         s1.addWidget(self.project_path_edit, 2)
 
-        card1 = self._make_step_card("STEP1  フォルダ選択", step1_body)
+        card1 = self._make_step_card("STEP1  プロジェクトフォルダ選択", step1_body)
 
         # STEP2 body
         step2_body = QWidget()
@@ -477,7 +477,7 @@ class MainWindow(QMainWindow):
         s3.addWidget(self.name_edit, 1)
         s3.addWidget(self.btn_save)
 
-        card3 = self._make_step_card("STEP3  入力して保存", step3_body)
+        card3 = self._make_step_card("STEP3  交差点ファイルの保存", step3_body)
 
         # STEP4 body
         step4_body = QWidget()
