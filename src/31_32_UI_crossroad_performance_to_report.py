@@ -232,10 +232,14 @@ class CrossCardPerf(QFrame):
         self.paths: dict[str, str] = {}
         self.state = "待機"
         self.setObjectName("crossCard")
-        self.setMinimumWidth(270); self.setMaximumWidth(270); self.setFixedHeight(300)
+        self.setMinimumWidth(270); self.setMaximumWidth(270); self.setFixedHeight(350)
         v = QVBoxLayout(self); v.setSpacing(6); v.setContentsMargins(8, 8, 8, 8)
         self.title = QLabel(name)
-        ft = self.title.font(); ft.setPointSize(max(12, ft.pointSize() + 2)); ft.setBold(True); self.title.setFont(ft)
+        title_font = self.title.font()
+        title_font.setPointSize(title_font.pointSize() * 2)
+        title_font.setBold(True)
+        self.title.setFont(title_font)
+        self.title.setStyleSheet("color:#d8ffe8;")
         self.lbl_select = QLabel()
         self.lbl_flags = QLabel(); self.lbl_s2 = QLabel(); self.lbl_out = QLabel(); self.lbl_progress = QLabel(); self.lbl_stats = QLabel(); self.lbl_state = QLabel()
         self.btn_report = QPushButton("report.xlsx を開く")
@@ -299,10 +303,20 @@ class CrossCardPerf(QFrame):
         self.lbl_progress.setText(f"進捗ファイル: {done:,}/{total:,} ({pct:.1f}%)")
 
     def set_stats(self, weekday: int, split: int, target: int, ok: int, unk: int, notpass: int):
-        self.data.update({"weekday": weekday, "split": split, "target": target, "ok": ok, "unk": unk, "notpass": notpass})
-        line1 = f"対象曜日のCSVファイル数{weekday:,}／分割トリップ数{split:,}"
-        line2 = f"対象トリップ数{target:,}／成功{ok:,}／枝不明{unk:,}／不通過{notpass:,}"
-        self.lbl_stats.setText(line1 + "\n" + line2)
+        self.data.update({
+            "weekday": weekday,
+            "split": split,
+            "target": target,
+            "ok": ok,
+            "unk": unk,
+            "notpass": notpass,
+        })
+
+        line1 = f"対象曜日のファイル数{weekday:,}／分割{split:,}"
+        line2 = f"分析対象総トリップ数{target:,}"
+        line3 = f"成功{ok:,}／枝不明{unk:,}／不通過{notpass:,}"
+
+        self.lbl_stats.setText(line1 + "\n" + line2 + "\n" + line3)
 
     def _launch_branch_viewer(self):
         perf = Path(self.paths.get("out31", ""))
@@ -326,6 +340,16 @@ class CrossCardPerf(QFrame):
     def apply_state(self, state: str):
         self.lbl_select.setText("分析対象" if self.selected else "非対象")
         self.lbl_state.setText(f"状態: {state}")
+        if self.selected:
+            fg_title = "#d8ffe8"
+            fg_text = "#7cffc6"
+        else:
+            fg_title = "#3b6a55"
+            fg_text = "#2f7a5b"
+
+        self.title.setStyleSheet(f"color:{fg_title};")
+        self.lbl_stats.setStyleSheet(f"color:{fg_text};")
+
         if self.selected:
             style = "border:1px solid #1ee6a8;background:#07120e;color:#7cffc6;"
             if state in {"31 実行中", "32 実行中"}: style = "border:2px solid #9cffbe;background:#0f1e17;color:#b5ffd0;"
