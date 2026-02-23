@@ -50,6 +50,16 @@
       display: none !important;
     }
 
+
+    /* --- embed時だけネオンHUD（任意） --- */
+    html.embed #map {
+      outline: 1px solid rgba(42,115,255,0.35);
+      box-shadow:
+        0 0 0 1px rgba(0,255,136,0.15) inset,
+        0 0 18px rgba(42,115,255,0.22);
+      background: #05070a;
+    }
+
   </style>
 
   <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
