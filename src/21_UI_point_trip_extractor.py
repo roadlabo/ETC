@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
 )
 
 APP_TITLE = "21_第２スクリーニング（指定交差点を通過するトリップの抽出）"
+UI_LOGO_FILENAME = "logo_21_point_trip_extractor.png"
 
 CORNER_LOGO_MARGIN = 18
 CORNER_LOGO_OFFSET_TOP = -4
@@ -931,9 +932,18 @@ class MainWindow(QMainWindow):
         parent_rect = self.rect(); logo_rect = self.splash_logo.rect()
         self.splash_logo.move((parent_rect.width() - logo_rect.width()) // 2, (parent_rect.height() - logo_rect.height()) // 2)
 
+    def _resolve_logo_path(self) -> Path | None:
+        base = Path(__file__).resolve().parent
+        cand1 = base / "assets" / "logos" / UI_LOGO_FILENAME
+        cand2 = base / "logo.png"
+        for p in (cand1, cand2):
+            if p.exists():
+                return p
+        return None
+
     def _init_logo_overlay(self) -> None:
-        logo_path = Path(__file__).resolve().parent / "logo.png"
-        if not logo_path.exists(): return
+        logo_path = self._resolve_logo_path()
+        if not logo_path: return
         pixmap = QPixmap(str(logo_path))
         if pixmap.isNull(): return
         pix_big = pixmap.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
