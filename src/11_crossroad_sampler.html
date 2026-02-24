@@ -469,14 +469,15 @@
 
       map.once("moveend", function() {
         updateBranches();
-        setTimeout(captureAndSave, 120);
+
+        // タイル読込み待ち（ネットワーク環境差吸収）
+        setTimeout(function() {
+          updateBranches();
+          captureAndSave();
+        }, 2000);  // ← 2秒待つ
       });
 
       map.fitBounds(bounds.pad(0.15), { animate: false });
-      setTimeout(function() {
-        updateBranches();
-        captureAndSave();
-      }, 250);
     }
 
     // CSV保存
