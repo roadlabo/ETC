@@ -223,9 +223,10 @@ class SweepWidget(QWidget):
 
 
 class CrossCardPerf(QFrame):
-    def __init__(self, name: str):
+    def __init__(self, name: str, launch_33_handler=None):
         super().__init__()
         self.name = name
+        self._launch_33_handler = launch_33_handler
         self.selected = True
         self.locked = False
         self.data = {"done": 0, "total": 0, "weekday": 0, "split": 0, "target": 0, "ok": 0, "unk": 0, "notpass": 0}
@@ -326,24 +327,13 @@ class CrossCardPerf(QFrame):
             QMessageBox.information(self, "情報", f"performance.csv が見つかりません。\n{perf_csv}\n先に31を実行してください。")
             return
 
-        bat = (Path(__file__).resolve().parent.parent / "bat" / "33_branch_check.bat").resolve()
-        if not bat.exists():
-            QMessageBox.critical(self, "エラー", f"33_branch_check.bat が見つかりません:\n{bat}")
+        if not callable(self._launch_33_handler):
+            QMessageBox.critical(self, "エラー", "33の起動ハンドラが設定されていません。")
             return
 
-        # ★PC差対策：cwd を bat のあるフォルダに固定
-        workdir = str(bat.parent)
-
-        ok = QProcess.startDetached("cmd.exe", ["/c", str(bat), "--csv", str(perf_csv)], workdir)
-        if ok:
-            return
-
-        try:
-            import subprocess
-            subprocess.Popen(["cmd.exe", "/c", str(bat), "--csv", str(perf_csv)], cwd=workdir, close_fds=True)
-        except Exception as e:
-            QMessageBox.critical(self, "エラー", f"33の起動に失敗しました。\n{e}")
-            return
+        ok = self._launch_33_handler(str(perf_csv))
+        if not ok:
+            QMessageBox.critical(self, "エラー", "33の起動に失敗しました。ログを確認してください。")
 
     def set_state(self, state: str):
         self.state = state
@@ -434,6 +424,60 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._update_flow_spacer_for_logo)
         QTimer.singleShot(50, self._update_flow_spacer_for_logo)
         QTimer.singleShot(150, self._update_flow_spacer_for_logo)
+
+    def _get_root_dir(self) -> str:
+        """
+        リポジトリ/配布フォルダのROOTを推定する。
+        31_32_UIが src 配下にある前提で、src の1つ上をROOTとする。
+        """
+        here = os.path.abspath(os.path.dirname(__file__))
+        root = os.path.abspath(os.path.join(here, ".."))
+        return root
+
+    def _get_embedded_python(self, root_dir: str) -> str:
+        """
+        同梱python.exeのパスを返す。無ければ空文字。
+        """
+        py = os.path.join(root_dir, "runtime", "python", "python.exe")
+        return py if os.path.isfile(py) else ""
+
+    def _get_33_script(self, root_dir: str) -> str:
+        """
+        33_branch_check.py のパスを返す。無ければ空文字。
+        """
+        script = os.path.join(root_dir, "src", "33_branch_check.py")
+        return script if os.path.isfile(script) else ""
+
+    def _launch_33_branch_check(self, perf_csv_path: str) -> bool:
+        """
+        33_branch_check.py を同梱pythonで直起動する。
+        cmd.exe / bat を一切使わない（括弧や特殊文字に強い）。
+        """
+        root = self._get_root_dir()
+        py = self._get_embedded_python(root)
+        script = self._get_33_script(root)
+
+        if not py:
+            self.log_error(r"embedded python not found: <ROOT>\runtime\python\python.exe")
+            return False
+        if not script:
+            self.log_error(r"33_branch_check.py not found: <ROOT>\src\33_branch_check.py")
+            return False
+        if not perf_csv_path or not os.path.isfile(perf_csv_path):
+            self.log_error(f"perf csv not found: {perf_csv_path}")
+            return False
+
+        args = [script, "--csv", perf_csv_path]
+
+        self.log_info("[33] Launch via embedded python")
+        self.log_info(f"[33] PY    : {py}")
+        self.log_info(f"[33] SCRIPT: {script}")
+        self.log_info(f"[33] CSV   : {perf_csv_path}")
+
+        ok = QProcess.startDetached(py, args, root)
+        if not ok:
+            self.log_error("Failed to start 33 (QProcess.startDetached returned False)")
+        return ok
 
     def _init_logo_overlay(self) -> None:
         logo_path = self._resolve_logo_path()
@@ -941,7 +985,7 @@ class MainWindow(QMainWindow):
             sum_s2 += n_csv
             out31 = out31_dir / f"{name}_performance.csv"
             out32 = self._report_output_path(name)
-            card = CrossCardPerf(name)
+            card = CrossCardPerf(name, launch_33_handler=self._launch_33_branch_check)
             card.paths = {"out31": str(out31), "out32": str(out32), "cross_csv": str(csv_path), "cross_jpg": str(jpg), "s2_dir": str(s2_cross)}
             card.set_flags(has_csv=csv_path.exists(), has_jpg=jpg.exists(), has_s2_dir=s2_cross.exists(), s2_csv=n_csv, has_out31=out31.exists(), has_out32=out32.exists())
             card.set_buttons_enabled(True)
