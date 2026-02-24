@@ -320,28 +320,38 @@ class CrossCardPerf(QFrame):
         self.lbl_stats.setText(line1 + "\n" + line2 + "\n" + line3)
 
     def _launch_branch_viewer(self):
-        perf = Path(self.paths.get("out31", ""))
-        if not perf.exists():
-            QMessageBox.information(self, "情報", "performance.csv が見つかりません。先に31を実行してください。")
+        # out31 は「31出力フォルダ」なので、performance.csv を明示して渡す
+        out31_dir = Path(self.paths.get("out31", "")).resolve()
+        if not out31_dir.exists():
+            QMessageBox.information(self, "情報", "31出力フォルダが見つかりません。先に31を実行してください。")
             return
 
-        bat = Path(__file__).resolve().parent.parent / "bat" / "33_branch_check.bat"
+        perf_csv = out31_dir / "performance.csv"
+        if not perf_csv.exists():
+            QMessageBox.information(self, "情報", f"performance.csv が見つかりません。\n{perf_csv}\n先に31を実行してください。")
+            return
+
+        bat = (Path(__file__).resolve().parent.parent / "bat" / "33_branch_check.bat").resolve()
         if not bat.exists():
             QMessageBox.critical(self, "エラー", f"33_branch_check.bat が見つかりません:\n{bat}")
             return
 
-        # Windowsは bat を直接起動できないことがあるため、cmd.exe 経由で起動する
-        ok = QProcess.startDetached("cmd.exe", ["/c", str(bat), "--csv", str(perf)])
-        if not ok:
-            # フォールバック（より確実）
-            try:
-                import subprocess
+        # ★PC差対策：cwd を bat のあるフォルダに固定
+        workdir = str(bat.parent)
 
-                subprocess.Popen(["cmd.exe", "/c", str(bat), "--csv", str(perf)], close_fds=True)
-                ok = True
-            except Exception as e:
-                QMessageBox.critical(self, "エラー", f"33の起動に失敗しました。\n{e}")
-                return
+        # Windows は bat を直接起動できないことがあるため、cmd.exe 経由で起動する
+        ok = QProcess.startDetached("cmd.exe", ["/c", str(bat), "--csv", str(perf_csv)], workdir)
+        if ok:
+            return
+
+        # フォールバック（より確実）：subprocess でも cwd を固定
+        try:
+            import subprocess
+
+            subprocess.Popen(["cmd.exe", "/c", str(bat), "--csv", str(perf_csv)], cwd=workdir, close_fds=True)
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"33の起動に失敗しました。\n{e}")
+            return
 
     def set_state(self, state: str):
         self.state = state
