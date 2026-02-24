@@ -14,10 +14,11 @@ set "LOGDIR=%ROOT_DIR%\logs"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 set "LOG=%LOGDIR%\01_1stScr_UI_console.log"
 
+rem --- launch (NO start/cmd; direct pythonw/python) ---
 if exist "%PYW%" (
-  start "" /b cmd /c ""%PYW%" "%APP%" 1>>"%LOG%" 2>>&1"
+  "%PYW%" "%APP%" 1>>"%LOG%" 2>>&1
 ) else (
-  start "" /b cmd /c ""%PY%" "%APP%" 1>>"%LOG%" 2>>&1"
+  "%PY%" "%APP%" 1>>"%LOG%" 2>>&1
 )
 
-exit /b
+exit /b %errorlevel%
