@@ -320,13 +320,8 @@ class CrossCardPerf(QFrame):
         self.lbl_stats.setText(line1 + "\n" + line2 + "\n" + line3)
 
     def _launch_branch_viewer(self):
-        # out31 は「31出力フォルダ」なので、performance.csv を明示して渡す
-        out31_dir = Path(self.paths.get("out31", "")).resolve()
-        if not out31_dir.exists():
-            QMessageBox.information(self, "情報", "31出力フォルダが見つかりません。先に31を実行してください。")
-            return
-
-        perf_csv = out31_dir / "performance.csv"
+        # card.paths["out31"] は「*_performance.csv（ファイル）」を格納している
+        perf_csv = Path(self.paths.get("out31", "")).resolve()
         if not perf_csv.exists():
             QMessageBox.information(self, "情報", f"performance.csv が見つかりません。\n{perf_csv}\n先に31を実行してください。")
             return
@@ -339,15 +334,12 @@ class CrossCardPerf(QFrame):
         # ★PC差対策：cwd を bat のあるフォルダに固定
         workdir = str(bat.parent)
 
-        # Windows は bat を直接起動できないことがあるため、cmd.exe 経由で起動する
         ok = QProcess.startDetached("cmd.exe", ["/c", str(bat), "--csv", str(perf_csv)], workdir)
         if ok:
             return
 
-        # フォールバック（より確実）：subprocess でも cwd を固定
         try:
             import subprocess
-
             subprocess.Popen(["cmd.exe", "/c", str(bat), "--csv", str(perf_csv)], cwd=workdir, close_fds=True)
         except Exception as e:
             QMessageBox.critical(self, "エラー", f"33の起動に失敗しました。\n{e}")
@@ -1137,7 +1129,12 @@ class MainWindow(QMainWindow):
         self.proc = QProcess(self)
         self._stdout_buf = ""; self._stderr_buf = ""; self._recent_process_lines = []
         self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
-        self.proc.setProgram(sys.executable); self.proc.setArguments(["-u", *args])
+        self.proc.setProgram(sys.executable)
+
+        # ★PC差対策：31/32 実行の cwd を UI のあるフォルダに固定
+        self.proc.setWorkingDirectory(str(Path(__file__).resolve().parent))
+
+        self.proc.setArguments(["-u", *args])
         self.log_info(f"launch: {sys.executable} -u {' '.join(args)}")
         self.proc.readyReadStandardOutput.connect(self._on_proc_stdout)
         self.proc.readyReadStandardError.connect(self._on_proc_stderr)
