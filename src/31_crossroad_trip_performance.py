@@ -77,7 +77,7 @@ CROSSROAD_MIN_HITS = 1
 EARTH_RADIUS_M = 6_371_000.0
 
 # ============================================================
-# 枝判定（流入/流出）角度の安定化設定（3段階判定）
+# 枝判定（流入/流出）角度の安定化設定（6段階判定）
 #  - 角度算出は中心点からの道なり距離で「near/far」を取り、2点から進行方向を推定
 #  - IN:  (center-far -> center-near) の進行方位を求め、180°反転して center->branch に合わせる
 #  - OUT: (center+near -> center+far) の進行方位を求め、そのまま center->branch として使う
@@ -86,12 +86,18 @@ EARTH_RADIUS_M = 6_371_000.0
 #   第1判定：20-50m  / 閾値30°
 #   第2判定：20-70m  / 閾値35°
 #   第3判定：20-100m / 閾値40°
+#   第4判定：10-40m  / 閾値30°
+#   第5判定：10-30m  / 閾値30°
+#   第6判定：10-20m  / 閾値30°
 #   その他：枝不明
 # ============================================================
 BRANCH_JUDGE_STEPS = [
     {"near": 20.0, "far": 50.0, "th": 30.0},
     {"near": 20.0, "far": 70.0, "th": 35.0},
     {"near": 20.0, "far": 100.0, "th": 40.0},
+    {"near": 10.0, "far": 40.0, "th": 30.0},
+    {"near": 10.0, "far": 30.0, "th": 30.0},
+    {"near": 10.0, "far": 20.0, "th": 30.0},
 ]
 BRANCH_ANGLE_MAX_DEG = 40.0  # 出力上の「最大許容」を明示したい場合の上限（実質は最終th）
 
@@ -871,7 +877,7 @@ def main() -> None:
                                 idx_a = min(len(points) - 1, idx_center + 1)
 
                             # ============================================================
-                            # 枝判定角度：3段階判定（20-50m / 20-70m / 20-100m）
+                            # 枝判定角度：6段階判定（20-50m / 20-70m / 20-100m / 10-40m / 10-30m / 10-20m）
                             # ============================================================
                             def _infer_branch_3step(center_pos_val: float, is_in: bool):
                                 """
@@ -884,6 +890,8 @@ def main() -> None:
                                 if center_pos_val is None:
                                     return None, "", float("inf"), ("IN:NO_CENTER" if is_in else "OUT:NO_CENTER")
 
+                                any_in_range = False  # 1回でも必要点が取れたステップがあるか
+
                                 for step in BRANCH_JUDGE_STEPS:
                                     near = step["near"]
                                     far = step["far"]
@@ -892,9 +900,10 @@ def main() -> None:
                                     if is_in:
                                         p_far = interpolate_point_at_distance(points, cumdist, center_pos_val - far)
                                         p_near = interpolate_point_at_distance(points, cumdist, center_pos_val - near)
-                                        if not p_far or not p_near:
-                                            return None, "", float("inf"), "IN:OUT_OF_RANGE"
+                                        if (p_far is None) or (p_near is None):
+                                            continue
 
+                                        any_in_range = True
                                         approach_bearing = bearing_deg(p_far[0], p_far[1], p_near[0], p_near[1])
                                         angle_try = (approach_bearing + 180.0) % 360.0
                                         br, diff = find_nearest_branch_with_diff(angle_try, cross.branches)
@@ -903,13 +912,17 @@ def main() -> None:
                                     else:
                                         p_near = interpolate_point_at_distance(points, cumdist, center_pos_val + near)
                                         p_far = interpolate_point_at_distance(points, cumdist, center_pos_val + far)
-                                        if not p_near or not p_far:
-                                            return None, "", float("inf"), "OUT:OUT_OF_RANGE"
+                                        if (p_near is None) or (p_far is None):
+                                            continue
 
+                                        any_in_range = True
                                         angle_try = bearing_deg(p_near[0], p_near[1], p_far[0], p_far[1])
                                         br, diff = find_nearest_branch_with_diff(angle_try, cross.branches)
                                         if diff <= th:
                                             return angle_try, br, diff, f"OUT:{int(near)}-{int(far)}m"
+
+                                if not any_in_range:
+                                    return None, "", float("inf"), ("IN:OUT_OF_RANGE" if is_in else "OUT:OUT_OF_RANGE")
 
                                 return None, "", float("inf"), ("IN:UNKNOWN" if is_in else "OUT:UNKNOWN")
 
