@@ -1,4 +1,5 @@
 import math
+import os
 import re
 import sys
 import time
@@ -422,6 +423,69 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._init_logo_overlay)
         self.log_info("①プロジェクト選択 → ②第1スクリーニング選択 → 21【分析スタート】")
 
+    def _get_root_dir(self) -> str:
+        """src配下からROOTを推定（…\src の1つ上）"""
+        here = os.path.abspath(os.path.dirname(__file__))
+        return os.path.abspath(os.path.join(here, ".."))
+
+    def _get_embedded_python(self, root_dir: str) -> str:
+        """同梱python.exeパスを返す（なければ空）"""
+        py = os.path.join(root_dir, "runtime", "python", "python.exe")
+        return py if os.path.isfile(py) else ""
+
+    def _find_05_script(self, root_dir: str) -> str:
+        """
+        05の実体スクリプト(.py)を探す。
+        ※リポジトリの実ファイル名に合わせて候補を増減してください。
+        """
+        candidates = [
+            os.path.join(root_dir, "src", "05_route_mapper_simple.py"),
+            os.path.join(root_dir, "src", "05_2nd_screening_trip_viewer.py"),
+            os.path.join(root_dir, "src", "05_trip_viewer.py"),
+            os.path.join(root_dir, "src", "05_UI_second_screening_trip_viewer.py"),
+        ]
+        for p in candidates:
+            if os.path.isfile(p):
+                return p
+        return ""
+
+    def _launch_05_viewer(self, input_dir: str) -> bool:
+        """
+        05（第2スクリーニングトリップビューアー）を同梱pythonで直起動する。
+        cmd.exe / bat を介さないので、配布先フォルダに () が入っても壊れない。
+        """
+        root = self._get_root_dir()
+        py = self._get_embedded_python(root)
+        script = self._find_05_script(root)
+        log = (
+            getattr(self, "_append_log", None)
+            or getattr(self, "append_log", None)
+            or getattr(self, "log_info", None)
+            or print
+        )
+
+        if not py:
+            log("[ERROR] embedded python not found: <ROOT>\\runtime\\python\\python.exe")
+            return False
+        if not script:
+            log("[ERROR] 05 script not found under <ROOT>\\src (check _find_05_script candidates)")
+            return False
+        if not input_dir or not os.path.isdir(input_dir):
+            log(f"[ERROR] input_dir not found: {input_dir}")
+            return False
+
+        args = [script, input_dir]
+
+        log("[05] Launch via embedded python")
+        log(f"[05] PY    : {py}")
+        log(f"[05] SCRIPT: {script}")
+        log(f"[05] INPUT : {input_dir}")
+
+        ok = QProcess.startDetached(py, args, root)
+        if not ok:
+            log("[ERROR] Failed to start 05 (QProcess.startDetached returned False)")
+        return ok
+
     def _build_ui(self):
         root = QWidget(); self.setCentralWidget(root)
         v = QVBoxLayout(root)
@@ -615,31 +679,13 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "情報", "第2スクリーニング済みCSVが見つかりません。")
             return
 
-        # 05スクリプトは絶対パス化
-        script05 = (Path(__file__).resolve().parent / "05_route_mapper_simple.py").resolve()
-        if not script05.exists():
-            QMessageBox.critical(self, "エラー", f"05が見つかりません:\n{script05}")
-            return
-
-        # ★重要：cwd を 05 のあるフォルダに固定（05側が相対パスを使っても安定）
-        workdir = str(script05.parent)
-
-        # python実行ファイルも絶対パス化（将来の配布形態変更でも事故りにくい）
-        pyexe = Path(sys.executable).resolve()
-        if not pyexe.exists():
-            QMessageBox.critical(self, "エラー", f"Python実行ファイルが見つかりません:\n{pyexe}")
-            return
-
-        ok = QProcess.startDetached(str(pyexe), [str(script05), str(folder)], workdir)
+        ok = self._launch_05_viewer(str(folder))
         if not ok:
             QMessageBox.critical(
                 self,
                 "エラー",
                 "05（トリップビューアー）の起動に失敗しました。\n"
-                f"python: {pyexe}\n"
-                f"script: {script05}\n"
-                f"folder: {folder}\n"
-                f"cwd: {workdir}\n",
+                "同梱Pythonまたは05スクリプトの存在、入力フォルダを確認してください。",
             )
             return
 
