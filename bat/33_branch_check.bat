@@ -39,19 +39,19 @@ if not "%CSV_PATH%"=="" (
   echo [%date% %time%]   CSV_PATH=(empty)>>"%LOG%"
 )
 
-rem --- launch ---
+rem --- launch (NO start/cmd; direct pythonw/python) ---
 if exist "%PYW%" (
   if not "%CSV_PATH%"=="" (
-    start "" /b cmd /c ""%PYW%" "%APP%" --csv "%CSV_PATH%" 1>>"%LOG%" 2>>&1"
+    "%PYW%" "%APP%" --csv "%CSV_PATH%" 1>>"%LOG%" 2>>&1
   ) else (
-    start "" /b cmd /c ""%PYW%" "%APP%" 1>>"%LOG%" 2>>&1"
+    "%PYW%" "%APP%" 1>>"%LOG%" 2>>&1
   )
 ) else (
   if not "%CSV_PATH%"=="" (
-    start "" /b cmd /c ""%PY%" "%APP%" --csv "%CSV_PATH%" 1>>"%LOG%" 2>>&1"
+    "%PY%" "%APP%" --csv "%CSV_PATH%" 1>>"%LOG%" 2>>&1
   ) else (
-    start "" /b cmd /c ""%PY%" "%APP%" 1>>"%LOG%" 2>>&1"
+    "%PY%" "%APP%" 1>>"%LOG%" 2>>&1
   )
 )
 
-exit /b
+exit /b %errorlevel%
