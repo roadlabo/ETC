@@ -13,10 +13,11 @@ set "LOGDIR=%ROOT_DIR%\logs"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 set "LOG=%LOGDIR%\31_32_crossroad_performance_to_report_console.log"
 
+rem --- launch (NO start/cmd; direct pythonw/python) ---
 if exist "%PYW%" (
-  start "" /b cmd /c ""%PYW%" "%APP%" 1>>"%LOG%" 2>>&1"
+  "%PYW%" "%APP%" 1>>"%LOG%" 2>>&1
 ) else (
-  start "" /b cmd /c ""%PY%" "%APP%" 1>>"%LOG%" 2>>&1"
+  "%PY%" "%APP%" 1>>"%LOG%" 2>>&1
 )
 
-exit /b
+exit /b %errorlevel%
