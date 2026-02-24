@@ -606,18 +606,42 @@ class MainWindow(QMainWindow):
     def _open_trip_viewer(self, cross_name: str) -> None:
         if not self.project_dir:
             return
+
         _cross_dir, out_dir = resolve_project_paths(self.project_dir)
-        folder = out_dir / cross_name
+
+        # 入力フォルダは絶対パス化（PC差・cwd差対策）
+        folder = (out_dir / cross_name).resolve()
         if (not folder.exists()) or (not any(folder.glob("*.csv"))):
             QMessageBox.information(self, "情報", "第2スクリーニング済みCSVが見つかりません。")
             return
 
-        script05 = Path(__file__).resolve().parent / "05_route_mapper_simple.py"
+        # 05スクリプトは絶対パス化
+        script05 = (Path(__file__).resolve().parent / "05_route_mapper_simple.py").resolve()
         if not script05.exists():
             QMessageBox.critical(self, "エラー", f"05が見つかりません:\n{script05}")
             return
 
-        QProcess.startDetached(sys.executable, [str(script05), str(folder)])
+        # ★重要：cwd を 05 のあるフォルダに固定（05側が相対パスを使っても安定）
+        workdir = str(script05.parent)
+
+        # python実行ファイルも絶対パス化（将来の配布形態変更でも事故りにくい）
+        pyexe = Path(sys.executable).resolve()
+        if not pyexe.exists():
+            QMessageBox.critical(self, "エラー", f"Python実行ファイルが見つかりません:\n{pyexe}")
+            return
+
+        ok = QProcess.startDetached(str(pyexe), [str(script05), str(folder)], workdir)
+        if not ok:
+            QMessageBox.critical(
+                self,
+                "エラー",
+                "05（トリップビューアー）の起動に失敗しました。\n"
+                f"python: {pyexe}\n"
+                f"script: {script05}\n"
+                f"folder: {folder}\n"
+                f"cwd: {workdir}\n",
+            )
+            return
 
     def _fmt_hms(self, sec: float) -> str:
         sec = max(0, int(sec)); h = sec // 3600; m = (sec % 3600) // 60; s = sec % 60
