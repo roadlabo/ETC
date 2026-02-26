@@ -54,6 +54,7 @@ FOLDER_OUT = "20_第２スクリーニング"
 
 RE_LEVEL = re.compile(r"\[(INFO|WARN|WARNING|ERROR|DEBUG)\]")
 RE_FILE_DONE = re.compile(r"進捗ファイル:\s*([0-9,]+)\s*/\s*([0-9,]+)")
+RE_FILE_PROCESSED = re.compile(r"進捗ファイル:\s*([0-9,]+)\s*files\s*processed")
 RE_HIT = re.compile(r"HIT:\s*(\S+)\s+(\d+)")
 RE_NEAR = re.compile(r"中心最近接距離\(m\):\s*(\S+)\s+([0-9.]+)")
 RE_OPID = re.compile(r"運行ID総数:\s*(\d+)")
@@ -1008,6 +1009,20 @@ class MainWindow(QMainWindow):
         if m_file:
             self.done_files = int(m_file.group(1).replace(",", ""))
             self.total_files = int(m_file.group(2).replace(",", ""))
+            self._eta_done = self.done_files
+            self._eta_total = self.total_files
+            self._update_progress_label()
+
+            if self.total_files > 0:
+                pct = int((self.done_files / self.total_files) * 100)
+                while self._next_pct_log <= 100 and pct >= self._next_pct_log:
+                    self.log_info(f"{self._next_pct_log}%完了")
+                    self._next_pct_log += 10
+            return
+
+        m_proc = RE_FILE_PROCESSED.search(text)
+        if m_proc:
+            self.done_files = int(m_proc.group(1).replace(",", ""))
             self._eta_done = self.done_files
             self._eta_total = self.total_files
             self._update_progress_label()
