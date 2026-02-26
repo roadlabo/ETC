@@ -114,23 +114,6 @@ def load_crossroad_points(paths: list[Path]) -> list[CrossroadPoint]:
     return points
 
 
-def count_unique_opids(trip_files: Sequence[Path]) -> int:
-    opids: set[str] = set()
-    for p in trip_files:
-        try:
-            with p.open("r", encoding="utf-8-sig", errors="ignore", newline="") as f:
-                reader = csv.reader(f)
-                for row in reader:
-                    if len(row) <= OP_ID_INDEX:
-                        continue
-                    token = row[OP_ID_INDEX].strip()
-                    if token:
-                        opids.add(token)
-                        break
-        except Exception:
-            continue
-    return len(opids)
-
 # ---------------------------------------------------------------------------
 # Weekday utilities
 # ---------------------------------------------------------------------------
@@ -753,10 +736,13 @@ def run_second_screening(
         print(f"No trip CSV files found under {input_dir}")
         return 0
 
-    opid_total = count_unique_opids(trip_files)
+    # 第1スクリーニングは「1ファイル = 1OP_ID」前提のため、
+    # 全ファイルをopenしてID集計するのは不要（大規模データで非常に遅い）
+    opid_total = len(trip_files)
     print(f"運行ID総数: {opid_total}", flush=True)
 
     print(f"Target trip CSV files: {len(trip_files)}")
+    print("[INFO] OP_ID count is treated as file count (1 file = 1 OP_ID).", flush=True)
     print(f"Target crossroads    : {len(crossroads)}")
     print("Crossroad list:")
     for cp in crossroads:
