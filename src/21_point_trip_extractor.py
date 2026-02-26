@@ -428,12 +428,13 @@ def save_trip(
 # Progress helpers
 # ---------------------------------------------------------------------------
 
-def list_csv_files(root: Path, recursive: bool = False) -> List[Path]:
-    """Return a sorted list of CSV files under ``root``."""
+def iter_csv_files(root: Path, recursive: bool = False):
+    """Yield CSV files under ``root`` without sorting."""
 
     if recursive:
-        return sorted(p for p in root.rglob("*.csv") if p.is_file())
-    return sorted(p for p in root.glob("*.csv") if p.is_file())
+        yield from (p for p in root.rglob("*.csv") if p.is_file())
+    else:
+        yield from (p for p in root.glob("*.csv") if p.is_file())
 
 
 def format_hms(seconds: float) -> str:
@@ -731,24 +732,15 @@ def run_second_screening(
         print("No valid crossroad points could be loaded.")
         return 1
 
-    trip_files = list_csv_files(input_dir, recursive=bool(recursive))
-    if not trip_files:
-        print(f"No trip CSV files found under {input_dir}")
-        return 0
+    trip_files_iter = iter_csv_files(input_dir, recursive=bool(recursive))
 
-    # 第1スクリーニングは「1ファイル = 1OP_ID」前提のため、
-    # 全ファイルをopenしてID集計するのは不要（大規模データで非常に遅い）
-    opid_total = len(trip_files)
-    print(f"運行ID総数: {opid_total}", flush=True)
-
-    print(f"Target trip CSV files: {len(trip_files)}")
     print("[INFO] OP_ID count is treated as file count (1 file = 1 OP_ID).", flush=True)
     print(f"Target crossroads    : {len(crossroads)}")
     print("Crossroad list:")
     for cp in crossroads:
         print(f"  - {cp.name}")
 
-    total_files = len(trip_files)
+    total_files = 0
     hits_per_cross = {cp.name: 0 for cp in crossroads}
     saved_per_cross = {cp.name: 0 for cp in crossroads}
 
@@ -757,7 +749,8 @@ def run_second_screening(
 
     overall_start = time.time()
 
-    for idx, trip_path in enumerate(trip_files, 1):
+    for trip_path in trip_files_iter:
+        total_files += 1
         cand, matched = process_file_for_all_crossroads(
             trip_path,
             crossroads,
@@ -771,10 +764,11 @@ def run_second_screening(
         )
         total_candidate += cand
         total_matched += matched
-        percent = (idx / total_files) * 100 if total_files else 100.0
-        print(f"進捗ファイル: {idx}/{total_files} ({percent:.1f}%)", flush=True)
+        print(f"進捗ファイル: {total_files} files processed", flush=True)
 
-    print(f"進捗ファイル: {total_files}/{total_files} (100.0%)", flush=True)
+    if total_files == 0:
+        print(f"No trip CSV files found under {input_dir}")
+        return 0
 
     total_elapsed = time.time() - overall_start
     print(f"TOTAL 所要時間: {format_hms(total_elapsed)}")
