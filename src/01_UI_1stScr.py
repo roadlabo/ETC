@@ -534,6 +534,20 @@ class MainWindow(QMainWindow):
         s = sec % 60
         return f"{h:02d}:{m:02d}:{s:02d}"
 
+    def _estimate_total_seconds(self) -> float:
+        # キャリブが無い／bpsが取れない時は推定不能
+        if self._extract_bps <= 0 or self._zip_bytes_total <= 0:
+            return 0.0
+
+        extract_total = self._zip_bytes_total / max(1.0, self._extract_bps)
+
+        sort_total = 0.0
+        # SORTは、bpsと総バイトが揃ったら足す（未確定なら0扱い）
+        if self._sort_bps > 0 and self._sort_bytes_total > 0:
+            sort_total = self._sort_bytes_total / max(1.0, self._sort_bps)
+
+        return extract_total + sort_total
+
     def _ui_summary_lines(
         self,
         *,
@@ -575,25 +589,13 @@ class MainWindow(QMainWindow):
         elapsed = time.time() - base
         self.time_elapsed_big.setText(f"経過 {self._fmt_hms(elapsed)}")
 
-        if self._eta_total > 0 and self._eta_done > 0 and self._eta_done <= self._eta_total:
-            if self._eta_mode == "EXTRACT" and self._extract_bps > 0 and self._zip_bytes_total > 0:
-                remain = (self._zip_bytes_total - self._zip_bytes_done) / max(1.0, self._extract_bps)
-                self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
-                return
-            if self._eta_mode == "SORT" and self._sort_bps > 0 and self._sort_bytes_total > 0:
-                remain = (self._sort_bytes_total - self._sort_bytes_done) / max(1.0, self._sort_bps)
-                self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
-                return
-            if self._eta_mode == "EXTRACT" and self._zip_bytes_total > 0 and self._zip_bytes_done > 0:
-                rate = elapsed / max(1, self._zip_bytes_done)
-                remain = rate * (self._zip_bytes_total - self._zip_bytes_done)
-                self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
-            else:
-                rate = elapsed / max(1, self._eta_done)
-                remain = rate * (self._eta_total - self._eta_done)
-                self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
-        else:
+        total_est = self._estimate_total_seconds()
+        if total_est <= 0:
             self.time_eta_big.setText("残り --:--:--")
+            return
+
+        remain = max(0.0, total_est - elapsed)
+        self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
 
     def _tick_animation(self) -> None:
         self.sweep.tick()
@@ -755,14 +757,44 @@ class MainWindow(QMainWindow):
             if zip_name and zip_pct >= 100 and prev_pct < 100:
                 self._append_log(f"{zip_name} 抽出完了（{zdone}/{ztot}）")
 
+            # ★最後のZIPが終わった瞬間に SORT対象サイズを確定（全体想定時間を確定させる）
+            if zip_pct >= 100 and zdone == ztot and self._sort_bytes_total == 0:
+                outdir = Path(self.output_dir.text().strip())
+                term = self.term_name.text().strip()
+                files = sorted(outdir.glob(f"{term}_*.csv"))
+                total_bytes = 0
+                self._sort_file_sizes = []
+                for f in files:
+                    try:
+                        sz = f.stat().st_size
+                    except Exception:
+                        sz = 0
+                    self._sort_file_sizes.append(int(sz))
+                    total_bytes += int(sz)
+                self._sort_bytes_total = total_bytes
+                self._sort_bytes_done = 0
+
             self._eta_mode = "EXTRACT"
             self._eta_done = zdone
             self._eta_total = ztot
+            # ★ZIP途中でも進む“バイトdone”を作る
+            # 完了ZIP分
+            base_done = 0
+            cur_sz = 0
             if self._zip_sizes and zdone > 0:
                 safe_done = max(0, min(zdone, len(self._zip_sizes)))
-                self._zip_bytes_done = sum(self._zip_sizes[:safe_done])
-            else:
-                self._zip_bytes_done = 0
+                base_done = sum(self._zip_sizes[:safe_done])
+
+            # いま処理中ZIPの割合分を加算（zip_pctは0-100）
+            # ただし、zdone は「何本目のZIPを処理中か」の番号として来るので、
+            # 処理中ZIPのindexは zdone-1 とみなして良い（zip_doneを渡しているため）
+            extra_part = 0
+            idx = zdone - 1
+            if 0 <= idx < len(self._zip_sizes):
+                cur_sz = self._zip_sizes[idx]
+                extra_part = int(cur_sz * max(0, min(100, zip_pct)) / 100)
+
+            self._zip_bytes_done = max(0, min(self._zip_bytes_total, base_done - (cur_sz if zip_pct < 100 else 0) + extra_part))
 
         if stage == "SORT":
             total_files = max(1, int(extra.get("total_files", total)))
