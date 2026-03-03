@@ -571,9 +571,11 @@ class MainWindow(QMainWindow):
         if self._eta_total > 0 and self._eta_done > 0 and self._eta_done <= self._eta_total:
             rate = elapsed / max(1, self._eta_done)
             remain = rate * (self._eta_total - self._eta_done)
-            self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
+            suffix = " ＋SORT" if self._eta_mode == "EXTRACT" else ""
+            self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}{suffix}")
         else:
-            self.time_eta_big.setText("残り --:--:--")
+            suffix = " ＋SORT" if self._eta_mode == "EXTRACT" else ""
+            self.time_eta_big.setText(f"残り --:--:--{suffix}")
 
     def _tick_animation(self) -> None:
         self.sweep.tick()
