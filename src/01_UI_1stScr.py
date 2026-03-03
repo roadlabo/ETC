@@ -229,6 +229,10 @@ class MainWindow(QMainWindow):
         self._eta_mode = "IDLE"
         self._eta_done = 0
         self._eta_total = 0
+        self._eta_last_t = 0.0
+        self._eta_last_done = 0
+        self._eta_speed_ema = 0.0
+        self._last_eta_text = "残り --:--:--"
         self._zip_done_last = -1
         self._zip_pct_last: dict[str, int] = {}
         self._sort_bucket_last = -1
@@ -244,6 +248,9 @@ class MainWindow(QMainWindow):
         self.anim_timer = QTimer(self)
         self.anim_timer.timeout.connect(self._tick_animation)
         self.anim_timer.start(120)
+        self._eta_timer = QTimer(self)
+        self._eta_timer.timeout.connect(self._update_eta_only)
+        self._eta_timer.start(1000)
 
     def _build_ui(self) -> None:
         root = QWidget(); self.setCentralWidget(root)
@@ -332,15 +339,19 @@ class MainWindow(QMainWindow):
         }
         self.time_elapsed_big = QLabel("経過 00:00:00")
         self.time_eta_big = QLabel("残り --:--:--")
+        self.lbl_sort_hint = QLabel("＋時系列並べ替え（SORT）")
         big_font = QFont("Consolas", 28)
         self.time_elapsed_big.setFont(big_font)
         self.time_eta_big.setFont(big_font)
         self.time_elapsed_big.setStyleSheet("color:#c9ffe0;")
         self.time_eta_big.setStyleSheet("color:#c9ffe0;")
+        self.lbl_sort_hint.setStyleSheet("color:#a8f5c2;")
+        self.lbl_sort_hint.hide()
         tg.addWidget(QLabel("全体ZIP進捗")); tg.addWidget(self.zip_progress)
         tg.addWidget(QLabel("SORT進捗")); tg.addWidget(self.sort_progress)
         tg.addWidget(self.time_elapsed_big)
         tg.addWidget(self.time_eta_big)
+        tg.addWidget(self.lbl_sort_hint)
         for k in ["zip", "rows", "opid", "sort_file", "sort_done", "errors", "status"]: tg.addWidget(self.tele[k])
         self.sweep = SweepWidget(); tg.addWidget(self.sweep)
         tg.addStretch(1)
@@ -497,6 +508,7 @@ class MainWindow(QMainWindow):
         for i, lb in enumerate(self.map_lines):
             lb.setStyleSheet("color:#a2f0be;font-weight:700;" if i <= active else "color:#2b6040;")
         self.tele["status"].setText(f"状態: {stage}")
+        self.lbl_sort_hint.setVisible(stage == "EXTRACT")
         if stage == "SCAN":
             self._set_logo_glow(80, 24)
         elif stage == "EXTRACT":
@@ -508,9 +520,12 @@ class MainWindow(QMainWindow):
 
     def _append_log(self, msg: str) -> None:
         ts = time.strftime("%H:%M:%S")
-        self.log_lines.append(f"[{ts}] {msg}")
-        self.log_lines = self.log_lines[-10:]
-        self.log.setPlainText("\n".join(self.log_lines))
+        line = f"[{ts}] {msg}"
+        self.log_lines.append(line)
+        self.log.appendPlainText(line)
+        if len(self.log_lines) > 10:
+            self.log_lines = self.log_lines[-10:]
+            self.log.setPlainText("\n".join(self.log_lines))
         self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
 
     def _fmt_hms(self, sec: float) -> str:
@@ -551,47 +566,42 @@ class MainWindow(QMainWindow):
             f"STATUS: {status}",
         ]
 
-    def _update_time_boxes(self) -> None:
+    def _update_eta_only(self) -> None:
         if self.started_at <= 0:
             self.time_elapsed_big.setText("経過 00:00:00")
-            self.time_eta_big.setText("残り --:--:--")
+            if self._last_eta_text != "残り --:--:--":
+                self._last_eta_text = "残り --:--:--"
+                self.time_eta_big.setText(self._last_eta_text)
             return
 
         elapsed = time.time() - self.started_at
         self.time_elapsed_big.setText(f"経過 {self._fmt_hms(elapsed)}")
+        eta_text = "残り --:--:--"
 
-        # EXTRACT中：経過/ZIP本数で推定し、後続SORTがあることを小文字で示す
-        if self._eta_mode == "EXTRACT":
-            if self._eta_total > 0 and self._eta_done > 0 and self._eta_done <= self._eta_total:
-                rate = elapsed / max(1, self._eta_done)
-                remain = rate * (self._eta_total - self._eta_done)
-                self.time_eta_big.setText(
-                    f'残り {self._fmt_hms(remain)} '
-                    f'<span style="font-size:18px; color:#a8f5c2;">＋時系列並べ替え（SORT）</span>'
-                )
-                return
-            self.time_eta_big.setText(
-                '残り --:--:-- <span style="font-size:18px; color:#a8f5c2;">＋時系列並べ替え（SORT）</span>'
-            )
-            return
+        if self._eta_mode in {"EXTRACT", "SORT"} and self._eta_total > 0:
+            now = time.time()
+            dt = now - self._eta_last_t if self._eta_last_t > 0 else 0.0
+            dd = self._eta_done - self._eta_last_done
+            if dt > 0 and dd > 0:
+                speed = dd / dt
+                alpha = 0.25
+                if self._eta_speed_ema <= 0:
+                    self._eta_speed_ema = speed
+                else:
+                    self._eta_speed_ema = self._eta_speed_ema * (1.0 - alpha) + speed * alpha
+            self._eta_last_t = now
+            self._eta_last_done = self._eta_done
 
-        # SORT中：SORT開始からの経過で推定（ZIPの経過を混ぜない）
-        if self._eta_mode == "SORT":
-            base = self._sort_started_at if self._sort_started_at > 0 else self.started_at
-            elapsed_sort = time.time() - base
-            if self._eta_total > 0 and self._eta_done > 0 and self._eta_done <= self._eta_total:
-                rate = elapsed_sort / max(1, self._eta_done)
-                remain = rate * (self._eta_total - self._eta_done)
-                self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
-                return
-            self.time_eta_big.setText("残り --:--:--")
-            return
+            if self._eta_done > 0 and self._eta_done <= self._eta_total and self._eta_speed_ema > 0:
+                remain = (self._eta_total - self._eta_done) / max(self._eta_speed_ema, 1e-9)
+                eta_text = f"残り {self._fmt_hms(remain)}"
 
-        self.time_eta_big.setText("残り --:--:--")
+        if eta_text != self._last_eta_text:
+            self._last_eta_text = eta_text
+            self.time_eta_big.setText(eta_text)
 
     def _tick_animation(self) -> None:
         self.sweep.tick()
-        self._update_time_boxes()
 
     def _config(self) -> SplitConfig:
         return SplitConfig(
@@ -600,6 +610,7 @@ class MainWindow(QMainWindow):
             zip_digit_keys=[x.strip() for x in self.zip_keys.text().split(",") if x.strip()],
             encoding="utf-8", delim=",",
             do_final_sort=True, timestamp_col=6, chunk_rows=self.chunk_rows.value(),
+            progress_interval_sec=0.5,
         )
 
     def resizeEvent(self, event) -> None:
@@ -647,12 +658,17 @@ class MainWindow(QMainWindow):
         self._last_opid_total = 0
         self._last_rows_written = 0
         self._sort_started_at = 0.0
+        self._eta_last_t = 0.0
+        self._eta_last_done = 0
+        self._eta_speed_ema = 0.0
+        self._last_eta_text = "残り --:--:--"
         self.tele["zip"].setText("現在ZIP: -")
         self.tele["rows"].setText("累積行数（総CSVファイル合計）: 0")
         self.tele["opid"].setText("運行ID総数（出力CSVファイル数）: 0")
         self.tele["sort_done"].setText("SORT済みCSV数: 0")
         self.time_elapsed_big.setText("経過 00:00:00")
         self.time_eta_big.setText("残り --:--:--")
+        self.lbl_sort_hint.hide()
         self.zip_progress.setValue(0); self.sort_progress.setValue(0)
         self._append_log("管制: ミッション開始。ZIP走査へ移行します。")
         self.worker = SplitWorker(cfg)
@@ -761,6 +777,10 @@ class MainWindow(QMainWindow):
             self._eta_mode = "IDLE"
             self._eta_done = 0
             self._eta_total = 0
+            self._eta_last_t = 0.0
+            self._eta_last_done = 0
+            self._eta_speed_ema = 0.0
+            self._last_eta_text = "残り 00:00:00"
             self.time_eta_big.setText("残り 00:00:00")
             for card in self.cards.values():
                 if "処理中" in card.state.text() or "待機" in card.state.text():
