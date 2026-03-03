@@ -707,9 +707,20 @@ class MainWindow(QMainWindow):
             if zip_name and zip_pct >= 100 and prev_pct < 100:
                 self._append_log(f"{zip_name} 抽出完了（{zdone}/{ztot}）")
 
+            # ETAは「完了ZIP数 + 現在ZIPの進捗率」で計算する（old挙動に合わせる）
             self._eta_mode = "EXTRACT"
-            self._eta_done = zdone
-            self._eta_total = ztot
+
+            zip_pct = int(extra.get("zip_pct", 0))
+            zip_frac = max(0.0, min(1.0, zip_pct / 100.0))
+
+            # zdone は「現在処理中ZIPを含む番号」なので、完了数は (zdone - 1)
+            done_effective = (zdone - 1) + zip_frac
+            done_effective = max(0.0, min(float(ztot), done_effective))
+
+            # _update_time_boxes は int 前提なので、ここだけ 1000倍の擬似カウントにする
+            # （小数を安全に扱うため）
+            self._eta_total = ztot * 1000
+            self._eta_done = int(done_effective * 1000)
 
         if stage == "SORT":
             if self._sort_started_at <= 0:
