@@ -399,6 +399,12 @@ class MainWindow(QMainWindow):
         self._global_total_files = 0
         self._global_done_files = 0
         self._elapsed_frozen_text = "経過 00:00:00"
+        # ---- UI更新 間引き（安定化） ----
+        self.TELEMETRY_INTERVAL_SEC = 1.0   # telemetry（done/total等）は1秒に1回
+        self.ETA_INTERVAL_SEC = 10.0        # ETA（残り時間）は10秒に1回だけ再計算
+        self._telemetry_last_update_t = 0.0
+        self._eta_last_calc_t = 0.0
+        self._eta_last_text = "残り --:--:--"
 
         self._waiting_lock_dialog: QDialog | None = None
         self._waiting_lock_timer: QTimer | None = None
@@ -799,24 +805,33 @@ class MainWindow(QMainWindow):
     def _update_time_boxes(self) -> None:
         if self.started_at <= 0:
             self.time_elapsed_big.setText("経過 00:00:00")
-            self.time_eta_big.setText("残り --:--:--")
+            self._eta_last_text = "残り --:--:--"
+            self.time_eta_big.setText(self._eta_last_text)
             return
 
         now = time.time()
         elapsed = now - self.started_at
         self.time_elapsed_big.setText(f"経過 {format_hhmmss(elapsed)}")
 
+        # ★ETAは10秒に1回だけ再計算（それ以外は前回表示を維持）
+        if now - self._eta_last_calc_t < self.ETA_INTERVAL_SEC:
+            self.time_eta_big.setText(self._eta_last_text)
+            return
+        self._eta_last_calc_t = now
+
         done = int(self._eta_done or 0)
         total = int(self._eta_total or 0)
         if total <= 0 or done <= 0 or done > total:
-            self.time_eta_big.setText("残り --:--:--")
+            self._eta_last_text = "残り --:--:--"
+            self.time_eta_big.setText(self._eta_last_text)
             return
 
         # 観測速度（files/sec）
         if self._eta_last_t is None:
             self._eta_last_t = now
             self._eta_last_done_obs = done
-            self.time_eta_big.setText("残り --:--:--")
+            self._eta_last_text = "残り --:--:--"
+            self.time_eta_big.setText(self._eta_last_text)
             return
 
         dt = max(1e-6, now - self._eta_last_t)
@@ -835,7 +850,8 @@ class MainWindow(QMainWindow):
 
         rate = self._eta_rate_ema
         if not rate or rate <= 0:
-            self.time_eta_big.setText("残り --:--:--")
+            self._eta_last_text = "残り --:--:--"
+            self.time_eta_big.setText(self._eta_last_text)
             return
 
         remain_sec = (total - done) / rate
@@ -845,7 +861,8 @@ class MainWindow(QMainWindow):
             remain_sec = min(remain_sec, self._eta_prev_remain * 1.15)
 
         self._eta_prev_remain = remain_sec
-        self.time_eta_big.setText(f"残り {format_hhmmss(remain_sec)}")
+        self._eta_last_text = f"残り {format_hhmmss(remain_sec)}"
+        self.time_eta_big.setText(self._eta_last_text)
 
     def _tick_animation(self) -> None:
         if self._telemetry_running:
@@ -861,8 +878,15 @@ class MainWindow(QMainWindow):
         self._eta_last_done_obs = None
         self._eta_rate_ema = None
         self._eta_prev_remain = None
+        self._eta_last_calc_t = 0.0
+        self._eta_last_text = "残り --:--:--"
 
-    def _refresh_telemetry(self) -> None:
+    def _refresh_telemetry(self, force: bool = False) -> None:
+        now = time.time()
+        if (not force) and (now - self._telemetry_last_update_t < self.TELEMETRY_INTERVAL_SEC):
+            return
+        self._telemetry_last_update_t = now
+
         selected_names = [n for n, c in self.cards.items() if c.selected]
 
         total_cross = len(selected_names)
@@ -1168,7 +1192,7 @@ class MainWindow(QMainWindow):
             card.set_buttons_enabled(False)
             if card.selected:
                 card.set_state("待機")
-        self._refresh_telemetry()
+        self._refresh_telemetry(force=True)
         self._start_next_crossroad()
 
     def _start_next_crossroad(self) -> None:
@@ -1411,7 +1435,7 @@ class MainWindow(QMainWindow):
         self.tele["status"].setText("状態: DONE")
         self.tele["current"].setText("現在: ---")
         self.time_eta_big.setText("残り 00:00:00")
-        self._refresh_telemetry()
+        self._refresh_telemetry(force=True)
         self.progress_bar.setValue(100)
 
 
