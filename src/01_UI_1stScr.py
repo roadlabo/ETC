@@ -589,13 +589,40 @@ class MainWindow(QMainWindow):
         elapsed = time.time() - base
         self.time_elapsed_big.setText(f"経過 {self._fmt_hms(elapsed)}")
 
-        total_est = self._estimate_total_seconds()
-        if total_est <= 0:
-            self.time_eta_big.setText("残り --:--:--")
+        # EXTRACT中：抽出残り ＋「時系列並べ替え（SORT）」の注意書き
+        if self._eta_mode == "EXTRACT":
+            rem_extract = None
+
+            if self._extract_bps > 0 and self._zip_bytes_total > 0:
+                rem_extract = (self._zip_bytes_total - self._zip_bytes_done) / max(1.0, self._extract_bps)
+            elif self._eta_total > 0 and self._eta_done > 0:
+                # フォールバック（bpsが無い時）
+                rate = elapsed / max(1, self._eta_done)
+                rem_extract = rate * (self._eta_total - self._eta_done)
+
+            if rem_extract is None:
+                self.time_eta_big.setText("残り --:--:-- ＋ 時系列並べ替え（SORT）")
+            else:
+                self.time_eta_big.setText(f"残り {self._fmt_hms(rem_extract)} ＋ 時系列並べ替え（SORT）")
             return
 
-        remain = max(0.0, total_est - elapsed)
-        self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
+        # SORT中：SORT残りのみ
+        if self._eta_mode == "SORT":
+            rem_sort = None
+
+            if self._sort_bps > 0 and self._sort_bytes_total > 0:
+                rem_sort = (self._sort_bytes_total - self._sort_bytes_done) / max(1.0, self._sort_bps)
+            elif self._eta_total > 0 and self._eta_done > 0:
+                rate = elapsed / max(1, self._eta_done)
+                rem_sort = rate * (self._eta_total - self._eta_done)
+
+            if rem_sort is None:
+                self.time_eta_big.setText("残り --:--:--")
+            else:
+                self.time_eta_big.setText(f"残り {self._fmt_hms(rem_sort)}")
+            return
+
+        self.time_eta_big.setText("残り --:--:--")
 
     def _tick_animation(self) -> None:
         self.sweep.tick()
