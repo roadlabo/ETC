@@ -389,6 +389,12 @@ class MainWindow(QMainWindow):
         self.started_at = 0.0
         self._eta_done = 0
         self._eta_total = 0
+        # ETA安定化（対象変更で破綻しない）
+        self._eta_signature = None
+        self._eta_last_t = None
+        self._eta_last_done_obs = None
+        self._eta_rate_ema = None
+        self._eta_prev_remain = None
         self._telemetry_running = False
         self._global_total_files = 0
         self._global_done_files = 0
@@ -795,13 +801,51 @@ class MainWindow(QMainWindow):
             self.time_elapsed_big.setText("経過 00:00:00")
             self.time_eta_big.setText("残り --:--:--")
             return
-        elapsed = time.time() - self.started_at
+
+        now = time.time()
+        elapsed = now - self.started_at
         self.time_elapsed_big.setText(f"経過 {format_hhmmss(elapsed)}")
-        if self._eta_total > 0 and self._eta_done > 0 and self._eta_done <= self._eta_total:
-            remain = elapsed / max(1, self._eta_done) * (self._eta_total - self._eta_done)
-            self.time_eta_big.setText(f"残り {format_hhmmss(remain)}")
-        else:
+
+        done = int(self._eta_done or 0)
+        total = int(self._eta_total or 0)
+        if total <= 0 or done <= 0 or done > total:
             self.time_eta_big.setText("残り --:--:--")
+            return
+
+        # 観測速度（files/sec）
+        if self._eta_last_t is None:
+            self._eta_last_t = now
+            self._eta_last_done_obs = done
+            self.time_eta_big.setText("残り --:--:--")
+            return
+
+        dt = max(1e-6, now - self._eta_last_t)
+        dd = max(0, done - (self._eta_last_done_obs or 0))
+        inst_rate = dd / dt
+
+        alpha = 0.20  # 平滑化（ブレを抑えつつ追従）
+        if inst_rate > 0:
+            if self._eta_rate_ema is None:
+                self._eta_rate_ema = inst_rate
+            else:
+                self._eta_rate_ema = (1 - alpha) * self._eta_rate_ema + alpha * inst_rate
+
+        self._eta_last_t = now
+        self._eta_last_done_obs = done
+
+        rate = self._eta_rate_ema
+        if not rate or rate <= 0:
+            self.time_eta_big.setText("残り --:--:--")
+            return
+
+        remain_sec = (total - done) / rate
+
+        # 急な“増加”だけ抑える（体感の安定化）
+        if self._eta_prev_remain is not None and elapsed > 10 and done >= 5:
+            remain_sec = min(remain_sec, self._eta_prev_remain * 1.15)
+
+        self._eta_prev_remain = remain_sec
+        self.time_eta_big.setText(f"残り {format_hhmmss(remain_sec)}")
 
     def _tick_animation(self) -> None:
         if self._telemetry_running:
@@ -812,18 +856,30 @@ class MainWindow(QMainWindow):
         else:
             self.time_elapsed_big.setText(self._elapsed_frozen_text)
 
+    def _reset_eta_estimator(self) -> None:
+        self._eta_last_t = None
+        self._eta_last_done_obs = None
+        self._eta_rate_ema = None
+        self._eta_prev_remain = None
+
     def _refresh_telemetry(self) -> None:
         selected_names = [n for n, c in self.cards.items() if c.selected]
+
         total_cross = len(selected_names)
         self.tele["cross_total"].setText(f"交差点数: {total_cross}")
 
         current = self.current_name if (self._telemetry_running and self.current_name) else "---"
         self.tele["current"].setText(f"現在: {current}")
 
+        # ★対象セットが変わったら ETA推定をリセット
+        sig = tuple(sorted(selected_names))
+        if sig != self._eta_signature:
+            self._eta_signature = sig
+            self._reset_eta_estimator()
+
+        # ★ETA計算は「選択対象だけ」を分母・分子にする
         done_f = sum(self.cards[n].data.get("done", 0) for n in selected_names)
         total_f = sum(self.cards[n].flags.get("s2_csv", 0) for n in selected_names)
-        if total_f <= 0:
-            total_f = max(1, self._global_total_files)
 
         self._global_done_files = done_f
         pct = (done_f / total_f * 100.0) if total_f else 0.0
