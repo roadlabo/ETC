@@ -568,14 +568,17 @@ class MainWindow(QMainWindow):
         elapsed = time.time() - self.started_at
         self.time_elapsed_big.setText(f"経過 {self._fmt_hms(elapsed)}")
 
-        if self._eta_total > 0 and self._eta_done > 0 and self._eta_done <= self._eta_total:
-            rate = elapsed / max(1, self._eta_done)
+        remain_text = "--:--:--"
+        if self._eta_total > 0 and self._eta_done > 0:
+            rate = elapsed / self._eta_done
             remain = rate * (self._eta_total - self._eta_done)
-            suffix = " ＋SORT" if self._eta_mode == "EXTRACT" else ""
-            self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}{suffix}")
-        else:
-            suffix = " ＋SORT" if self._eta_mode == "EXTRACT" else ""
-            self.time_eta_big.setText(f"残り --:--:--{suffix}")
+            remain = max(0, remain)
+            remain_text = self._fmt_hms(remain)
+
+        if self._eta_mode == "EXTRACT":
+            remain_text = f"{remain_text} ＋SORT"
+
+        self.time_eta_big.setText(f"残り {remain_text}")
 
     def _tick_animation(self) -> None:
         self.sweep.tick()

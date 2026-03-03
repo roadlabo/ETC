@@ -47,7 +47,6 @@ class SplitConfig:
     do_final_sort: bool = DO_FINAL_SORT
     timestamp_col: int = TIMESTAMP_COL
     chunk_rows: int = CHUNK_ROWS
-    temp_sort_dir: str = TEMP_SORT_DIR
     progress_interval_sec: float = PROGRESS_INTERVAL_SEC
 
 
@@ -480,7 +479,7 @@ def _final_sort_all(
     pattern = f"{config.term_name}_*.csv"
     files = sorted(output_dir.glob(pattern))
     total = len(files)
-    temp_root = output_dir / config.temp_sort_dir
+    temp_root = output_dir / TEMP_SORT_DIR
     temp_root.mkdir(parents=True, exist_ok=True)
     done = 0
     last_emit = 0.0
@@ -683,7 +682,6 @@ def _build_config_from_args() -> SplitConfig:
     parser.add_argument("--no_final_sort", action="store_false", dest="do_final_sort")
     parser.add_argument("--timestamp_col", type=int, default=TIMESTAMP_COL)
     parser.add_argument("--chunk_rows", type=int, default=CHUNK_ROWS)
-    parser.add_argument("--temp_sort_dir", default=TEMP_SORT_DIR)
     parser.add_argument("--progress-interval", type=float, default=PROGRESS_INTERVAL_SEC)
     args = parser.parse_args()
 
@@ -698,7 +696,6 @@ def _build_config_from_args() -> SplitConfig:
         do_final_sort=args.do_final_sort,
         timestamp_col=args.timestamp_col,
         chunk_rows=args.chunk_rows,
-        temp_sort_dir=args.temp_sort_dir,
         progress_interval_sec=args.progress_interval,
     )
 
