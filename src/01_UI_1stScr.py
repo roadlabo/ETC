@@ -241,6 +241,12 @@ class MainWindow(QMainWindow):
         self._zip_sizes: list[int] = []
         self._zip_bytes_total = 0
         self._zip_bytes_done = 0
+        self._work_started_at = 0.0
+        self._extract_bps = 0.0
+        self._sort_bps = 0.0
+        self._sort_bytes_total = 0
+        self._sort_bytes_done = 0
+        self._sort_file_sizes: list[int] = []
         self._calib_info: dict = {}
         self._build_ui()
         self._set_style()
@@ -560,15 +566,24 @@ class MainWindow(QMainWindow):
         ]
 
     def _update_time_boxes(self) -> None:
-        if self.started_at <= 0:
+        base = self._work_started_at if self._work_started_at > 0 else self.started_at
+        if base <= 0:
             self.time_elapsed_big.setText("経過 00:00:00")
             self.time_eta_big.setText("残り --:--:--")
             return
 
-        elapsed = time.time() - self.started_at
+        elapsed = time.time() - base
         self.time_elapsed_big.setText(f"経過 {self._fmt_hms(elapsed)}")
 
         if self._eta_total > 0 and self._eta_done > 0 and self._eta_done <= self._eta_total:
+            if self._eta_mode == "EXTRACT" and self._extract_bps > 0 and self._zip_bytes_total > 0:
+                remain = (self._zip_bytes_total - self._zip_bytes_done) / max(1.0, self._extract_bps)
+                self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
+                return
+            if self._eta_mode == "SORT" and self._sort_bps > 0 and self._sort_bytes_total > 0:
+                remain = (self._sort_bytes_total - self._sort_bytes_done) / max(1.0, self._sort_bps)
+                self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
+                return
             if self._eta_mode == "EXTRACT" and self._zip_bytes_total > 0 and self._zip_bytes_done > 0:
                 rate = elapsed / max(1, self._zip_bytes_done)
                 remain = rate * (self._zip_bytes_total - self._zip_bytes_done)
@@ -642,6 +657,12 @@ class MainWindow(QMainWindow):
         self._zip_sizes = []
         self._zip_bytes_total = 0
         self._zip_bytes_done = 0
+        self._work_started_at = 0.0
+        self._extract_bps = 0.0
+        self._sort_bps = 0.0
+        self._sort_bytes_total = 0
+        self._sort_bytes_done = 0
+        self._sort_file_sizes = []
         self._calib_info = {}
         self.tele["zip"].setText("現在ZIP: -")
         self.tele["rows"].setText("累積行数（総CSVファイル合計）: 0")
@@ -680,9 +701,13 @@ class MainWindow(QMainWindow):
                 self._append_log(f"キャリブレーション開始: {extra.get('msg')}")
             else:
                 self._calib_info = dict(extra or {})
-                eb = float(self._calib_info.get("extract_bps", 0.0))
-                sb = float(self._calib_info.get("sort_bps", 0.0))
+                self._extract_bps = float(self._calib_info.get("extract_bps", 0.0) or 0.0)
+                self._sort_bps = float(self._calib_info.get("sort_bps", 0.0) or 0.0)
+
+                eb = self._extract_bps
+                sb = self._sort_bps
                 self._append_log(f"キャリブレーション完了: extract={eb/1024/1024:.1f}MB/s sort={sb/1024/1024:.1f}MB/s")
+                self._work_started_at = time.time()
             return
 
         if stage == "SCAN":
@@ -761,6 +786,24 @@ class MainWindow(QMainWindow):
             self._eta_mode = "SORT"
             self._eta_done = done_files
             self._eta_total = total_files
+            if self._sort_bytes_total == 0:
+                outdir = Path(self.output_dir.text().strip())
+                term = self.term_name.text().strip()
+                files = sorted(outdir.glob(f"{term}_*.csv"))
+                self._sort_file_sizes = []
+                total_bytes = 0
+                for f in files:
+                    try:
+                        sz = f.stat().st_size
+                    except Exception:
+                        sz = 0
+                    self._sort_file_sizes.append(int(sz))
+                    total_bytes += int(sz)
+                self._sort_bytes_total = total_bytes
+                self._sort_bytes_done = 0
+            if self._sort_file_sizes and done_files > 0:
+                safe_done = max(0, min(done_files, len(self._sort_file_sizes)))
+                self._sort_bytes_done = sum(self._sort_file_sizes[:safe_done])
 
         if stage == "VERIFY":
             status = extra.get("status", "DONE")
