@@ -49,8 +49,6 @@ class SplitConfig:
     chunk_rows: int = CHUNK_ROWS
     temp_sort_dir: str = TEMP_SORT_DIR
     progress_interval_sec: float = PROGRESS_INTERVAL_SEC
-    calibrate_seconds: float = 0.0
-    calibrate_sort_seconds: float = 0.0
 
 
 ProgressCB = Optional[Callable[[str, int, int, dict], None]]
@@ -522,116 +520,6 @@ def _final_sort_all(
             pass
 
 
-def _calibrate_speeds(
-    config: SplitConfig,
-    zip_paths: list[Path],
-    *,
-    output_dir_path: Path,
-    progress_cb: ProgressCB = None,
-    cancel_flag=None,
-) -> dict:
-    calib_sec = float(config.calibrate_seconds or 0.0)
-    if calib_sec <= 0 or not zip_paths:
-        return {}
-
-    calib_dir = output_dir_path / "_calib_tmp"
-    _rm_tree(calib_dir)
-    calib_dir.mkdir(parents=True, exist_ok=True)
-
-    seen_opids: set[str] = set()
-    deadline = time.monotonic() + calib_sec
-    z_done = 0
-    writer_cache = WriterCache(
-        output_dir=calib_dir,
-        term_name=config.term_name,
-        encoding=config.encoding,
-        delim=config.delim,
-        buffer_size=config.buffer_size,
-        max_open=128,
-    )
-    try:
-        for zp in zip_paths:
-            if cancel_flag is not None and cancel_flag.is_set():
-                break
-            z_done += 1
-            process_zip(
-                zp,
-                config,
-                output_dir_path=calib_dir,
-                writer_cache=writer_cache,
-                cancel_flag=cancel_flag,
-                progress_cb=progress_cb,
-                zip_done=z_done,
-                zips_total=len(zip_paths),
-                total_rows_before=0,
-                total_out_files_before=0,
-                seen_opids=seen_opids,
-                deadline_mono=deadline,
-            )
-            if time.monotonic() >= deadline:
-                break
-    finally:
-        writer_cache.close_all()
-
-    extract_bytes = _dir_size_bytes(calib_dir)
-    extract_time = calib_sec
-    extract_bps = extract_bytes / max(0.001, extract_time)
-
-    sort_sec = float(config.calibrate_sort_seconds or 0.0)
-    if sort_sec <= 0:
-        sort_sec = min(10.0, calib_sec)
-
-    files = sorted(calib_dir.glob(f"{config.term_name}_*.csv"))
-    if not files:
-        _rm_tree(calib_dir)
-        return {"extract_bps": extract_bps, "sort_bps": 0.0, "calib_extract_bytes": extract_bytes}
-
-    temp_root = calib_dir / (config.temp_sort_dir or "_sort_tmp")
-    temp_root.mkdir(parents=True, exist_ok=True)
-
-    sort_deadline = time.monotonic() + sort_sec
-    sorted_bytes = 0
-    for f in files:
-        if cancel_flag is not None and cancel_flag.is_set():
-            break
-        if time.monotonic() >= sort_deadline:
-            break
-        try:
-            sz = f.stat().st_size
-        except Exception:
-            sz = 0
-        t0 = time.monotonic()
-        _final_sort_one(
-            f,
-            config.encoding,
-            config.delim,
-            config.timestamp_col,
-            config.chunk_rows,
-            temp_root,
-            cancel_flag=cancel_flag,
-        )
-        dt = time.monotonic() - t0
-        if dt <= 0:
-            continue
-        sorted_bytes += sz
-        if time.monotonic() >= sort_deadline:
-            break
-
-    sort_time = sort_sec
-    sort_bps = sorted_bytes / max(0.001, sort_time)
-
-    _rm_tree(calib_dir)
-
-    return {
-        "extract_bps": extract_bps,
-        "sort_bps": sort_bps,
-        "calib_extract_bytes": extract_bytes,
-        "calib_sorted_bytes": sorted_bytes,
-        "calib_extract_sec": extract_time,
-        "calib_sort_sec": sort_time,
-    }
-
-
 def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=None) -> None:
     started = time.time()
     log = RunLog()
@@ -650,34 +538,7 @@ def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=N
     zip_paths = iter_target_zips(input_dir_path, config.zip_digit_keys)
     total_zips = len(zip_paths)
 
-    calib = {}
-    if config.calibrate_seconds and config.calibrate_seconds > 0:
-        print_progress(
-            "CALIB",
-            0,
-            1,
-            extra={"msg": f"calibrating... ({config.calibrate_seconds:.0f}s)"},
-            progress_cb=progress_cb,
-        )
-        calib = _calibrate_speeds(
-            config,
-            zip_paths,
-            output_dir_path=output_dir_path,
-            progress_cb=progress_cb,
-            cancel_flag=cancel_flag,
-        )
-        print_progress(
-            "CALIB",
-            1,
-            1,
-            extra=calib,
-            progress_cb=progress_cb,
-        )
-        end_progress_line(progress_cb=progress_cb)
-
     log.info(f"zips_total: {total_zips}")
-    if calib:
-        log.info(f"calibration: {calib}")
     print_progress(
         "SCAN",
         total_zips,
@@ -824,8 +685,6 @@ def _build_config_from_args() -> SplitConfig:
     parser.add_argument("--chunk_rows", type=int, default=CHUNK_ROWS)
     parser.add_argument("--temp_sort_dir", default=TEMP_SORT_DIR)
     parser.add_argument("--progress-interval", type=float, default=PROGRESS_INTERVAL_SEC)
-    parser.add_argument("--calibrate_seconds", type=float, default=0.0)
-    parser.add_argument("--calibrate_sort_seconds", type=float, default=0.0)
     args = parser.parse_args()
 
     return SplitConfig(
@@ -841,8 +700,6 @@ def _build_config_from_args() -> SplitConfig:
         chunk_rows=args.chunk_rows,
         temp_sort_dir=args.temp_sort_dir,
         progress_interval_sec=args.progress_interval,
-        calibrate_seconds=args.calibrate_seconds,
-        calibrate_sort_seconds=args.calibrate_sort_seconds,
     )
 
 
