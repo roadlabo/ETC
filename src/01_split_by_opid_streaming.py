@@ -10,6 +10,7 @@ import os
 import sys
 import time
 import zipfile
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Optional
@@ -28,6 +29,7 @@ DO_FINAL_SORT = True
 TIMESTAMP_COL = 6
 CHUNK_ROWS = 200_000
 TEMP_SORT_DIR = "_sort_tmp"
+PROGRESS_INTERVAL_SEC = 0.2
 
 
 @dataclass
@@ -46,6 +48,7 @@ class SplitConfig:
     timestamp_col: int = TIMESTAMP_COL
     chunk_rows: int = CHUNK_ROWS
     temp_sort_dir: str = TEMP_SORT_DIR
+    progress_interval_sec: float = PROGRESS_INTERVAL_SEC
 
 
 ProgressCB = Optional[Callable[[str, int, int, dict], None]]
@@ -136,12 +139,53 @@ def open_writer(
     return file_obj, writer, existed
 
 
-def close_current(current_fp: Optional[io.TextIOWrapper]) -> None:
-    if current_fp is not None:
-        try:
-            current_fp.close()
-        except Exception:
-            pass
+class WriterCache:
+    def __init__(
+        self,
+        *,
+        output_dir: Path,
+        term_name: str,
+        encoding: str,
+        delim: str,
+        buffer_size: int,
+        max_open: int = 128,
+    ) -> None:
+        self.output_dir = output_dir
+        self.term_name = term_name
+        self.encoding = encoding
+        self.delim = delim
+        self.buffer_size = buffer_size
+        self.max_open = max_open
+        self._cache: "OrderedDict[str, tuple[io.TextIOWrapper, csv.writer, bool]]" = OrderedDict()
+
+    def get(self, opid: str) -> tuple[io.TextIOWrapper, csv.writer, bool]:
+        if opid in self._cache:
+            fp, wr, existed = self._cache.pop(opid)
+            self._cache[opid] = (fp, wr, existed)
+            return fp, wr, existed
+
+        output_path = self.output_dir / f"{self.term_name}_{opid}.csv"
+        existed = output_path.exists()
+        fp = output_path.open(mode="a", encoding=self.encoding, newline="", buffering=self.buffer_size)
+        wr = csv.writer(fp, delimiter=self.delim, quoting=csv.QUOTE_MINIMAL)
+        self._cache[opid] = (fp, wr, existed)
+
+        while len(self._cache) > self.max_open:
+            _, (old_fp, _, _) = self._cache.popitem(last=False)
+            try:
+                old_fp.close()
+            except Exception:
+                pass
+
+        return fp, wr, existed
+
+    def close_all(self) -> None:
+        for fp, _, _ in self._cache.values():
+            try:
+                fp.close()
+            except Exception:
+                pass
+        self._cache.clear()
 
 
 def process_zip(
@@ -149,6 +193,7 @@ def process_zip(
     config: SplitConfig,
     *,
     output_dir_path: Path,
+    writer_cache: WriterCache,
     cancel_flag=None,
     progress_cb: ProgressCB = None,
     zip_done: int = 0,
@@ -167,15 +212,14 @@ def process_zip(
     decode_skip_count = 0
     rows_in_zip = 0
     last_emit = 0.0
-    try:
-        with zipfile.ZipFile(zip_path) as zf:
-            try:
-                info = zf.getinfo(config.inner_csv)
-            except KeyError:
-                missing_inner_csv_count += 1
-                return rows_written, zip_new, zip_append, missing_inner_csv_count, decode_skip_count
-            total_bytes = max(1, info.file_size)
-            with zf.open(info, mode="r") as raw:
+    with zipfile.ZipFile(zip_path) as zf:
+        try:
+            info = zf.getinfo(config.inner_csv)
+        except KeyError:
+            missing_inner_csv_count += 1
+            return rows_written, zip_new, zip_append, missing_inner_csv_count, decode_skip_count
+        total_bytes = max(1, info.file_size)
+        with zf.open(info, mode="r") as raw:
                 text_stream = io.TextIOWrapper(raw, encoding=config.encoding, newline="", errors="strict")
                 reader = csv.reader(text_stream, delimiter=config.delim)
                 while True:
@@ -196,15 +240,7 @@ def process_zip(
                     if seen_opids is not None:
                         seen_opids.add(opid)
                     if opid != current_opid:
-                        close_current(current_fp)
-                        current_fp, current_writer, existed = open_writer(
-                            opid,
-                            output_dir_path=output_dir_path,
-                            term_name=config.term_name,
-                            encoding=config.encoding,
-                            delim=config.delim,
-                            buffer_size=config.buffer_size,
-                        )
+                        current_fp, current_writer, existed = writer_cache.get(opid)
                         current_opid = opid
                         if existed:
                             zip_append += 1
@@ -217,7 +253,7 @@ def process_zip(
                     rows_in_zip += 1
 
                     now = time.monotonic()
-                    if now - last_emit >= 0.2:
+                    if now - last_emit >= config.progress_interval_sec:
                         zip_pct = min(100, int(raw.tell() * 100 / total_bytes))
                         print_progress(
                             "EXTRACT",
@@ -238,8 +274,6 @@ def process_zip(
                             progress_cb=progress_cb,
                         )
                         last_emit = now
-    finally:
-        close_current(current_fp)
     return rows_written, zip_new, zip_append, missing_inner_csv_count, decode_skip_count
 
 
@@ -416,6 +450,7 @@ def _final_sort_all(
     temp_root = output_dir / config.temp_sort_dir
     temp_root.mkdir(parents=True, exist_ok=True)
     done = 0
+    last_emit = 0.0
     try:
         for f in files:
             if cancel_flag is not None and cancel_flag.is_set():
@@ -430,13 +465,16 @@ def _final_sort_all(
                 cancel_flag=cancel_flag,
             )
             done += 1
-            print_progress(
-                "SORT",
-                done,
-                total,
-                extra={"current_file": f.name, "total_files": total, "done_files": done},
-                progress_cb=progress_cb,
-            )
+            now = time.monotonic()
+            if done == 1 or done == total or now - last_emit >= config.progress_interval_sec:
+                print_progress(
+                    "SORT",
+                    done,
+                    total,
+                    extra={"current_file": f.name, "total_files": total, "done_files": done},
+                    progress_cb=progress_cb,
+                )
+                last_emit = now
             if run_log is not None and total > 0:
                 step = max(1, total // 10)
                 if done == 1 or done == total or done % step == 0:
@@ -482,6 +520,14 @@ def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=N
     total_missing_inner = 0
     total_decode_skip = 0
     seen_opids: set[str] = set()
+    writer_cache = WriterCache(
+        output_dir=output_dir_path,
+        term_name=config.term_name,
+        encoding=config.encoding,
+        delim=config.delim,
+        buffer_size=config.buffer_size,
+        max_open=128,
+    )
 
     try:
         for zip_path in zip_paths:
@@ -491,6 +537,7 @@ def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=N
                 zip_path,
                 config,
                 output_dir_path=output_dir_path,
+                writer_cache=writer_cache,
                 cancel_flag=cancel_flag,
                 progress_cb=progress_cb,
                 zip_done=processed + 1,
@@ -575,6 +622,7 @@ def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=N
         log.error(f"run_split failed: {exc}")
         raise
     finally:
+        writer_cache.close_all()
         stamp = time.strftime("%Y%m%d_%H%M%S")
         out_path = output_dir_path / f"01_1stScr_log_{stamp}.txt"
         try:
@@ -602,6 +650,7 @@ def _build_config_from_args() -> SplitConfig:
     parser.add_argument("--timestamp_col", type=int, default=TIMESTAMP_COL)
     parser.add_argument("--chunk_rows", type=int, default=CHUNK_ROWS)
     parser.add_argument("--temp_sort_dir", default=TEMP_SORT_DIR)
+    parser.add_argument("--progress-interval", type=float, default=PROGRESS_INTERVAL_SEC)
     args = parser.parse_args()
 
     return SplitConfig(
@@ -616,6 +665,7 @@ def _build_config_from_args() -> SplitConfig:
         timestamp_col=args.timestamp_col,
         chunk_rows=args.chunk_rows,
         temp_sort_dir=args.temp_sort_dir,
+        progress_interval_sec=args.progress_interval,
     )
 
 
