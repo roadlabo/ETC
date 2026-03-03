@@ -36,12 +36,6 @@ from PyQt6.QtWidgets import (
 
 APP_TITLE = "21_第２スクリーニング（指定交差点を通過するトリップの抽出）"
 
-# --- STEP box fixed width tuning (independent) ---
-STEP1_W = 500   # プロジェクト
-STEP2_W = 500   # 第1スクリーニング
-STEP3_W = 360   # 半径
-STEP4_W = 220   # 実行ボタン
-
 UI_LOGO_FILENAME = "logo_21_UI_point_trip_extractor.png"
 
 # --- UI width tuning ---
@@ -57,6 +51,7 @@ RE_FILE_DONE = re.compile(r"進捗ファイル:\s*([0-9,]+)\s*/\s*([0-9,]+)")
 RE_FILE_PROCESSED = re.compile(r"進捗ファイル:\s*([0-9,]+)\s*files\s*processed")
 RE_HIT = re.compile(r"HIT:\s*(\S+)\s+(\d+)")
 RE_NEAR = re.compile(r"中心最近接距離\(m\):\s*(\S+)\s+([0-9.]+)")
+RE_HIST = re.compile(r"^HIST:\s*(\S+)\s+(\d+)\s+([0-9,]+)\s*$")
 RE_OPID = re.compile(r"運行ID総数:\s*(\d+)")
 
 
@@ -166,7 +161,7 @@ class StepBox(QFrame):
     def __init__(self, title: str, content: QWidget, parent=None):
         super().__init__(parent)
         self.setObjectName("stepBox")
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         t = QLabel(title)
         t.setObjectName("stepTitle")
         lay = QVBoxLayout(self)
@@ -241,6 +236,19 @@ class DistHistogram(QWidget):
             self.update()
         else:
             self._dirty = True
+
+    def add_bins(self, delta: list[int], radius: int | None = None) -> None:
+        if radius is not None and radius != self.radius:
+            self.set_radius(radius)
+        if not delta:
+            return
+        n = min(len(self.counts), len(delta))
+        for i in range(n):
+            self.counts[i] += int(delta[i])
+        now = time.time()
+        if now - self._last_paint_ts > 0.07:
+            self._last_paint_ts = now
+            self.update()
 
     def paintEvent(self, _event):
         p = QPainter(self)
@@ -549,18 +557,26 @@ class MainWindow(QMainWindow):
         self.step2_box = StepBox("STEP 2  第1スクリーニングデータの選択", in_w)
         b3 = StepBox("STEP 3  交差点通過判定半径（この半径以内を通過したらHIT）", rad_w)
         b4 = StepBox("STEP 4  実行", self.btn_run)
-        self.step1_box.setFixedWidth(STEP1_W)
-        self.step2_box.setFixedWidth(STEP2_W)
-        b3.setFixedWidth(STEP3_W)
-        b4.setFixedWidth(STEP4_W)
+
+        # 固定幅はやめて、画面幅に追従（ノートPCでも重ならない）
+        # 最低限の可読性確保（必要なら数値調整）
+        self.step1_box.setMinimumWidth(340)
+        self.step2_box.setMinimumWidth(340)
+        b3.setMinimumWidth(220)
+        b4.setMinimumWidth(180)
+
         flow_grid.addWidget(self.step1_box, 0, 0); flow_grid.addWidget(self.step2_box, 0, 1); flow_grid.addWidget(b3, 0, 2); flow_grid.addWidget(b4, 0, 3)
+
+        # 右側（アイコン）を確保
         self._flow_spacer = QWidget()
         self._flow_spacer.setFixedWidth(240)
         flow_grid.addWidget(self._flow_spacer, 0, 4)
-        flow_grid.setColumnStretch(0, 0)
-        flow_grid.setColumnStretch(1, 0)
-        flow_grid.setColumnStretch(2, 0)
-        flow_grid.setColumnStretch(3, 0)
+
+        # 2:2:1:1 で自動伸縮（右端は固定）
+        flow_grid.setColumnStretch(0, 2)
+        flow_grid.setColumnStretch(1, 2)
+        flow_grid.setColumnStretch(2, 1)
+        flow_grid.setColumnStretch(3, 1)
         flow_grid.setColumnStretch(4, 0)
         self.flow.set_steps([self.step1_box, self.step2_box, b3, b4])
         flow_stack = QFrame()
@@ -1032,6 +1048,15 @@ class MainWindow(QMainWindow):
                 while self._next_pct_log <= 100 and pct >= self._next_pct_log:
                     self.log_info(f"{self._next_pct_log}%完了")
                     self._next_pct_log += 10
+            return
+
+        m_hist = RE_HIST.search(text)
+        if m_hist:
+            name = m_hist.group(1)
+            radius = int(m_hist.group(2))
+            bins = [int(x) for x in m_hist.group(3).split(",") if x.strip() != ""]
+            if name in self.cards:
+                self.cards[name].hist.add_bins(bins, radius)
             return
 
         m_hit = RE_HIT.search(text)

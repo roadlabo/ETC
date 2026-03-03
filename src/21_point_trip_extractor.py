@@ -53,6 +53,11 @@ TRIP_NO_INDEX = 8       # I列: トリップ番号 (数値)
 
 EARTH_RADIUS_M = 6_371_000.0
 
+# --- UI向け 集計送信（重さ対策） ---
+HIST_BINS = 10
+HIST_EMIT_SEC = 5.0        # ヒスト更新は5秒に1回
+PROGRESS_EMIT_SEC = 0.8    # 進捗ログは0.8秒に1回（大量print抑制）
+
 
 @dataclass
 class CSVRow:
@@ -540,6 +545,9 @@ def process_file_for_all_crossroads(
     verbose: bool,
     hits_per_cross: Dict[str, int],
     saved_per_cross: Dict[str, int],
+    # 追加：ヒスト集計と送信制御
+    hist_delta: Dict[str, list[int]],
+    last_hist_emit: list[float],   # listで参照渡し（[monotonic]）
 ) -> Tuple[int, int]:
     """Process one CSV file against all crossroads.
 
@@ -581,10 +589,34 @@ def process_file_for_all_crossroads(
                 continue
 
             matched_count += 1
-            if min_dist != float("inf"):
-                print(f"中心最近接距離(m): {cp.name} {min_dist:.1f}", flush=True)
+
+            # HITカウント（UIにはまとめて送る）
             hits_per_cross[cp.name] = hits_per_cross.get(cp.name, 0) + 1
-            print(f"HIT: {cp.name} {hits_per_cross[cp.name]}", flush=True)
+
+            # ヒスト用：全件を正確にビン集計（UIへは5秒ごとにまとめ送信）
+            if min_dist != float("inf"):
+                r = float(thresh_m)
+                if 0.0 <= min_dist <= r:
+                    idx = int((min_dist / max(1e-6, r)) * HIST_BINS)
+                    if idx >= HIST_BINS:
+                        idx = HIST_BINS - 1
+                    if cp.name not in hist_delta:
+                        hist_delta[cp.name] = [0] * HIST_BINS
+                    hist_delta[cp.name][idx] += 1
+
+            # 5秒ごとにまとめてUIへ送信（HIST + HIT）
+            now_mono = time.monotonic()
+            if now_mono - last_hist_emit[0] >= HIST_EMIT_SEC:
+                for name, bins in list(hist_delta.items()):
+                    s = sum(bins)
+                    if s <= 0:
+                        continue
+                    # HIST: <name> <radius> <b0,b1,...>
+                    print(f"HIST: {name} {int(thresh_m)} " + ",".join(map(str, bins)), flush=True)
+                    # HIT: <name> <count>
+                    print(f"HIT: {name} {hits_per_cross.get(name, 0)}", flush=True)
+                    hist_delta[name] = [0] * HIST_BINS
+                last_hist_emit[0] = now_mono
 
             if dry_run:
                 saved_per_cross[cp.name] = saved_per_cross.get(cp.name, 0) + 1
@@ -748,6 +780,9 @@ def run_second_screening(
     total_matched = 0
 
     overall_start = time.time()
+    last_progress_emit = time.monotonic()
+    last_hist_emit = [time.monotonic()]
+    hist_delta: Dict[str, list[int]] = {}
 
     for trip_path in trip_files_iter:
         total_files += 1
@@ -761,10 +796,23 @@ def run_second_screening(
             VERBOSE,
             hits_per_cross,
             saved_per_cross,
+            hist_delta,
+            last_hist_emit,
         )
         total_candidate += cand
         total_matched += matched
-        print(f"進捗ファイル: {total_files} files processed", flush=True)
+        now_mono = time.monotonic()
+        if now_mono - last_progress_emit >= PROGRESS_EMIT_SEC:
+            print(f"進捗ファイル: {total_files} files processed", flush=True)
+            last_progress_emit = now_mono
+
+    # 最後に残った分をUIへ送る
+    for name, bins in list(hist_delta.items()):
+        s = sum(bins)
+        if s <= 0:
+            continue
+        print(f"HIST: {name} {int(radius_m)} " + ",".join(map(str, bins)), flush=True)
+        print(f"HIT: {name} {hits_per_cross.get(name, 0)}", flush=True)
 
     if total_files == 0:
         print(f"No trip CSV files found under {input_dir}")
