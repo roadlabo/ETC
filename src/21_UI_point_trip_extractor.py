@@ -419,6 +419,22 @@ class MainWindow(QMainWindow):
         self.started_at = 0.0
         self._eta_done = 0
         self._eta_total = 0
+        # ---- UI更新 間引き（31_32方式：ETA安定化） ----
+        self.ETA_INTERVAL_SEC = 10.0        # ETA（残り時間）は10秒に1回だけ再計算
+        self._eta_last_calc_t = 0.0
+        self._eta_last_text = "残り --:--:--"
+
+        # ETA表示用カウントダウン（計算は間引くが表示は毎秒減らす）
+        self._eta_countdown_sec = None      # float|None
+        self._eta_countdown_last_t = 0.0
+
+        # 速度推定（ハイブリッド：累積平均 + EMA）
+        self._eta_last_t = None
+        self._eta_last_done_obs = None
+        self._eta_rate_ema = None
+        self._eta_prev_remain = None
+        self._eta_start_t = None
+        self._eta_start_done = None
         self._telemetry_running = False
         self.anim_timer = QTimer(self)
         self.anim_timer.timeout.connect(self._tick_animation)
@@ -710,18 +726,112 @@ class MainWindow(QMainWindow):
         sec = max(0, int(sec)); h = sec // 3600; m = (sec % 3600) // 60; s = sec % 60
         return f"{h:02d}:{m:02d}:{s:02d}"
 
+    def _reset_eta_estimator(self) -> None:
+        self._eta_last_t = None
+        self._eta_last_done_obs = None
+        self._eta_rate_ema = None
+        self._eta_prev_remain = None
+        self._eta_last_calc_t = 0.0
+        self._eta_last_text = "残り --:--:--"
+        self._eta_countdown_sec = None
+        self._eta_countdown_last_t = 0.0
+        self._eta_start_t = None
+        self._eta_start_done = None
+
     def _update_time_boxes(self) -> None:
         if self.started_at <= 0:
             self.time_elapsed_big.setText("経過 00:00:00")
-            self.time_eta_big.setText("残り --:--:--")
+            self._eta_last_text = "残り --:--:--"
+            self.time_eta_big.setText(self._eta_last_text)
             return
-        elapsed = time.time() - self.started_at
+
+        now = time.time()
+        elapsed = now - self.started_at
         self.time_elapsed_big.setText(f"経過 {self._fmt_hms(elapsed)}")
-        if self._eta_total > 0 and self._eta_done > 0 and self._eta_done <= self._eta_total:
-            remain = elapsed / max(1, self._eta_done) * (self._eta_total - self._eta_done)
-            self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
+
+        # ★表示用：毎秒「残り」を減らす（再計算は10秒に1回でも、秒は減って見える）
+        if self._eta_countdown_sec is not None:
+            if self._eta_countdown_last_t <= 0.0:
+                self._eta_countdown_last_t = now
+            dt_show = now - self._eta_countdown_last_t
+            if dt_show >= 1.0:
+                self._eta_countdown_sec = max(0.0, self._eta_countdown_sec - dt_show)
+                self._eta_countdown_last_t = now
+                self._eta_last_text = f"残り {self._fmt_hms(self._eta_countdown_sec)}"
+                self.time_eta_big.setText(self._eta_last_text)
+            else:
+                self.time_eta_big.setText(self._eta_last_text)
         else:
-            self.time_eta_big.setText("残り --:--:--")
+            # countdownが無いときは最後の文字列を出す（"--"など）
+            self.time_eta_big.setText(self._eta_last_text)
+
+        # ★ETAは10秒に1回だけ再計算（それ以外は前回表示を維持）
+        if now - self._eta_last_calc_t < self.ETA_INTERVAL_SEC:
+            return
+        self._eta_last_calc_t = now
+
+        done = int(self._eta_done or 0)
+        total = int(self._eta_total or 0)
+        if total <= 0 or done <= 0 or done > total:
+            self._eta_last_text = "残り --:--:--"
+            self.time_eta_big.setText(self._eta_last_text)
+            self._eta_countdown_sec = None
+            return
+
+        # 観測速度（files/sec）
+        if self._eta_last_t is None:
+            self._eta_last_t = now
+            self._eta_last_done_obs = done
+            self._eta_start_t = now
+            self._eta_start_done = done
+            self._eta_last_text = "残り --:--:--"
+            self.time_eta_big.setText(self._eta_last_text)
+            return
+
+        dt = max(1e-6, now - self._eta_last_t)
+        dd = max(0, done - (self._eta_last_done_obs or 0))
+        inst_rate = dd / dt
+
+        alpha = 0.20  # 平滑化（ブレを抑えつつ追従）
+        if inst_rate > 0:
+            if self._eta_rate_ema is None:
+                self._eta_rate_ema = inst_rate
+            else:
+                self._eta_rate_ema = (1 - alpha) * self._eta_rate_ema + alpha * inst_rate
+
+        self._eta_last_t = now
+        self._eta_last_done_obs = done
+
+        # ---- 安定化：累積平均（startから）を土台にする ----
+        if self._eta_start_t is None or self._eta_start_done is None:
+            self._eta_start_t = now
+            self._eta_start_done = done
+
+        cum_dt = max(1e-6, now - self._eta_start_t)
+        cum_dd = max(0, done - int(self._eta_start_done))
+        cum_rate = (cum_dd / cum_dt) if cum_dd > 0 else 0.0  # files/sec
+
+        ema_rate = self._eta_rate_ema or 0.0
+        if cum_rate <= 0 and ema_rate <= 0:
+            self._eta_last_text = "残り --:--:--"
+            self.time_eta_big.setText(self._eta_last_text)
+            self._eta_countdown_sec = None
+            return
+
+        # 累積重視で少しだけEMAを混ぜる（安定優先）
+        rate = 0.85 * cum_rate + 0.15 * ema_rate if (cum_rate > 0 and ema_rate > 0) else (cum_rate or ema_rate)
+
+        remain_sec = (total - done) / rate
+
+        # 急な“増加”だけ抑える（体感の安定化）
+        if self._eta_prev_remain is not None and elapsed > 10 and done >= 5:
+            remain_sec = min(remain_sec, self._eta_prev_remain * 1.15)
+
+        self._eta_prev_remain = remain_sec
+        self._eta_countdown_sec = float(remain_sec)
+        self._eta_countdown_last_t = now
+        self._eta_last_text = f"残り {self._fmt_hms(remain_sec)}"
+        self.time_eta_big.setText(self._eta_last_text)
 
     def _tick_animation(self) -> None:
         self.sweep.tick()
@@ -956,6 +1066,9 @@ class MainWindow(QMainWindow):
         self.total_files = sum(1 for _ in pattern_iter); self.done_files = 0
         self.errors = 0; self.tele["errors"].setText("エラー数: 0")
         self.started_at = time.time(); self._eta_done = 0; self._eta_total = self.total_files
+        self._reset_eta_estimator()
+        self._eta_last_text = "残り --:--:--"
+        self.time_eta_big.setText(self._eta_last_text)
         self.tele["status"].setText("状態: RUNNING")
         self.tele["opid"].setText("第1スクリーニング数（運行ID数）: -")
         self.progress_bar.setRange(0, 100); self.progress_bar.setValue(0)
@@ -1023,7 +1136,10 @@ class MainWindow(QMainWindow):
             return
         m_file = RE_FILE_DONE.search(text)
         if m_file:
-            self.done_files = int(m_file.group(1).replace(",", ""))
+            new_done = int(m_file.group(1).replace(",", ""))
+            if new_done < self.done_files:
+                self._reset_eta_estimator()
+            self.done_files = new_done
             self.total_files = int(m_file.group(2).replace(",", ""))
             self._eta_done = self.done_files
             self._eta_total = self.total_files
@@ -1038,7 +1154,10 @@ class MainWindow(QMainWindow):
 
         m_proc = RE_FILE_PROCESSED.search(text)
         if m_proc:
-            self.done_files = int(m_proc.group(1).replace(",", ""))
+            new_done = int(m_proc.group(1).replace(",", ""))
+            if new_done < self.done_files:
+                self._reset_eta_estimator()
+            self.done_files = new_done
             self._eta_done = self.done_files
             self._eta_total = self.total_files
             self._update_progress_label()
