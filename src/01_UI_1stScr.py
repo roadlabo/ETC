@@ -229,10 +229,6 @@ class MainWindow(QMainWindow):
         self._eta_mode = "IDLE"
         self._eta_done = 0
         self._eta_total = 0
-        self._eta_last_t = 0.0
-        self._eta_last_done = 0
-        self._eta_speed_ema = 0.0
-        self._last_eta_text = "残り --:--:--"
         self._zip_done_last = -1
         self._zip_pct_last: dict[str, int] = {}
         self._sort_bucket_last = -1
@@ -248,9 +244,6 @@ class MainWindow(QMainWindow):
         self.anim_timer = QTimer(self)
         self.anim_timer.timeout.connect(self._tick_animation)
         self.anim_timer.start(120)
-        self._eta_timer = QTimer(self)
-        self._eta_timer.timeout.connect(self._update_eta_only)
-        self._eta_timer.start(1000)
 
     def _build_ui(self) -> None:
         root = QWidget(); self.setCentralWidget(root)
@@ -566,42 +559,25 @@ class MainWindow(QMainWindow):
             f"STATUS: {status}",
         ]
 
-    def _update_eta_only(self) -> None:
+    def _update_time_boxes(self) -> None:
         if self.started_at <= 0:
             self.time_elapsed_big.setText("経過 00:00:00")
-            if self._last_eta_text != "残り --:--:--":
-                self._last_eta_text = "残り --:--:--"
-                self.time_eta_big.setText(self._last_eta_text)
+            self.time_eta_big.setText("残り --:--:--")
             return
 
         elapsed = time.time() - self.started_at
         self.time_elapsed_big.setText(f"経過 {self._fmt_hms(elapsed)}")
-        eta_text = "残り --:--:--"
 
-        if self._eta_mode in {"EXTRACT", "SORT"} and self._eta_total > 0:
-            now = time.time()
-            dt = now - self._eta_last_t if self._eta_last_t > 0 else 0.0
-            dd = self._eta_done - self._eta_last_done
-            if dt > 0 and dd > 0:
-                speed = dd / dt
-                alpha = 0.25
-                if self._eta_speed_ema <= 0:
-                    self._eta_speed_ema = speed
-                else:
-                    self._eta_speed_ema = self._eta_speed_ema * (1.0 - alpha) + speed * alpha
-            self._eta_last_t = now
-            self._eta_last_done = self._eta_done
-
-            if self._eta_done > 0 and self._eta_done <= self._eta_total and self._eta_speed_ema > 0:
-                remain = (self._eta_total - self._eta_done) / max(self._eta_speed_ema, 1e-9)
-                eta_text = f"残り {self._fmt_hms(remain)}"
-
-        if eta_text != self._last_eta_text:
-            self._last_eta_text = eta_text
-            self.time_eta_big.setText(eta_text)
+        if self._eta_total > 0 and self._eta_done > 0 and self._eta_done <= self._eta_total:
+            rate = elapsed / max(1, self._eta_done)
+            remain = rate * (self._eta_total - self._eta_done)
+            self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
+        else:
+            self.time_eta_big.setText("残り --:--:--")
 
     def _tick_animation(self) -> None:
         self.sweep.tick()
+        self._update_time_boxes()
 
     def _config(self) -> SplitConfig:
         return SplitConfig(
@@ -658,10 +634,6 @@ class MainWindow(QMainWindow):
         self._last_opid_total = 0
         self._last_rows_written = 0
         self._sort_started_at = 0.0
-        self._eta_last_t = 0.0
-        self._eta_last_done = 0
-        self._eta_speed_ema = 0.0
-        self._last_eta_text = "残り --:--:--"
         self.tele["zip"].setText("現在ZIP: -")
         self.tele["rows"].setText("累積行数（総CSVファイル合計）: 0")
         self.tele["opid"].setText("運行ID総数（出力CSVファイル数）: 0")
@@ -777,10 +749,6 @@ class MainWindow(QMainWindow):
             self._eta_mode = "IDLE"
             self._eta_done = 0
             self._eta_total = 0
-            self._eta_last_t = 0.0
-            self._eta_last_done = 0
-            self._eta_speed_ema = 0.0
-            self._last_eta_text = "残り 00:00:00"
             self.time_eta_big.setText("残り 00:00:00")
             for card in self.cards.values():
                 if "処理中" in card.state.text() or "待機" in card.state.text():
