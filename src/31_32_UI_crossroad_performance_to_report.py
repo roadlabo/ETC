@@ -57,10 +57,11 @@ class StepBox(QFrame):
     def __init__(self, title: str, content: QWidget, parent=None):
         super().__init__(parent)
         self.setObjectName("stepBox")
-        self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         t = QLabel(title)
         t.setObjectName("stepTitle")
+        t.setWordWrap(True)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 8, 10, 8)
@@ -666,11 +667,17 @@ class MainWindow(QMainWindow):
             "トリップを進入方向→退出方向別に分類し通過トリップ数を集計するとともに、スムーズ通過時間との差からトリップ毎の遅れ時間を算出し、方向別および総遅れ時間（交差点負荷指標）を算出します。その結果を1交差点につき1レポートとしてExcel形式で出力します。"
         )
         self.lbl_about.setWordWrap(True); self.lbl_about.setFont(top_font)
+        self.lbl_about.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         v.addWidget(self.lbl_about)
 
         self.flow = FlowGuide(); self.flow.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.flow_host = QWidget()
         flow_grid = QGridLayout(self.flow_host); flow_grid.setContentsMargins(0, 0, 0, 0); flow_grid.setHorizontalSpacing(18)
+        flow_grid.setColumnStretch(0, 2)
+        flow_grid.setColumnStretch(1, 2)
+        flow_grid.setColumnStretch(2, 1)
+        flow_grid.setColumnStretch(3, 1)
+        flow_grid.setColumnStretch(4, 0)
 
         self.btn_project = QPushButton("選択"); self.btn_project.setFont(top_font); self.btn_project.clicked.connect(self.select_project)
         self.btn_project.setMinimumHeight(36)
@@ -701,10 +708,10 @@ class MainWindow(QMainWindow):
         self.btn_run.setMinimumHeight(36)
         run_w = QWidget(); run_l = QHBoxLayout(run_w); run_l.setContentsMargins(0, 0, 0, 0); run_l.addWidget(self.btn_run)
 
-        box1 = StepBox("STEP 1  プロジェクトフォルダの選択", proj_w); box1.setMinimumWidth(360)
-        box2 = StepBox("STEP 2  分析対象とする曜日を選択", wd_w); box2.setFixedWidth(410)
-        box3 = StepBox("STEP 3  交差点通過判定半径（この半径以内を通過したらHIT）", rad_w); box3.setFixedWidth(410)
-        box4 = StepBox("STEP 4  実行", run_w); box4.setFixedWidth(280)
+        box1 = StepBox("STEP 1  プロジェクトフォルダの選択", proj_w)
+        box2 = StepBox("STEP 2  分析対象とする曜日を選択", wd_w)
+        box3 = StepBox("STEP 3  交差点通過判定半径（この半径以内を通過したらHIT）", rad_w)
+        box4 = StepBox("STEP 4  実行", run_w)
         flow_grid.addWidget(box1, 0, 0); flow_grid.addWidget(box2, 0, 1); flow_grid.addWidget(box3, 0, 2); flow_grid.addWidget(box4, 0, 3)
         self._flow_spacer = QWidget(); self._flow_spacer.setFixedWidth(260); flow_grid.addWidget(self._flow_spacer, 0, 4)
 
