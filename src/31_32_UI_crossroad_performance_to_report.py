@@ -415,6 +415,9 @@ class MainWindow(QMainWindow):
         self.log_info("第1判定：20-50mで角度算出　基準値との誤差30°")
         self.log_info("第2判定：20-70mで角度算出　基準値との誤差35°")
         self.log_info("第3判定：20-100mで角度算出　基準値との誤差40°")
+        self.log_info("第4判定：10-40mで角度算出　基準値との誤差30°")
+        self.log_info("第5判定：10-30mで角度算出　基準値との誤差30°")
+        self.log_info("第6判定：10-20mで角度算出　基準値との誤差30°")
         self.log_info("その他：枝不明")
         self.log_info("①プロジェクト選択 → ②曜日選択 → 31→32一括実行【分析スタート】")
 
@@ -483,10 +486,12 @@ class MainWindow(QMainWindow):
     def _init_logo_overlay(self) -> None:
         logo_path = self._resolve_logo_path()
         if not logo_path:
+            self._refresh_about_text()
             return
 
         pixmap = QPixmap(str(logo_path))
         if pixmap.isNull():
+            self._refresh_about_text()
             return
 
         pix_big = pixmap.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
@@ -531,6 +536,7 @@ class MainWindow(QMainWindow):
 
     def _show_corner_logo(self) -> None:
         if not self._pix_small:
+            self._refresh_about_text()
             return
 
         self.corner_logo = QLabel(self)
@@ -547,9 +553,23 @@ class MainWindow(QMainWindow):
         self._logo_phase = "corner"
 
         # ロゴ表示で右端条件が変わるので、ここでも再計算
+        self._refresh_about_text()
         QTimer.singleShot(0, self._force_layout_refresh)
         QTimer.singleShot(0, self._update_flow_spacer_for_logo)
         QTimer.singleShot(50, self._update_flow_spacer_for_logo)
+
+    def _refresh_about_text(self) -> None:
+        """右上ロゴのオーバーレイと説明文が重ならないように、説明文右側に余白を確保する。"""
+        if not hasattr(self, "lbl_about") or not self.lbl_about:
+            return
+
+        reserve = 0
+        corner = getattr(self, "corner_logo", None)
+        if corner and corner.isVisible():
+            reserve = corner.width() + getattr(self, "LOGO_CORNER_PAD", 8) + 14
+
+        self.lbl_about.setStyleSheet(f"padding-right: {reserve}px;")
+        self.lbl_about.updateGeometry()
 
     def _resolve_logo_path(self) -> Path | None:
         base = Path(__file__).resolve().parent
@@ -607,6 +627,7 @@ class MainWindow(QMainWindow):
             if not corner or not corner.isVisible():
                 # ロゴが無い時のデフォルト（必要最小限）
                 self._flow_spacer.setFixedWidth(60)
+                self._refresh_about_text()
                 return
 
             # ロゴ左上のグローバル座標 → flowローカル座標へ変換
