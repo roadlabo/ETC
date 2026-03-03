@@ -13,6 +13,7 @@ from PyQt6.QtCore import QMargins, QPoint, QRect, QSize, Qt, QThread, QTimer, QP
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
@@ -45,7 +46,7 @@ spec.loader.exec_module(split_mod)
 SplitConfig = split_mod.SplitConfig
 run_split = split_mod.run_split
 
-STAGES = ["SCAN", "EXTRACT", "SORT", "VERIFY"]
+STAGES = ["CALIB", "SCAN", "EXTRACT", "SORT", "VERIFY"]
 UI_LOGO_FILENAME = "logo_01_1stScr_UI.png"
 
 
@@ -237,6 +238,10 @@ class MainWindow(QMainWindow):
         self._last_zips_done = 0
         self._last_opid_total = 0
         self._last_rows_written = 0
+        self._zip_sizes: list[int] = []
+        self._zip_bytes_total = 0
+        self._zip_bytes_done = 0
+        self._calib_info: dict = {}
         self._build_ui()
         self._set_style()
         QTimer.singleShot(0, self._init_logo_overlay)
@@ -283,6 +288,10 @@ class MainWindow(QMainWindow):
         self._add_form_row(form_grid, row, "2次メッシュコード", self.zip_keys, "2次メッシュ番号を記入　複数ある場合はカンマ（,）で区切って下さい　詳細は2次メッシュマップ参照")
         row += 1
         self._add_form_row(form_grid, row, "CHUNK_ROWS", self.chunk_rows, "並べ替え時に一度に読む行数　メモリ不足時は下げる")
+        self.cb_calib = QCheckBox("10秒キャリブレーション（推奨）")
+        self.cb_calib.setChecked(True)
+        row += 1
+        self._add_form_row(form_grid, row, "CALIB", self.cb_calib, "開始直後に速度計測を行い、残り時間推定を安定させます（約10秒）")
 
         form_grid.setColumnStretch(0, 0)
         form_grid.setColumnStretch(1, 3)
@@ -491,7 +500,7 @@ class MainWindow(QMainWindow):
             target.setText(d)
 
     def _set_stage(self, stage: str) -> None:
-        glow = {"SCAN": 0, "EXTRACT": 2, "SORT": 3, "VERIFY": 4}
+        glow = {"CALIB": 0, "SCAN": 0, "EXTRACT": 2, "SORT": 3, "VERIFY": 4}
         active = glow.get(stage, -1)
         for i, lb in enumerate(self.map_lines):
             lb.setStyleSheet("color:#a2f0be;font-weight:700;" if i <= active else "color:#2b6040;")
@@ -560,9 +569,14 @@ class MainWindow(QMainWindow):
         self.time_elapsed_big.setText(f"経過 {self._fmt_hms(elapsed)}")
 
         if self._eta_total > 0 and self._eta_done > 0 and self._eta_done <= self._eta_total:
-            rate = elapsed / max(1, self._eta_done)
-            remain = rate * (self._eta_total - self._eta_done)
-            self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
+            if self._eta_mode == "EXTRACT" and self._zip_bytes_total > 0 and self._zip_bytes_done > 0:
+                rate = elapsed / max(1, self._zip_bytes_done)
+                remain = rate * (self._zip_bytes_total - self._zip_bytes_done)
+                self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
+            else:
+                rate = elapsed / max(1, self._eta_done)
+                remain = rate * (self._eta_total - self._eta_done)
+                self.time_eta_big.setText(f"残り {self._fmt_hms(remain)}")
         else:
             self.time_eta_big.setText("残り --:--:--")
 
@@ -571,12 +585,14 @@ class MainWindow(QMainWindow):
         self._update_time_boxes()
 
     def _config(self) -> SplitConfig:
+        calib_sec = 10.0 if getattr(self, "cb_calib", None) and self.cb_calib.isChecked() else 0.0
         return SplitConfig(
             input_dir=self.input_dir.text().strip(), output_dir=self.output_dir.text().strip(),
             term_name=self.term_name.text().strip(), inner_csv="data.csv",
             zip_digit_keys=[x.strip() for x in self.zip_keys.text().split(",") if x.strip()],
             encoding="utf-8", delim=",",
             do_final_sort=True, timestamp_col=6, chunk_rows=self.chunk_rows.value(),
+            calibrate_seconds=calib_sec, calibrate_sort_seconds=calib_sec,
         )
 
     def resizeEvent(self, event) -> None:
@@ -623,6 +639,10 @@ class MainWindow(QMainWindow):
         self._last_zips_done = 0
         self._last_opid_total = 0
         self._last_rows_written = 0
+        self._zip_sizes = []
+        self._zip_bytes_total = 0
+        self._zip_bytes_done = 0
+        self._calib_info = {}
         self.tele["zip"].setText("現在ZIP: -")
         self.tele["rows"].setText("累積行数（総CSVファイル合計）: 0")
         self.tele["opid"].setText("運行ID総数（出力CSVファイル数）: 0")
@@ -655,9 +675,30 @@ class MainWindow(QMainWindow):
 
     def on_progress(self, stage: str, done: int, total: int, extra: dict) -> None:
         self._set_stage(stage)
+        if stage == "CALIB":
+            if extra.get("msg"):
+                self._append_log(f"キャリブレーション開始: {extra.get('msg')}")
+            else:
+                self._calib_info = dict(extra or {})
+                eb = float(self._calib_info.get("extract_bps", 0.0))
+                sb = float(self._calib_info.get("sort_bps", 0.0))
+                self._append_log(f"キャリブレーション完了: extract={eb/1024/1024:.1f}MB/s sort={sb/1024/1024:.1f}MB/s")
+            return
+
         if stage == "SCAN":
             zips = extra.get("zip_list", [])
             self._reset_zip_cards(zips)
+            self._zip_sizes = []
+            self._zip_bytes_total = 0
+            base = Path(self.input_dir.text().strip())
+            for name in zips:
+                try:
+                    sz = (base / name).stat().st_size
+                except Exception:
+                    sz = 0
+                self._zip_sizes.append(int(sz))
+                self._zip_bytes_total += int(sz)
+            self._zip_bytes_done = 0
             if not self._scan_logged:
                 self._scan_logged = True
                 self._append_log(f"ZIP走査完了（{len(zips)}件）")
@@ -692,6 +733,11 @@ class MainWindow(QMainWindow):
             self._eta_mode = "EXTRACT"
             self._eta_done = zdone
             self._eta_total = ztot
+            if self._zip_sizes and zdone > 0:
+                safe_done = max(0, min(zdone, len(self._zip_sizes)))
+                self._zip_bytes_done = sum(self._zip_sizes[:safe_done])
+            else:
+                self._zip_bytes_done = 0
 
         if stage == "SORT":
             total_files = max(1, int(extra.get("total_files", total)))
