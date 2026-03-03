@@ -400,11 +400,16 @@ class MainWindow(QMainWindow):
         self._global_done_files = 0
         self._elapsed_frozen_text = "経過 00:00:00"
         # ---- UI更新 間引き（安定化） ----
-        self.TELEMETRY_INTERVAL_SEC = 1.0   # telemetry（done/total等）は1秒に1回
+        self.TELEMETRY_INTERVAL_SEC = 10.0  # telemetry（done/total等）は10秒に1回
         self.ETA_INTERVAL_SEC = 10.0        # ETA（残り時間）は10秒に1回だけ再計算
         self._telemetry_last_update_t = 0.0
         self._eta_last_calc_t = 0.0
         self._eta_last_text = "残り --:--:--"
+        # ETA表示用カウントダウン（計算は間引くが表示は毎秒減らす）
+        self._eta_countdown_sec = None      # float|None
+        self._eta_countdown_last_t = 0.0
+        self._eta_start_t = None
+        self._eta_start_done = None
 
         self._waiting_lock_dialog: QDialog | None = None
         self._waiting_lock_timer: QTimer | None = None
@@ -813,9 +818,21 @@ class MainWindow(QMainWindow):
         elapsed = now - self.started_at
         self.time_elapsed_big.setText(f"経過 {format_hhmmss(elapsed)}")
 
+        # ★表示用：毎秒「残り」を減らす（再計算は10秒に1回でも、秒は減って見える）
+        if self._eta_countdown_sec is not None:
+            if self._eta_countdown_last_t <= 0.0:
+                self._eta_countdown_last_t = now
+            dt_show = now - self._eta_countdown_last_t
+            if dt_show >= 1.0:
+                self._eta_countdown_sec = max(0.0, self._eta_countdown_sec - dt_show)
+                self._eta_countdown_last_t = now
+                self._eta_last_text = f"残り {format_hhmmss(self._eta_countdown_sec)}"
+                self.time_eta_big.setText(self._eta_last_text)
+            else:
+                self.time_eta_big.setText(self._eta_last_text)
+
         # ★ETAは10秒に1回だけ再計算（それ以外は前回表示を維持）
         if now - self._eta_last_calc_t < self.ETA_INTERVAL_SEC:
-            self.time_eta_big.setText(self._eta_last_text)
             return
         self._eta_last_calc_t = now
 
@@ -830,6 +847,8 @@ class MainWindow(QMainWindow):
         if self._eta_last_t is None:
             self._eta_last_t = now
             self._eta_last_done_obs = done
+            self._eta_start_t = now
+            self._eta_start_done = done
             self._eta_last_text = "残り --:--:--"
             self.time_eta_big.setText(self._eta_last_text)
             return
@@ -848,11 +867,24 @@ class MainWindow(QMainWindow):
         self._eta_last_t = now
         self._eta_last_done_obs = done
 
-        rate = self._eta_rate_ema
-        if not rate or rate <= 0:
+        # ---- 安定化：累積平均（startから）を土台にする ----
+        if self._eta_start_t is None or self._eta_start_done is None:
+            self._eta_start_t = now
+            self._eta_start_done = done
+
+        cum_dt = max(1e-6, now - self._eta_start_t)
+        cum_dd = max(0, done - int(self._eta_start_done))
+        cum_rate = (cum_dd / cum_dt) if cum_dd > 0 else 0.0  # files/sec
+
+        ema_rate = self._eta_rate_ema or 0.0
+        if cum_rate <= 0 and ema_rate <= 0:
             self._eta_last_text = "残り --:--:--"
             self.time_eta_big.setText(self._eta_last_text)
+            self._eta_countdown_sec = None
             return
+
+        # 累積重視で少しだけEMAを混ぜる（安定優先）
+        rate = 0.85 * cum_rate + 0.15 * ema_rate if (cum_rate > 0 and ema_rate > 0) else (cum_rate or ema_rate)
 
         remain_sec = (total - done) / rate
 
@@ -861,6 +893,8 @@ class MainWindow(QMainWindow):
             remain_sec = min(remain_sec, self._eta_prev_remain * 1.15)
 
         self._eta_prev_remain = remain_sec
+        self._eta_countdown_sec = float(remain_sec)
+        self._eta_countdown_last_t = now
         self._eta_last_text = f"残り {format_hhmmss(remain_sec)}"
         self.time_eta_big.setText(self._eta_last_text)
 
@@ -880,6 +914,10 @@ class MainWindow(QMainWindow):
         self._eta_prev_remain = None
         self._eta_last_calc_t = 0.0
         self._eta_last_text = "残り --:--:--"
+        self._eta_countdown_sec = None
+        self._eta_countdown_last_t = 0.0
+        self._eta_start_t = None
+        self._eta_start_done = None
 
     def _refresh_telemetry(self, force: bool = False) -> None:
         now = time.time()
@@ -966,8 +1004,9 @@ class MainWindow(QMainWindow):
             return
         if "完了:" in text and "ファイル=" in text:
             self._apply_done_summary(text)
-        if from_cr or "進捗:" in text:
-            self.lbl_progress.setText(text)
+        # 右側の進捗(lbl_progress)は UI集計値のみ表示する。
+        # プロセスの進捗/統計行はカード更新にだけ使い、lbl_progressは上書きしない。
+        if from_cr or "進捗:" in text or "曜日後:" in text:
             self._update_card_progress(text)
             return
         self._recent_process_lines.append(text)
