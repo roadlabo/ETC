@@ -185,18 +185,39 @@ class SplitWorker(QThread):
     progress = pyqtSignal(str, int, int, dict)
     finished_ok = pyqtSignal(str)
     failed = pyqtSignal(str)
+    need_retry = pyqtSignal(str, str, int)
 
     def __init__(self, config: SplitConfig) -> None:
         super().__init__()
         self.config = config
         self.cancel_event = threading.Event()
+        self._retry_event = threading.Event()
+        self._retry_decision: bool | None = None
 
     def cancel(self) -> None:
         self.cancel_event.set()
+        self._retry_decision = False
+        self._retry_event.set()
+
+    def set_retry_decision(self, do_retry: bool) -> None:
+        self._retry_decision = do_retry
+        self._retry_event.set()
+
+    def _retry_cb(self, tmp_path: str, dst_path: str, attempt: int) -> bool:
+        self._retry_decision = None
+        self._retry_event.clear()
+        self.need_retry.emit(tmp_path, dst_path, attempt)
+        self._retry_event.wait()
+        return bool(self._retry_decision)
 
     def run(self) -> None:
         try:
-            run_split(self.config, progress_cb=self._on_progress, cancel_flag=self.cancel_event)
+            run_split(
+                self.config,
+                progress_cb=self._on_progress,
+                cancel_flag=self.cancel_event,
+                retry_cb=self._retry_cb,
+            )
             self.finished_ok.emit("CANCELLED" if self.cancel_event.is_set() else "COMPLETE")
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -652,6 +673,7 @@ class MainWindow(QMainWindow):
         self.worker.progress.connect(self.on_progress)
         self.worker.finished_ok.connect(self.on_finished)
         self.worker.failed.connect(self.on_failed)
+        self.worker.need_retry.connect(self.on_need_retry)
         self.worker.start()
 
     def cancel_run(self) -> None:
@@ -773,6 +795,12 @@ class MainWindow(QMainWindow):
     def on_finished(self, status: str) -> None:
         self._set_stage("VERIFY")
         self.tele["status"].setText(f"状態: {status}")
+
+        self._eta_mode = "IDLE"
+        self._eta_done = 0
+        self._eta_total = 0
+        self.time_eta_big.setText("残り 00:00:00")
+
         if hasattr(self, "anim_timer") and self.anim_timer.isActive():
             self.anim_timer.stop()
 
@@ -780,7 +808,35 @@ class MainWindow(QMainWindow):
         self.errors += 1
         self.tele["errors"].setText(f"エラー数: {self.errors}")
         self._set_stage("ERROR")
+        self.tele["status"].setText("状態: ERROR")
         self._append_log(f"エラー発生: {message}")
+
+        self._eta_mode = "IDLE"
+        self._eta_done = 0
+        self._eta_total = 0
+        self.time_eta_big.setText("残り --:--:--")
+
+        if hasattr(self, "anim_timer") and self.anim_timer.isActive():
+            self.anim_timer.stop()
+
+    def on_need_retry(self, tmp_path: str, dst_path: str, attempt: int) -> None:
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("ファイルが使用中です")
+        msg.setText(
+            "出力先CSVにアクセスできません（ファイルが開かれている可能性があります）。\n"
+            "該当のCSVファイルを閉じてから「再試行」を押してください。"
+        )
+        msg.setInformativeText(f"再試行回数: {attempt}\n\n{dst_path}")
+        retry_btn = msg.addButton("再試行", QMessageBox.ButtonRole.AcceptRole)
+        cancel_btn = msg.addButton("中止", QMessageBox.ButtonRole.RejectRole)
+        msg.setDefaultButton(retry_btn)
+        msg.exec()
+
+        do_retry = msg.clickedButton() == retry_btn
+        _ = cancel_btn
+        if self.worker is not None:
+            self.worker.set_retry_decision(do_retry)
 
 
 def main() -> None:
