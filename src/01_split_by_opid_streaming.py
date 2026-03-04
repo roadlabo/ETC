@@ -51,6 +51,35 @@ class SplitConfig:
 
 
 ProgressCB = Optional[Callable[[str, int, int, dict], None]]
+RetryCB = Optional[Callable[[str, str, int], bool]]
+
+
+def _safe_replace(tmp: Path, dst: Path, *, cancel_flag=None, retry_cb: RetryCB = None) -> None:
+    """
+    tmp を dst に原子的に置換する。
+    WindowsでExcel/AV等により dst がロックされると PermissionError / WinError 5 が出るので、
+    retry_cb があれば UI へ問い合わせて再試行できるようにする。
+    retry_cb(tmp_str, dst_str, attempt) -> True: retry / False: abort
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        if cancel_flag is not None and cancel_flag.is_set():
+            raise RuntimeError("CANCELLED")
+        try:
+            os.replace(tmp, dst)
+            return
+        except PermissionError:
+            if retry_cb is not None:
+                if retry_cb(str(tmp), str(dst), attempt):
+                    continue
+            raise
+        except OSError as e:
+            if getattr(e, "winerror", None) == 5:
+                if retry_cb is not None:
+                    if retry_cb(str(tmp), str(dst), attempt):
+                        continue
+            raise
 
 
 def print_progress(
@@ -374,6 +403,7 @@ def _merge_chunks(
     delim: str,
     ts_col: int,
     cancel_flag=None,
+    retry_cb: RetryCB = None,
 ) -> None:
     tmp = dst.with_suffix(".sorted.tmp")
     readers, files = [], []
@@ -410,7 +440,7 @@ def _merge_chunks(
                 heapq.heappush(heap, (k2, counter, idx, row))
                 counter += 1
 
-        os.replace(tmp, dst)
+        _safe_replace(tmp, dst, cancel_flag=cancel_flag, retry_cb=retry_cb)
     finally:
         for f in files:
             try:
@@ -432,6 +462,7 @@ def _final_sort_one(
     chunk_rows: int,
     temp_root: Path,
     cancel_flag=None,
+    retry_cb: RetryCB = None,
 ) -> None:
     temp_dir = temp_root / path.stem
     try:
@@ -442,7 +473,7 @@ def _final_sort_one(
             tmp = path.with_suffix(".sorted.tmp")
             with tmp.open("w", encoding=encoding, newline=""):
                 pass
-            os.replace(tmp, path)
+            _safe_replace(tmp, path, cancel_flag=cancel_flag, retry_cb=retry_cb)
         elif len(chunks) == 1:
             tmp = path.with_suffix(".sorted.tmp")
             with tmp.open("w", encoding=encoding, newline="") as w:
@@ -453,9 +484,9 @@ def _final_sort_one(
                         if cancel_flag is not None and cancel_flag.is_set():
                             return
                         wr.writerow(row)
-            os.replace(tmp, path)
+            _safe_replace(tmp, path, cancel_flag=cancel_flag, retry_cb=retry_cb)
         else:
-            _merge_chunks(chunks, path, encoding, delim, ts_col, cancel_flag=cancel_flag)
+            _merge_chunks(chunks, path, encoding, delim, ts_col, cancel_flag=cancel_flag, retry_cb=retry_cb)
     finally:
         if temp_dir.exists():
             for p in sorted(temp_dir.glob("*.csv")):
@@ -474,6 +505,7 @@ def _final_sort_all(
     output_dir: Path,
     progress_cb: ProgressCB = None,
     cancel_flag=None,
+    retry_cb: RetryCB = None,
     run_log: RunLog | None = None,
 ) -> None:
     pattern = f"{config.term_name}_*.csv"
@@ -495,6 +527,7 @@ def _final_sort_all(
                 config.chunk_rows,
                 temp_root,
                 cancel_flag=cancel_flag,
+                retry_cb=retry_cb,
             )
             done += 1
             now = time.monotonic()
@@ -519,7 +552,7 @@ def _final_sort_all(
             pass
 
 
-def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=None) -> None:
+def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=None, retry_cb: RetryCB = None) -> None:
     started = time.time()
     log = RunLog()
     log.info("=== 01 1st screening start ===")
@@ -611,7 +644,14 @@ def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=N
 
         if config.do_final_sort and (cancel_flag is None or not cancel_flag.is_set()):
             log.info("SORT start")
-            _final_sort_all(config, output_dir_path, progress_cb=progress_cb, cancel_flag=cancel_flag, run_log=log)
+            _final_sort_all(
+                config,
+                output_dir_path,
+                progress_cb=progress_cb,
+                cancel_flag=cancel_flag,
+                retry_cb=retry_cb,
+                run_log=log,
+            )
 
         status = "CANCELLED" if cancel_flag is not None and cancel_flag.is_set() else "DONE"
         out_count = len(list(output_dir_path.glob(f"{config.term_name}_*.csv")))
