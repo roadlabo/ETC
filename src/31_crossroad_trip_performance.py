@@ -826,7 +826,7 @@ def main() -> None:
 
                             # 最近接線分（中心への最短距離となる線分）を求める
                             seg_i_i, seg_t_f, seg_d_f = closest_segment_to_center_in_range(
-                                points, cross.center_lat, cross.center_lon, ev_s, ev_e, pad=6
+                                points, cross.center_lat, cross.center_lon, ev_s, ev_e, pad=0
                             )
                             seg_i = seg_i_i
 
@@ -853,13 +853,13 @@ def main() -> None:
                                 center_lon_calc_s = f"{lon_c:.8f}"
                                 center_lat_calc_s = f"{lat_c:.8f}"
 
-                            # --- 枝判定用の中心位置（道なり距離）を「最近接線分上の最近接点」にする ---
+                            # --- 枝判定用の中心位置（道なり距離）は idx_center を優先してイベント独立性を担保 ---
                             center_pos_val_dir = None
-                            if seg_i is not None:
+                            if idx_center is not None and idx_center < len(cumdist):
+                                center_pos_val_dir = cumdist[idx_center]
+                            elif seg_i is not None:
                                 seg_len_dir = cumdist[seg_i + 1] - cumdist[seg_i]
                                 center_pos_val_dir = cumdist[seg_i] + seg_t_f * seg_len_dir
-                            elif idx_center is not None and idx_center < len(cumdist):
-                                center_pos_val_dir = cumdist[idx_center]
 
                             # 流入/流出枝番：基本は最近接線分の前後点。取れない場合は中心最近接点±1で代替。
                             if seg_i is not None:
