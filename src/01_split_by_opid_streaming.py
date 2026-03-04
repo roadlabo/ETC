@@ -643,6 +643,10 @@ def run_split(config: SplitConfig, progress_cb: ProgressCB = None, cancel_flag=N
             end_progress_line(progress_cb=progress_cb)
 
         if config.do_final_sort and (cancel_flag is None or not cancel_flag.is_set()):
+            # EXTRACTで開いた出力CSVを閉じる（自己ロック防止）
+            writer_cache.close_all()
+            time.sleep(0.2)  # Windowsでのハンドル解放待ち（保険）
+
             log.info("SORT start")
             _final_sort_all(
                 config,
