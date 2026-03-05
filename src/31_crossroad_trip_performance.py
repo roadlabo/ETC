@@ -912,7 +912,12 @@ def main() -> None:
                             # ============================================================
                             # 枝判定角度：6段階判定（20-50m / 20-70m / 20-100m / 10-40m / 10-30m / 10-20m）
                             # ============================================================
-                            def _infer_branch_3step(center_pos_val: float, is_in: bool, ev_s: int, ev_e: int):
+                            def _infer_branch_3step(
+                                center_pos_val: float,
+                                is_in: bool,
+                                ev_s: int | None = None,
+                                ev_e: int | None = None,
+                            ):
                                 """
                                 Returns:
                                   angle_deg: Optional[float]
@@ -923,6 +928,19 @@ def main() -> None:
                                 if center_pos_val is None:
                                     return None, "", float("inf"), ("IN:NO_CENTER" if is_in else "OUT:NO_CENTER")
 
+                                use_event_bounds = (ev_s is not None) and (ev_e is not None)
+
+                                def interp_wrap(target_m: float):
+                                    if use_event_bounds:
+                                        return interpolate_point_at_distance_in_event(
+                                            points,
+                                            cumdist,
+                                            target_m,
+                                            ev_s,
+                                            ev_e,
+                                        )
+                                    return interpolate_point_at_distance(points, cumdist, target_m)
+
                                 any_in_range = False  # 1回でも必要点が取れたステップがあるか
 
                                 for step in BRANCH_JUDGE_STEPS:
@@ -931,20 +949,8 @@ def main() -> None:
                                     th = step["th"]
 
                                     if is_in:
-                                        p_far = interpolate_point_at_distance_in_event(
-                                            points,
-                                            cumdist,
-                                            center_pos_val - far,
-                                            ev_s,
-                                            ev_e,
-                                        )
-                                        p_near = interpolate_point_at_distance_in_event(
-                                            points,
-                                            cumdist,
-                                            center_pos_val - near,
-                                            ev_s,
-                                            ev_e,
-                                        )
+                                        p_far = interp_wrap(center_pos_val - far)
+                                        p_near = interp_wrap(center_pos_val - near)
                                         if (p_far is None) or (p_near is None):
                                             continue
 
@@ -955,20 +961,8 @@ def main() -> None:
                                         if diff <= th:
                                             return angle_try, br, diff, f"IN:{int(near)}-{int(far)}m"
                                     else:
-                                        p_near = interpolate_point_at_distance_in_event(
-                                            points,
-                                            cumdist,
-                                            center_pos_val + near,
-                                            ev_s,
-                                            ev_e,
-                                        )
-                                        p_far = interpolate_point_at_distance_in_event(
-                                            points,
-                                            cumdist,
-                                            center_pos_val + far,
-                                            ev_s,
-                                            ev_e,
-                                        )
+                                        p_near = interp_wrap(center_pos_val + near)
+                                        p_far = interp_wrap(center_pos_val + far)
                                         if (p_near is None) or (p_far is None):
                                             continue
 
@@ -984,18 +978,29 @@ def main() -> None:
                                 return None, "", float("inf"), ("IN:UNKNOWN" if is_in else "OUT:UNKNOWN")
 
                             center_pos_val = center_pos_val_dir
-                            in_angle, in_branch, in_diff, in_method = _infer_branch_3step(
-                                center_pos_val,
-                                is_in=True,
-                                ev_s=ev_s,
-                                ev_e=ev_e,
-                            )
-                            out_angle, out_branch, out_diff, out_method = _infer_branch_3step(
-                                center_pos_val,
-                                is_in=False,
-                                ev_s=ev_s,
-                                ev_e=ev_e,
-                            )
+                            use_event_bounds_for_branch = (len(events) >= 2)
+                            if use_event_bounds_for_branch:
+                                in_angle, in_branch, in_diff, in_method = _infer_branch_3step(
+                                    center_pos_val,
+                                    True,
+                                    ev_s=ev_s,
+                                    ev_e=ev_e,
+                                )
+                                out_angle, out_branch, out_diff, out_method = _infer_branch_3step(
+                                    center_pos_val,
+                                    False,
+                                    ev_s=ev_s,
+                                    ev_e=ev_e,
+                                )
+                            else:
+                                in_angle, in_branch, in_diff, in_method = _infer_branch_3step(
+                                    center_pos_val,
+                                    True,
+                                )
+                                out_angle, out_branch, out_diff, out_method = _infer_branch_3step(
+                                    center_pos_val,
+                                    False,
+                                )
                             angle_method_str = f"{in_method}/{out_method}"
 
                             # 最近接線分の診断情報（可能な範囲で記録）
