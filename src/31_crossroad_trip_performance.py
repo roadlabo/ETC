@@ -73,6 +73,15 @@ MEASURE_POST_M = 20.0
 # ============================================================
 CROSSROAD_HIT_DIST_M = 20.0
 CROSSROAD_SEG_HIT_DIST_M = 20.0
+
+# ============================================================
+# イベント分割（距離ベース）
+# 200m離脱しないうちは再接近として扱わない
+# 200m離脱後、再び設定半径内に入った瞬間にイベント分割
+# ============================================================
+EVENT_SPLIT_OUT_DIST_M = 200.0   # これを超えたら「離脱した」とみなしてarmedになる
+EVENT_SPLIT_IN_DIST_M  = None    # Noneの場合は CROSSROAD_HIT_DIST_M を使用（=設定半径）
+
 CROSSROAD_MIN_HITS = 1
 EARTH_RADIUS_M = 6_371_000.0
 
@@ -304,7 +313,13 @@ def trip_passes_crossroad(points, center_lat, center_lon):
 
 def find_crossing_events(points, center_lat, center_lon):
     """
-    交差点付近にヒットした index 群を拾い、連続（近接）区間ごとにイベントとして返す。
+    距離ベースのイベント分割（むやみに分割しない版）
+
+    仕様：
+    - 設定半径(R_IN)に入ったらイベント開始
+    - 200m(R_OUT)以上に一度でも離脱したら armed（次の再侵入で分割可能）状態
+    - armed状態のまま、再びR_INに入った瞬間にイベント分割（新イベント開始）
+    - 200m離脱しないうちは、再接近しても同一イベントとして扱う
     return: List[tuple[start_idx, end_idx]]  (end_idxは含む)
     """
     import math
@@ -314,41 +329,55 @@ def find_crossing_events(points, center_lat, center_lon):
     if not valid:
         return []
 
-    hit_idx = []
+    R_IN = EVENT_SPLIT_IN_DIST_M if EVENT_SPLIT_IN_DIST_M is not None else CROSSROAD_HIT_DIST_M
+    R_OUT = EVENT_SPLIT_OUT_DIST_M
 
-    for k, idx in enumerate(valid):
-        lat, lon = points[idx]
-
-        # 点距離ヒット
-        if haversine_m(lat, lon, center_lat, center_lon) <= CROSSROAD_HIT_DIST_M:
-            hit_idx.append(idx)
-
-        # 線分距離ヒット（連続する2点）
-        if k < len(valid) - 1:
-            idx2 = valid[k + 1]
-            lat2, lon2 = points[idx2]
-            if point_to_segment_distance_m(center_lon, center_lat, lon, lat, lon2, lat2) <= CROSSROAD_SEG_HIT_DIST_M:
-                # 線分ヒットは両端をイベント候補に入れる（区間化しやすい）
-                hit_idx.append(idx)
-                hit_idx.append(idx2)
-
-    if not hit_idx:
-        return []
-
-    hit_idx = sorted(set(hit_idx))
-
-    # 近接ヒットをまとめてイベント化（ギャップ<=2点は同一イベント扱い）
     events = []
-    s = hit_idx[0]
-    prev = hit_idx[0]
-    for x in hit_idx[1:]:
-        if x - prev <= 2:
-            prev = x
-            continue
-        events.append((s, prev))
-        s = x
-        prev = x
-    events.append((s, prev))
+
+    state = "OUTSIDE"   # OUTSIDE / IN_EVENT / ARMED
+    cur_start = None
+    last_idx = None
+    prev_idx = None
+
+    for idx in valid:
+        lat, lon = points[idx]
+        d = haversine_m(lat, lon, center_lat, center_lon)
+
+        if state == "OUTSIDE":
+            # まだイベント外。設定半径に入ったらイベント開始
+            if d <= R_IN:
+                cur_start = idx
+                state = "IN_EVENT"
+                last_idx = idx
+
+        elif state == "IN_EVENT":
+            # イベント中
+            last_idx = idx
+
+            # 200m以上に一度でも出たら armed（ただし分割はしない）
+            if d >= R_OUT:
+                state = "ARMED"
+
+        elif state == "ARMED":
+            # 200m離脱済み。再侵入（R_IN以内）した瞬間にイベント分割
+            last_idx = idx
+
+            if d <= R_IN:
+                # 直前イベントを確定（現在idxは新イベントの開始点なので含めない）
+                if cur_start is not None and prev_idx is not None and prev_idx >= cur_start:
+                    events.append((cur_start, prev_idx))
+
+                # 新イベント開始
+                cur_start = idx
+                state = "IN_EVENT"
+                last_idx = idx
+
+        prev_idx = idx
+
+    # 最後のイベントを閉じる
+    if cur_start is not None and last_idx is not None and last_idx >= cur_start:
+        events.append((cur_start, last_idx))
+
     return events
 
 
