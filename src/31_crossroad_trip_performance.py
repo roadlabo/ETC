@@ -79,8 +79,9 @@ CROSSROAD_SEG_HIT_DIST_M = 20.0
 # 200m離脱しないうちは再接近として扱わない
 # 200m離脱後、再び設定半径内に入った瞬間にイベント分割
 # ============================================================
-EVENT_SPLIT_OUT_DIST_M = 200.0   # これを超えたら「離脱した」とみなしてarmedになる
+EVENT_SPLIT_OUT_DIST_M = 100.0   # これを超えたら「離脱した」とみなしてarmedになる
 EVENT_SPLIT_IN_DIST_M  = None    # Noneの場合は CROSSROAD_HIT_DIST_M を使用（=設定半径）
+EVENT_BRANCH_BUFFER_M = 150.0    # 枝判定用：イベント範囲の前後を道なりで±この距離だけ許容
 
 CROSSROAD_MIN_HITS = 1
 EARTH_RADIUS_M = 6_371_000.0
@@ -196,6 +197,20 @@ def build_cumdist(points):
         lat2, lon2 = points[i + 1]
         cum.append(cum[-1] + haversine_m(lat1, lon1, lat2, lon2))
     return cum
+
+
+def expand_event_index_range_by_meter(cumdist, ev_s, ev_e, buffer_m):
+    """イベント(ev_s..ev_e)を道なり距離で±buffer_mだけ拡張した index 範囲(lo..hi) を返す。"""
+    lo_m = max(0.0, cumdist[ev_s] - buffer_m)
+    hi_m = min(cumdist[-1], cumdist[ev_e] + buffer_m)
+
+    lo = bisect.bisect_left(cumdist, lo_m)
+    hi = bisect.bisect_right(cumdist, hi_m) - 1
+    lo = max(0, min(lo, len(cumdist) - 1))
+    hi = max(0, min(hi, len(cumdist) - 1))
+    if hi - lo < 1:
+        return ev_s, ev_e
+    return lo, hi
 
 
 def interpolate_at_distance(points, dt_list, cumdist, target_m):
@@ -1011,17 +1026,23 @@ def main() -> None:
                             else:
                                 use_event_bounds_for_branch = (len(events) >= 2)
                                 if use_event_bounds_for_branch:
+                                    ev_s2, ev_e2 = expand_event_index_range_by_meter(
+                                        cumdist,
+                                        ev_s,
+                                        ev_e,
+                                        EVENT_BRANCH_BUFFER_M,
+                                    )
                                     in_angle, in_branch, in_diff, in_method = _infer_branch_3step(
                                         center_pos_val,
                                         True,
-                                        ev_s=ev_s,
-                                        ev_e=ev_e,
+                                        ev_s=ev_s2,
+                                        ev_e=ev_e2,
                                     )
                                     out_angle, out_branch, out_diff, out_method = _infer_branch_3step(
                                         center_pos_val,
                                         False,
-                                        ev_s=ev_s,
-                                        ev_e=ev_e,
+                                        ev_s=ev_s2,
+                                        ev_e=ev_e2,
                                     )
                                 else:
                                     in_angle, in_branch, in_diff, in_method = _infer_branch_3step(
