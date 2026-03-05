@@ -902,19 +902,9 @@ def main() -> None:
 
                             # 最近接線分（中心への最短距離となる線分）を求める
                             seg_i_i, seg_t_f, seg_d_f = closest_segment_to_center_in_range(
-                                points, cross.center_lat, cross.center_lon, ev_s, ev_e, pad=0
+                                points, cross.center_lat, cross.center_lon, ev_s, ev_e, pad=6
                             )
                             seg_i = seg_i_i
-
-                            # idx_center：イベント区間内で中心に一番近い点
-                            idx_center = None
-                            best_d = float("inf")
-                            for ii in range(ev_s, min(ev_e + 1, len(points))):
-                                lat, lon = points[ii]
-                                d = haversine_m(lat, lon, cross.center_lat, cross.center_lon)
-                                if d < best_d:
-                                    best_d = d
-                                    idx_center = ii
 
                             # 交差点指定中心（比較表示用）
                             cross_center_lon_s = f"{cross.center_lon:.8f}"
@@ -929,28 +919,22 @@ def main() -> None:
                                 center_lon_calc_s = f"{lon_c:.8f}"
                                 center_lat_calc_s = f"{lat_c:.8f}"
 
-                            # --- 枝判定用の中心位置（道なり距離）は idx_center を優先してイベント独立性を担保 ---
-                            center_pos_val_dir = None
-                            if idx_center is not None and idx_center < len(cumdist):
-                                center_pos_val_dir = cumdist[idx_center]
-                            elif seg_i is not None:
+                            # --- 中心位置（道なり距離）：seg_i/seg_t の線分補間で一本化（枝判定も所要時間も共通） ---
+                            center_pos_val = None
+                            if seg_i is not None:
                                 seg_len_dir = cumdist[seg_i + 1] - cumdist[seg_i]
-                                center_pos_val_dir = cumdist[seg_i] + seg_t_f * seg_len_dir
+                                center_pos_val = cumdist[seg_i] + seg_t_f * seg_len_dir
 
-                            # 流入/流出枝番：基本は最近接線分の前後点。取れない場合は中心最近接点±1で代替。
+                            # 流入/流出枝番：最近接線分の前後点を使用。
                             if seg_i is not None:
                                 idx_b = seg_i
                                 idx_a = seg_i + 1
-                            elif idx_center is None:
-                                # ここまで来て points があるのに中心最寄りが取れないのは例外的
+                            else:
                                 time_reason = "NO_SEGMENT"
                                 time_valid = 0
                                 no_segment_trips += 1
                                 idx_b = 0
                                 idx_a = min(1, len(points) - 1)
-                            else:
-                                idx_b = max(0, idx_center - 1)
-                                idx_a = min(len(points) - 1, idx_center + 1)
 
                             # ============================================================
                             # 枝判定角度：6段階判定（20-50m / 20-70m / 20-100m / 10-40m / 10-30m / 10-20m）
@@ -1020,30 +1004,34 @@ def main() -> None:
 
                                 return None, "", float("inf"), ("IN:UNKNOWN" if is_in else "OUT:UNKNOWN")
 
-                            center_pos_val = center_pos_val_dir
-                            use_event_bounds_for_branch = (len(events) >= 2)
-                            if use_event_bounds_for_branch:
-                                in_angle, in_branch, in_diff, in_method = _infer_branch_3step(
-                                    center_pos_val,
-                                    True,
-                                    ev_s=ev_s,
-                                    ev_e=ev_e,
-                                )
-                                out_angle, out_branch, out_diff, out_method = _infer_branch_3step(
-                                    center_pos_val,
-                                    False,
-                                    ev_s=ev_s,
-                                    ev_e=ev_e,
-                                )
+                            # center_pos_val が取れない場合は枝判定も不可（通過扱いは維持）
+                            if center_pos_val is None:
+                                in_angle, in_branch, in_diff, in_method = None, "", float("inf"), "IN:NO_SEGMENT"
+                                out_angle, out_branch, out_diff, out_method = None, "", float("inf"), "OUT:NO_SEGMENT"
                             else:
-                                in_angle, in_branch, in_diff, in_method = _infer_branch_3step(
-                                    center_pos_val,
-                                    True,
-                                )
-                                out_angle, out_branch, out_diff, out_method = _infer_branch_3step(
-                                    center_pos_val,
-                                    False,
-                                )
+                                use_event_bounds_for_branch = (len(events) >= 2)
+                                if use_event_bounds_for_branch:
+                                    in_angle, in_branch, in_diff, in_method = _infer_branch_3step(
+                                        center_pos_val,
+                                        True,
+                                        ev_s=ev_s,
+                                        ev_e=ev_e,
+                                    )
+                                    out_angle, out_branch, out_diff, out_method = _infer_branch_3step(
+                                        center_pos_val,
+                                        False,
+                                        ev_s=ev_s,
+                                        ev_e=ev_e,
+                                    )
+                                else:
+                                    in_angle, in_branch, in_diff, in_method = _infer_branch_3step(
+                                        center_pos_val,
+                                        True,
+                                    )
+                                    out_angle, out_branch, out_diff, out_method = _infer_branch_3step(
+                                        center_pos_val,
+                                        False,
+                                    )
                             angle_method_str = f"{in_method}/{out_method}"
 
                             # 最近接線分の診断情報（可能な範囲で記録）
@@ -1073,8 +1061,6 @@ def main() -> None:
                                     time_reason = "NO_SEGMENT"
                                     no_segment_trips += 1
                                 else:
-                                    seg_len = cumdist[seg_i + 1] - cumdist[seg_i]
-                                    center_pos_val = cumdist[seg_i] + seg_t_f * seg_len
                                     center_pos_m = f"{center_pos_val:.3f}"
 
                                     start_pos_val = center_pos_val - MEASURE_PRE_M
@@ -1124,10 +1110,9 @@ def main() -> None:
                                 time_ng_trips += 1
 
                             # 生プロット（中心付近の前後4点＋中央）
-                            if idx_center is not None:
-                                raw_center_idx = idx_center
-                            elif seg_i is not None:
-                                raw_center_idx = min(seg_i + 1, len(points) - 1)
+                            if seg_i is not None:
+                                # seg_tで中心に近い方の点を中央に採用（0.5未満→seg_i、0.5以上→seg_i+1）
+                                raw_center_idx = seg_i if seg_t_f < 0.5 else min(seg_i + 1, len(points) - 1)
                             else:
                                 raw_center_idx = 0
 
