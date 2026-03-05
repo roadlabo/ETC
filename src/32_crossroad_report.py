@@ -75,6 +75,8 @@ def parse_center_datetime(val) -> datetime | None:
         "%Y-%m-%d %H:%M:%S",
         "%Y/%m/%d %H:%M:%S",
         "%Y%m%d%H%M%S",
+        "%Y%m%d%H%M%S.%f",
+        "%Y-%m-%dT%H:%M:%S",
         "%H:%M:%S",
         "%H:%M",
     ]
@@ -237,9 +239,8 @@ class _ExcelReportHelper:
             dt = parse_center_datetime(value)
             if dt is None:
                 time_parse_ng_count += 1
-                hour = 0
-            else:
-                hour = dt.hour
+                continue
+            hour = dt.hour
             bin_idx = hour_to_time_bin(hour)
             counts[bin_idx] += 1
         if total_days == 0:
