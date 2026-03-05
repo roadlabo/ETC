@@ -76,8 +76,8 @@ CROSSROAD_SEG_HIT_DIST_M = 20.0
 
 # ============================================================
 # イベント分割（距離ベース）
-# 200m離脱しないうちは再接近として扱わない
-# 200m離脱後、再び設定半径内に入った瞬間にイベント分割
+# 100m離脱しないうちは再接近として扱わない
+# 100m離脱後、再び設定半径内に入った瞬間にイベント分割
 # ============================================================
 EVENT_SPLIT_OUT_DIST_M = 100.0   # これを超えたら「離脱した」とみなしてarmedになる
 EVENT_SPLIT_IN_DIST_M  = None    # Noneの場合は CROSSROAD_HIT_DIST_M を使用（=設定半径）
@@ -332,9 +332,9 @@ def find_crossing_events(points, center_lat, center_lon):
 
     仕様：
     - 設定半径(R_IN)に入ったらイベント開始
-    - 200m(R_OUT)以上に一度でも離脱したら armed（次の再侵入で分割可能）状態
+    - 100m(R_OUT)以上に一度でも離脱したら armed（次の再侵入で分割可能）状態
     - armed状態のまま、再びR_INに入った瞬間にイベント分割（新イベント開始）
-    - 200m離脱しないうちは、再接近しても同一イベントとして扱う
+    - 100m離脱しないうちは、再接近しても同一イベントとして扱う
     return: List[tuple[start_idx, end_idx]]  (end_idxは含む)
     """
     import math
@@ -383,12 +383,12 @@ def find_crossing_events(points, center_lat, center_lon):
             # イベント中
             last_idx = idx
 
-            # 200m以上に一度でも出たら armed（ただし分割はしない）
+            # 100m以上に一度でも出たら armed（ただし分割はしない）
             if d_point >= R_OUT:
                 state = "ARMED"
 
         elif state == "ARMED":
-            # 200m離脱済み。再侵入（R_IN以内）した瞬間にイベント分割
+            # 100m離脱済み。再侵入（R_IN以内）した瞬間にイベント分割
             last_idx = idx
 
             if hit_in:
@@ -934,11 +934,11 @@ def main() -> None:
                                 center_lon_calc_s = f"{lon_c:.8f}"
                                 center_lat_calc_s = f"{lat_c:.8f}"
 
-                            # --- 中心位置（道なり距離）：seg_i/seg_t の線分補間で一本化（枝判定も所要時間も共通） ---
-                            center_pos_val = None
+                            # --- 枝判定用中心位置（道なり距離）は seg_i/seg_t に統一 ---
+                            center_pos_for_branch = None
                             if seg_i is not None:
                                 seg_len_dir = cumdist[seg_i + 1] - cumdist[seg_i]
-                                center_pos_val = cumdist[seg_i] + seg_t_f * seg_len_dir
+                                center_pos_for_branch = cumdist[seg_i] + seg_t_f * seg_len_dir
 
                             # 流入/流出枝番：最近接線分の前後点を使用。
                             if seg_i is not None:
@@ -1019,8 +1019,8 @@ def main() -> None:
 
                                 return None, "", float("inf"), ("IN:UNKNOWN" if is_in else "OUT:UNKNOWN")
 
-                            # center_pos_val が取れない場合は枝判定も不可（通過扱いは維持）
-                            if center_pos_val is None:
+                            # center_pos_for_branch が取れない場合は枝判定も不可（通過扱いは維持）
+                            if center_pos_for_branch is None:
                                 in_angle, in_branch, in_diff, in_method = None, "", float("inf"), "IN:NO_SEGMENT"
                                 out_angle, out_branch, out_diff, out_method = None, "", float("inf"), "OUT:NO_SEGMENT"
                             else:
@@ -1033,24 +1033,24 @@ def main() -> None:
                                         EVENT_BRANCH_BUFFER_M,
                                     )
                                     in_angle, in_branch, in_diff, in_method = _infer_branch_3step(
-                                        center_pos_val,
+                                        center_pos_for_branch,
                                         True,
                                         ev_s=ev_s2,
                                         ev_e=ev_e2,
                                     )
                                     out_angle, out_branch, out_diff, out_method = _infer_branch_3step(
-                                        center_pos_val,
+                                        center_pos_for_branch,
                                         False,
                                         ev_s=ev_s2,
                                         ev_e=ev_e2,
                                     )
                                 else:
                                     in_angle, in_branch, in_diff, in_method = _infer_branch_3step(
-                                        center_pos_val,
+                                        center_pos_for_branch,
                                         True,
                                     )
                                     out_angle, out_branch, out_diff, out_method = _infer_branch_3step(
-                                        center_pos_val,
+                                        center_pos_for_branch,
                                         False,
                                     )
                             angle_method_str = f"{in_method}/{out_method}"
@@ -1082,10 +1082,14 @@ def main() -> None:
                                     time_reason = "NO_SEGMENT"
                                     no_segment_trips += 1
                                 else:
-                                    center_pos_m = f"{center_pos_val:.3f}"
+                                    center_pos_for_time = None
+                                    seg_len = cumdist[seg_i + 1] - cumdist[seg_i]
+                                    center_pos_for_time = cumdist[seg_i] + seg_t_f * seg_len
 
-                                    start_pos_val = center_pos_val - MEASURE_PRE_M
-                                    end_pos_val = center_pos_val + MEASURE_POST_M
+                                    center_pos_m = f"{center_pos_for_time:.3f}"
+
+                                    start_pos_val = center_pos_for_time - MEASURE_PRE_M
+                                    end_pos_val = center_pos_for_time + MEASURE_POST_M
                                     start_pos_m = f"{start_pos_val:.3f}"
                                     end_pos_m = f"{end_pos_val:.3f}"
 
