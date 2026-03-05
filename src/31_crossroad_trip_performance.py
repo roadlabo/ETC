@@ -879,6 +879,48 @@ def main() -> None:
                             # ============================================================
                             # 枝判定角度：6段階判定（20-50m / 20-70m / 20-100m / 10-40m / 10-30m / 10-20m）
                             # ============================================================
+                            def _infer_branch_local(idx_center: int, is_in: bool):
+                                """
+                                -4..+4 の点列（黒点）と整合する “ローカル方位” で枝判定する。
+                                成功したら (angle, br, diff, method) を返す。失敗したら (None, "", inf, reason)。
+                                """
+                                import math
+
+                                if idx_center is None:
+                                    return None, "", float("inf"), ("IN:LOCAL_NO_CENTER" if is_in else "OUT:LOCAL_NO_CENTER")
+
+                                # INは point-2 -> point-1 の進行方向を作り +180
+                                if is_in:
+                                    i0 = idx_center - 2
+                                    i1 = idx_center - 1
+                                    if i0 < 0 or i1 < 0:
+                                        return None, "", float("inf"), "IN:LOCAL_SHORT"
+                                    p0 = points[i0]
+                                    p1 = points[i1]
+                                    if any(math.isnan(v) for v in (p0[0], p0[1], p1[0], p1[1])):
+                                        return None, "", float("inf"), "IN:LOCAL_NAN"
+                                    move = bearing_deg(p0[0], p0[1], p1[0], p1[1])
+                                    angle_try = (move + 180.0) % 360.0
+                                    br, diff = find_nearest_branch_with_diff(angle_try, cross.branches)
+                                    if diff <= 30.0:
+                                        return angle_try, br, diff, "IN:LOCAL(-2->-1)"
+                                    return None, "", float("inf"), "IN:LOCAL_DIFF_BIG"
+
+                                # OUTは point+1 -> point+2 の進行方向
+                                i0 = idx_center + 1
+                                i1 = idx_center + 2
+                                if i1 >= len(points):
+                                    return None, "", float("inf"), "OUT:LOCAL_SHORT"
+                                p0 = points[i0]
+                                p1 = points[i1]
+                                if any(math.isnan(v) for v in (p0[0], p0[1], p1[0], p1[1])):
+                                    return None, "", float("inf"), "OUT:LOCAL_NAN"
+                                angle_try = bearing_deg(p0[0], p0[1], p1[0], p1[1])
+                                br, diff = find_nearest_branch_with_diff(angle_try, cross.branches)
+                                if diff <= 30.0:
+                                    return angle_try, br, diff, "OUT:LOCAL(+1->+2)"
+                                return None, "", float("inf"), "OUT:LOCAL_DIFF_BIG"
+
                             def _infer_branch_3step(center_pos_val: float, is_in: bool):
                                 """
                                 Returns:
@@ -926,9 +968,13 @@ def main() -> None:
 
                                 return None, "", float("inf"), ("IN:UNKNOWN" if is_in else "OUT:UNKNOWN")
 
-                            center_pos_val = center_pos_val_dir
-                            in_angle, in_branch, in_diff, in_method = _infer_branch_3step(center_pos_val, is_in=True)
-                            out_angle, out_branch, out_diff, out_method = _infer_branch_3step(center_pos_val, is_in=False)
+                            in_angle, in_branch, in_diff, in_method = _infer_branch_local(idx_center, True)
+                            if in_angle is None:
+                                in_angle, in_branch, in_diff, in_method = _infer_branch_3step(center_pos_val_dir, True)
+
+                            out_angle, out_branch, out_diff, out_method = _infer_branch_local(idx_center, False)
+                            if out_angle is None:
+                                out_angle, out_branch, out_diff, out_method = _infer_branch_3step(center_pos_val_dir, False)
                             angle_method_str = f"{in_method}/{out_method}"
 
                             # 最近接線分の診断情報（可能な範囲で記録）
