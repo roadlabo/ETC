@@ -9,7 +9,7 @@ from time import perf_counter
 
 os.environ.setdefault("QT_LOGGING_RULES", "qt.text.font.db=false")
 
-from PyQt6.QtCore import QProcess, QPropertyAnimation, QPoint, QRect, QSize, Qt, QTimer
+from PyQt6.QtCore import QObject, QProcess, QPropertyAnimation, QPoint, QRect, QSize, QThread, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetrics, QPainter, QPixmap, QColor, QPen
 from PyQt6.QtWidgets import (
     QApplication,
@@ -363,6 +363,64 @@ class CrossCardPerf(QFrame):
         self.setStyleSheet(f"QFrame#crossCard{{{style}}}")
 
 
+class ScanWorker(QObject):
+    finished = pyqtSignal(list, int, str)  # items, sum_s2, project_dir_str
+    error = pyqtSignal(str)
+
+    def __init__(self, project_dir: Path):
+        super().__init__()
+        self.project_dir = project_dir
+
+    def run(self):
+        try:
+            cross_dir = self.project_dir / FOLDER_CROSS
+            s2_dir = self.project_dir / FOLDER_S2
+            out31_dir = self.project_dir / FOLDER_31OUT
+            out32_dir = self.project_dir / FOLDER_32OUT
+
+            if not cross_dir.exists():
+                raise FileNotFoundError(f"交差点フォルダが見つかりません:\n{cross_dir}")
+
+            csvs = sorted(cross_dir.glob("*.csv"))
+            if not csvs:
+                raise FileNotFoundError(f"交差点CSVが見つかりません:\n{cross_dir}")
+
+            out31_dir.mkdir(parents=True, exist_ok=True)
+            out32_dir.mkdir(parents=True, exist_ok=True)
+
+            items = []
+            sum_s2 = 0
+            for csv_path in csvs:
+                name = csv_path.stem
+                jpg = cross_dir / f"{name}.jpg"
+                s2_cross = s2_dir / name
+
+                n_csv = len(list(s2_cross.glob("*.csv"))) if s2_cross.exists() else 0
+                sum_s2 += n_csv
+
+                out31 = out31_dir / f"{name}_performance.csv"
+                out32 = self.project_dir / FOLDER_32OUT / f"{name}_report.xlsx"
+
+                items.append({
+                    "name": name,
+                    "cross_csv": str(csv_path),
+                    "cross_jpg": str(jpg),
+                    "s2_dir": str(s2_cross),
+                    "s2_csv": n_csv,
+                    "out31": str(out31),
+                    "out32": str(out32),
+                    "has_csv": csv_path.exists(),
+                    "has_jpg": jpg.exists(),
+                    "has_s2_dir": s2_cross.exists(),
+                    "has_out31": out31.exists(),
+                    "has_out32": out32.exists(),
+                })
+
+            self.finished.emit(items, sum_s2, str(self.project_dir))
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -414,6 +472,11 @@ class MainWindow(QMainWindow):
         self._waiting_lock_dialog: QDialog | None = None
         self._waiting_lock_timer: QTimer | None = None
         self._waiting_lock_path: Path | None = None
+        self._project_loading_dialog: QDialog | None = None
+        self._project_loading_label: QLabel | None = None
+        self._project_loading_bar: QProgressBar | None = None
+        self._scan_thread: QThread | None = None
+        self._scan_worker: ScanWorker | None = None
         self.splash_logo = None
         self.corner_logo = None
         self._logo_phase = "none"
@@ -805,7 +868,45 @@ class MainWindow(QMainWindow):
             QFrame#crossCard { border-radius: 8px; }
         """)
 
+    def _show_project_loading_dialog(self, text: str = "プロジェクトフォルダを開いています...") -> None:
+        if getattr(self, "_project_loading_dialog", None):
+            try:
+                self._project_loading_label.setText(text)
+                return
+            except Exception:
+                pass
 
+        dlg = QDialog(self)
+        dlg.setWindowTitle("処理中")
+        dlg.setModal(True)
+        dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+
+        lay = QVBoxLayout(dlg)
+        lbl = QLabel(text)
+        pb = QProgressBar()
+        pb.setRange(0, 0)
+
+        lay.addWidget(lbl)
+        lay.addWidget(pb)
+
+        self._project_loading_dialog = dlg
+        self._project_loading_label = lbl
+        self._project_loading_bar = pb
+
+        dlg.show()
+        QApplication.processEvents()
+
+    def _hide_project_loading_dialog(self) -> None:
+        dlg = getattr(self, "_project_loading_dialog", None)
+        if dlg:
+            try:
+                dlg.close()
+                dlg.deleteLater()
+            except Exception:
+                pass
+        self._project_loading_dialog = None
+        self._project_loading_label = None
+        self._project_loading_bar = None
 
     def _update_time_boxes(self) -> None:
         if self.started_at <= 0:
@@ -1106,44 +1207,101 @@ class MainWindow(QMainWindow):
         return self.project_dir / FOLDER_32OUT / f"{name}_report.xlsx"
 
     def scan_crossroads(self) -> None:
+        """
+        互換のため残すが、実体は非同期スキャンを起動するだけにする。
+        """
+        self._start_scan_crossroads_async()
+
+    def _start_scan_crossroads_async(self) -> None:
         self._clear_cards()
         if not self.project_dir:
             self.log_warn("project not selected.")
             return
-        cross_dir = self.project_dir / FOLDER_CROSS
-        s2_dir = self.project_dir / FOLDER_S2
-        out31_dir = self.project_dir / FOLDER_31OUT
-        out32_dir = self.project_dir / FOLDER_32OUT
-        out31_dir.mkdir(parents=True, exist_ok=True)
-        out32_dir.mkdir(parents=True, exist_ok=True)
-        csvs = sorted(cross_dir.glob("*.csv")) if cross_dir.exists() else []
-        if not cross_dir.exists():
-            QMessageBox.critical(self, "エラー", f"交差点フォルダが見つかりません:\n{cross_dir}")
+
+        self._show_project_loading_dialog("プロジェクトフォルダを開いています...")
+
+        if getattr(self, "_scan_thread", None):
+            try:
+                self._scan_thread.quit()
+                self._scan_thread.wait(200)
+            except Exception:
+                pass
+            self._scan_thread = None
+            self._scan_worker = None
+
+        thread = QThread(self)
+        worker = ScanWorker(self.project_dir)
+        worker.moveToThread(thread)
+
+        def cleanup() -> None:
+            thread.quit()
+            thread.wait(200)
+            worker.deleteLater()
+            thread.deleteLater()
+            self._scan_thread = None
+            self._scan_worker = None
+
+        def on_finished(items: list, sum_s2: int, _project_dir_str: str):
+            self._hide_project_loading_dialog()
+            self._apply_scan_result(items, sum_s2)
+            self.log_info(f"scanned: {len(items)} crossroads")
+            self.log_info(f"s2 total csv files: {sum_s2}")
+            cleanup()
+
+        def on_error(msg: str):
+            self._hide_project_loading_dialog()
+            if "交差点CSVが見つかりません" in msg:
+                QMessageBox.warning(self, "注意", msg)
+            elif "交差点フォルダが見つかりません" in msg:
+                QMessageBox.critical(self, "エラー", msg)
+            else:
+                QMessageBox.critical(self, "エラー", msg)
+
+            self.log_error(f"scan failed: {msg}")
+            cleanup()
+
+        worker.finished.connect(on_finished)
+        worker.error.connect(on_error)
+        thread.started.connect(worker.run)
+
+        self._scan_thread = thread
+        self._scan_worker = worker
+        thread.start()
+
+    def _apply_scan_result(self, items: list[dict], sum_s2: int) -> None:
+        self._clear_cards()
+        if not items:
+            self.lbl_summary.setText("Crossroads: 0 / S2 CSV total: 0")
+            self._refresh_telemetry(force=True)
             return
-        if not csvs:
-            QMessageBox.warning(self, "注意", f"交差点CSVが見つかりません:\n{cross_dir}")
-            return
-        sum_s2 = 0
-        for csv_path in csvs:
-            name = csv_path.stem
-            jpg = cross_dir / f"{name}.jpg"
-            s2_cross = s2_dir / name
-            n_csv = len(list(s2_cross.glob("*.csv"))) if s2_cross.exists() else 0
-            sum_s2 += n_csv
-            out31 = out31_dir / f"{name}_performance.csv"
-            out32 = self._report_output_path(name)
+
+        for it in items:
+            name = it["name"]
             card = CrossCardPerf(name, launch_33_handler=self._launch_33_branch_check)
-            card.paths = {"out31": str(out31), "out32": str(out32), "cross_csv": str(csv_path), "cross_jpg": str(jpg), "s2_dir": str(s2_cross)}
-            card.set_flags(has_csv=csv_path.exists(), has_jpg=jpg.exists(), has_s2_dir=s2_cross.exists(), s2_csv=n_csv, has_out31=out31.exists(), has_out32=out32.exists())
+            card.paths = {
+                "out31": it["out31"],
+                "out32": it["out32"],
+                "cross_csv": it["cross_csv"],
+                "cross_jpg": it["cross_jpg"],
+                "s2_dir": it["s2_dir"],
+            }
+            card.set_flags(
+                has_csv=it["has_csv"],
+                has_jpg=it["has_jpg"],
+                has_s2_dir=it["has_s2_dir"],
+                s2_csv=it["s2_csv"],
+                has_out31=it["has_out31"],
+                has_out32=it["has_out32"],
+            )
             card.set_buttons_enabled(True)
-            card.set_progress(0, n_csv)
+            card.set_progress(0, it["s2_csv"])
             card.set_stats(0, 0, 0, 0, 0, 0)
+
             self.cards[name] = card
             self.cross_flow.addWidget(card)
-        self.lbl_summary.setText(f"Crossroads: {len(csvs)} / S2 CSV total: {sum_s2}")
-        self._refresh_telemetry()
-        self.log_info(f"scanned: {len(csvs)} crossroads")
-        self.log_info(f"s2 total csv files: {sum_s2}")
+
+        self.lbl_summary.setText(f"Crossroads: {len(items)} / S2 CSV total: {sum_s2}")
+        self._refresh_telemetry(force=True)
 
     def _collect_targets(self) -> list[str]:
         return [name for name, card in self.cards.items() if card.selected]
