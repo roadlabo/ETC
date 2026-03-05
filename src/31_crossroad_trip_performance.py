@@ -240,6 +240,39 @@ def interpolate_point_at_distance(points, cumdist, target_m):
     return (lat0 + r * (lat1 - lat0), lon0 + r * (lon1 - lon0))
 
 
+def interpolate_point_at_distance_in_event(points, cumdist, target_m, ev_s, ev_e):
+    """
+    イベント範囲(ev_s..ev_e)内に限って、道なり距離target_m地点の (lat, lon) を線形補間で返す。
+    イベント外のtarget_mは None（= データ無し）を返す。
+    """
+    if ev_s is None or ev_e is None:
+        return None
+    if ev_s < 0 or ev_e >= len(points):
+        return None
+    if ev_e - ev_s < 1:
+        return None  # 線分が無い
+
+    lo_m = cumdist[ev_s]
+    hi_m = cumdist[ev_e]
+    if target_m < lo_m or target_m > hi_m:
+        return None
+
+    # target_mがイベント内にある前提で、二分探索
+    j = bisect.bisect_right(cumdist, target_m) - 1
+    # イベント内の線分にクランプ（線分は j..j+1 を使う）
+    j = max(ev_s, min(j, ev_e - 1))
+
+    d0 = cumdist[j]
+    d1 = cumdist[j + 1]
+    if d1 <= d0:
+        return points[j]
+
+    r = (target_m - d0) / (d1 - d0)
+    lat0, lon0 = points[j]
+    lat1, lon1 = points[j + 1]
+    return (lat0 + r * (lat1 - lat0), lon0 + r * (lon1 - lon0))
+
+
 def trip_passes_crossroad(points, center_lat, center_lon):
     """このトリップが交差点を通過したかどうかを判定する。"""
     import math
@@ -879,7 +912,7 @@ def main() -> None:
                             # ============================================================
                             # 枝判定角度：6段階判定（20-50m / 20-70m / 20-100m / 10-40m / 10-30m / 10-20m）
                             # ============================================================
-                            def _infer_branch_3step(center_pos_val: float, is_in: bool):
+                            def _infer_branch_3step(center_pos_val: float, is_in: bool, ev_s: int, ev_e: int):
                                 """
                                 Returns:
                                   angle_deg: Optional[float]
@@ -898,8 +931,20 @@ def main() -> None:
                                     th = step["th"]
 
                                     if is_in:
-                                        p_far = interpolate_point_at_distance(points, cumdist, center_pos_val - far)
-                                        p_near = interpolate_point_at_distance(points, cumdist, center_pos_val - near)
+                                        p_far = interpolate_point_at_distance_in_event(
+                                            points,
+                                            cumdist,
+                                            center_pos_val - far,
+                                            ev_s,
+                                            ev_e,
+                                        )
+                                        p_near = interpolate_point_at_distance_in_event(
+                                            points,
+                                            cumdist,
+                                            center_pos_val - near,
+                                            ev_s,
+                                            ev_e,
+                                        )
                                         if (p_far is None) or (p_near is None):
                                             continue
 
@@ -910,8 +955,20 @@ def main() -> None:
                                         if diff <= th:
                                             return angle_try, br, diff, f"IN:{int(near)}-{int(far)}m"
                                     else:
-                                        p_near = interpolate_point_at_distance(points, cumdist, center_pos_val + near)
-                                        p_far = interpolate_point_at_distance(points, cumdist, center_pos_val + far)
+                                        p_near = interpolate_point_at_distance_in_event(
+                                            points,
+                                            cumdist,
+                                            center_pos_val + near,
+                                            ev_s,
+                                            ev_e,
+                                        )
+                                        p_far = interpolate_point_at_distance_in_event(
+                                            points,
+                                            cumdist,
+                                            center_pos_val + far,
+                                            ev_s,
+                                            ev_e,
+                                        )
                                         if (p_near is None) or (p_far is None):
                                             continue
 
@@ -927,8 +984,18 @@ def main() -> None:
                                 return None, "", float("inf"), ("IN:UNKNOWN" if is_in else "OUT:UNKNOWN")
 
                             center_pos_val = center_pos_val_dir
-                            in_angle, in_branch, in_diff, in_method = _infer_branch_3step(center_pos_val, is_in=True)
-                            out_angle, out_branch, out_diff, out_method = _infer_branch_3step(center_pos_val, is_in=False)
+                            in_angle, in_branch, in_diff, in_method = _infer_branch_3step(
+                                center_pos_val,
+                                is_in=True,
+                                ev_s=ev_s,
+                                ev_e=ev_e,
+                            )
+                            out_angle, out_branch, out_diff, out_method = _infer_branch_3step(
+                                center_pos_val,
+                                is_in=False,
+                                ev_s=ev_s,
+                                ev_e=ev_e,
+                            )
                             angle_method_str = f"{in_method}/{out_method}"
 
                             # 最近接線分の診断情報（可能な範囲で記録）
