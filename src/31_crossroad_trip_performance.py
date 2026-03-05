@@ -341,12 +341,26 @@ def find_crossing_events(points, center_lat, center_lon):
 
     for idx in valid:
         lat, lon = points[idx]
-        d = haversine_m(lat, lon, center_lat, center_lon)
+        d_point = haversine_m(lat, lon, center_lat, center_lon)
+
+        # 線分距離（直前の有効点がある場合）
+        d_seg = None
+        if prev_idx is not None:
+            plat, plon = points[prev_idx]
+            # center_lon, center_lat の順に注意（point_to_segment_distance_mの引数順に合わせる）
+            d_seg = point_to_segment_distance_m(
+                center_lon, center_lat,
+                plon, plat, lon, lat
+            )
+
+        hit_in = (d_point <= R_IN) or (d_seg is not None and d_seg <= R_IN)
+        hit_in_by_seg = (d_seg is not None and d_seg <= R_IN) and not (d_point <= R_IN)
 
         if state == "OUTSIDE":
             # まだイベント外。設定半径に入ったらイベント開始
-            if d <= R_IN:
-                cur_start = idx
+            if hit_in:
+                # 線分HITで入った場合、イベント開始を一つ前の点に寄せる（中心前後の欠けを防ぐ）
+                cur_start = prev_idx if (hit_in_by_seg and prev_idx is not None) else idx
                 state = "IN_EVENT"
                 last_idx = idx
 
@@ -355,20 +369,20 @@ def find_crossing_events(points, center_lat, center_lon):
             last_idx = idx
 
             # 200m以上に一度でも出たら armed（ただし分割はしない）
-            if d >= R_OUT:
+            if d_point >= R_OUT:
                 state = "ARMED"
 
         elif state == "ARMED":
             # 200m離脱済み。再侵入（R_IN以内）した瞬間にイベント分割
             last_idx = idx
 
-            if d <= R_IN:
+            if hit_in:
                 # 直前イベントを確定（現在idxは新イベントの開始点なので含めない）
                 if cur_start is not None and prev_idx is not None and prev_idx >= cur_start:
                     events.append((cur_start, prev_idx))
 
-                # 新イベント開始
-                cur_start = idx
+                # 新イベント開始（線分HITなら一つ前に寄せる）
+                cur_start = prev_idx if (hit_in_by_seg and prev_idx is not None) else idx
                 state = "IN_EVENT"
                 last_idx = idx
 
