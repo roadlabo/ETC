@@ -282,7 +282,7 @@ LEAFLET_HTML = r"""
       font-size: 12px;
       font-family: sans-serif;
       font-weight: 800;
-      color: #d00000;
+      color: #0000ff;
 
       /* 白地でも読めるように（縁取り） */
       text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 2px #fff;
@@ -745,14 +745,9 @@ LEAFLET_HTML = r"""
       return `${prefix}:枝${branchText}`;
     };
 
-    let inSeg = null;
-    let outSeg = null;
-
     if (hasCenter && Number.isFinite(tr.in_angle_deg)) {
       const pin = destPoint(tr.center_calc, tr.in_angle_deg, 26.0);
       const pinLabel = destPoint({lat: pin.lat, lon: pin.lon}, (tr.in_angle_deg + 90.0) % 360.0, 6.0);
-      L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [pin.lat, pin.lon]], {color:'red', weight:6}).addTo(tripLayer);
-      inSeg = {a: {lat: tr.center_calc.lat, lon: tr.center_calc.lon}, b: {lat: pin.lat, lon: pin.lon}};
       L.marker([pinLabel.lat, pinLabel.lon], {
         icon: L.divIcon({className: 'trip-label', html: makeRayLabel('IN', tr.in_branch, tr.in_delta_deg)}),
         zIndexOffset: 1100,
@@ -761,8 +756,6 @@ LEAFLET_HTML = r"""
     if (hasCenter && Number.isFinite(tr.out_angle_deg)) {
       const pout = destPoint(tr.center_calc, tr.out_angle_deg, 26.0);
       const poutLabel = destPoint({lat: pout.lat, lon: pout.lon}, (tr.out_angle_deg + 270.0) % 360.0, 6.0);
-      L.polyline([[tr.center_calc.lat, tr.center_calc.lon], [pout.lat, pout.lon]], {color:'red', weight:6}).addTo(tripLayer);
-      outSeg = {a: {lat: tr.center_calc.lat, lon: tr.center_calc.lon}, b: {lat: pout.lat, lon: pout.lon}};
       L.marker([poutLabel.lat, poutLabel.lon], {
         icon: L.divIcon({className: 'trip-label', html: makeRayLabel('OUT', tr.out_branch, tr.out_delta_deg)}),
         zIndexOffset: 1100,
@@ -781,11 +774,11 @@ LEAFLET_HTML = r"""
       L.circleMarker(farLL, {radius: 6, color: color, weight: 2, fillOpacity: 1.0})
         .addTo(nfLayer).bindTooltip(labelPrefix + "_far");
 
-      L.polyline([farLL, nearLL], {color: color, weight: 3, dashArray: "2 6"})
+      L.polyline([farLL, nearLL], {color: color, weight: 3})
         .addTo(nfLayer);
     }
 
-    drawNearFar(tr.in_near, tr.in_far, "red", "IN");
+    drawNearFar(tr.in_near, tr.in_far, "blue", "IN");
     drawNearFar(tr.out_near, tr.out_far, "blue", "OUT");
 
     // ===== [ANIM] animation: neon bead loops on black dashed trajectory =====
