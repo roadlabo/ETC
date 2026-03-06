@@ -758,8 +758,12 @@ LEAFLET_HTML = r"""
     calcMarker = L.circleMarker([tr.center_calc.lat, tr.center_calc.lon], {radius: 6}).addTo(map);
 
     // start/end markers（点は残す）
-    L.circleMarker([tr.start.lat, tr.start.lon], {radius: 6}).addTo(tripLayer);
-    L.circleMarker([tr.end.lat, tr.end.lon], {radius: 6}).addTo(tripLayer);
+    if (tr.start) {
+      L.circleMarker([tr.start.lat, tr.start.lon], {radius: 6}).addTo(tripLayer);
+    }
+    if (tr.end) {
+      L.circleMarker([tr.end.lat, tr.end.lon], {radius: 6}).addTo(tripLayer);
+    }
 
     // raw points overlay (keep): raw_points を結ぶ黒点線は維持
     const trackLatLngs = (tr.raw_points || []).map(p => [p.lat, p.lon]);
@@ -1647,9 +1651,8 @@ class BranchCheckWindow(QMainWindow):
             selected_row = self.table.currentRow()
             if selected_row >= 0:
                 self.statusBar().showMessage(
-                    f"Selected: {selected_row + 1}/{len(self.df)} | 地図表示不可: {missing_reason}"
+                    f"Selected: {selected_row + 1}/{len(self.df)} | 一部座標欠損: {missing_reason}"
                 )
-            return
 
         # map payload
         raw_cols = [
@@ -1690,20 +1693,21 @@ class BranchCheckWindow(QMainWindow):
         in_delta_deg = pd.to_numeric(row.get("流入角度差(deg)"), errors="coerce") if "流入角度差(deg)" in self.df.columns else np.nan
         out_delta_deg = pd.to_numeric(row.get("流出角度差(deg)"), errors="coerce") if "流出角度差(deg)" in self.df.columns else np.nan
 
+        def safe_ll(lat_col, lon_col):
+            lat = pd.to_numeric(row.get(lat_col), errors="coerce")
+            lon = pd.to_numeric(row.get(lon_col), errors="coerce")
+            if pd.isna(lat) or pd.isna(lon):
+                return None
+            return {"lat": float(lat), "lon": float(lon)}
+
         tr = {
             "center_spec": {"lat": self.center_lat, "lon": self.center_lon},
             "center_calc": {
                 "lat": float(row["算出中心_緯度"]),
                 "lon": float(row["算出中心_経度"]),
             },
-            "start": {
-                "lat": float(row["計測開始_緯度(補間)"]),
-                "lon": float(row["計測開始_経度(補間)"]),
-            },
-            "end": {
-                "lat": float(row["計測終了_緯度(補間)"]),
-                "lon": float(row["計測終了_経度(補間)"]),
-            },
+            "start": safe_ll("計測開始_緯度(補間)", "計測開始_経度(補間)"),
+            "end": safe_ll("計測終了_緯度(補間)", "計測終了_経度(補間)"),
             "in_branch": self._format_branch(row.get("流入枝番")),
             "out_branch": self._format_branch(row.get("流出枝番")),
             "in_angle_deg": (None if pd.isna(in_angle_deg) else float(in_angle_deg)),
