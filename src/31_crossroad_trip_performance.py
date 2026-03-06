@@ -75,15 +75,10 @@ CROSSROAD_HIT_DIST_M = 20.0
 CROSSROAD_SEG_HIT_DIST_M = 20.0
 
 # ============================================================
-# イベント分割（距離ベース）
-# 100m離脱しないうちは再接近として扱わない
-# 100m離脱後、再び設定半径内に入った瞬間にイベント分割
+# 最接近点（closest approach）ベースの通過抽出
 # ============================================================
-EVENT_SPLIT_OUT_DIST_M = 100.0   # これを超えたら「離脱した」とみなしてarmedになる
-EVENT_SPLIT_IN_DIST_M  = None    # Noneの場合は CROSSROAD_HIT_DIST_M を使用（=設定半径）
-EVENT_PREBUFFER_M = 120.0        # イベント開始を hit_in から道なりで手前に伸ばす距離
-EVENT_BRANCH_BUFFER_M = 150.0    # 枝判定用：イベント範囲の前後を道なりで±この距離だけ許容
-DISABLE_EVENT_BOUNDS_FOR_BRANCH = True  # 一時検証用：枝判定でイベント範囲制約を無効化
+CLOSEST_HIT_DIST_M = 20.0          # この距離以内の最接近候補だけ採用対象
+CLOSEST_MIN_SEPARATION_M = 100.0   # 累積距離差100m以内の候補は同一通過として統合
 
 CROSSROAD_MIN_HITS = 1
 EARTH_RADIUS_M = 6_371_000.0
@@ -200,32 +195,52 @@ def build_cumdist(points):
         cum.append(cum[-1] + haversine_m(lat1, lon1, lat2, lon2))
     return cum
 
+def find_closest_approach_points(points, center_lat, center_lon, hit_dist_m=20.0, min_separation_m=100.0):
+    """交差点中心に対する最接近候補を抽出し、100m以内の近接候補を統合して返す。"""
+    candidates = []
+    if len(points) < 2:
+        return candidates
 
-def expand_event_index_range_by_meter(cumdist, ev_s, ev_e, buffer_m):
-    """イベント(ev_s..ev_e)を道なり距離で±buffer_mだけ拡張した index 範囲(lo..hi) を返す。"""
-    lo_m = max(0.0, cumdist[ev_s] - buffer_m)
-    hi_m = min(cumdist[-1], cumdist[ev_e] + buffer_m)
+    cumdist = build_cumdist(points)
 
-    lo = bisect.bisect_left(cumdist, lo_m)
-    hi = bisect.bisect_right(cumdist, hi_m) - 1
-    lo = max(0, min(lo, len(cumdist) - 1))
-    hi = max(0, min(hi, len(cumdist) - 1))
-    if hi - lo < 1:
-        return ev_s, ev_e
-    return lo, hi
+    for i in range(len(points) - 1):
+        lat1, lon1 = points[i]
+        lat2, lon2 = points[i + 1]
 
+        t, d = segment_closest_t_and_dist_m(center_lon, center_lat, lon1, lat1, lon2, lat2)
+        if d > hit_dist_m:
+            continue
 
-def index_at_cumdist(cumdist, target_m):
-    """cumdist配列から、target_m以上となる最初のindexを返す（範囲内にクランプ）。"""
-    if not cumdist:
-        return 0
-    target_m = max(0.0, min(float(target_m), float(cumdist[-1])))
-    i = bisect.bisect_left(cumdist, target_m)
-    if i < 0:
-        return 0
-    if i >= len(cumdist):
-        return len(cumdist) - 1
-    return i
+        seg_len = cumdist[i + 1] - cumdist[i]
+        center_pos = cumdist[i] + t * seg_len
+
+        candidates.append({
+            "seg_i": i,
+            "seg_t": t,
+            "seg_d": d,
+            "center_pos": center_pos,
+        })
+
+    if not candidates:
+        return []
+
+    candidates.sort(key=lambda x: x["center_pos"])
+
+    merged = []
+    cluster = [candidates[0]]
+
+    for cand in candidates[1:]:
+        if cand["center_pos"] - cluster[-1]["center_pos"] <= min_separation_m:
+            cluster.append(cand)
+        else:
+            best = min(cluster, key=lambda x: x["seg_d"])
+            merged.append(best)
+            cluster = [cand]
+
+    best = min(cluster, key=lambda x: x["seg_d"])
+    merged.append(best)
+
+    return merged
 
 
 def interpolate_at_distance(points, dt_list, cumdist, target_m):
@@ -279,39 +294,6 @@ def interpolate_point_at_distance(points, cumdist, target_m):
     return (lat0 + r * (lat1 - lat0), lon0 + r * (lon1 - lon0))
 
 
-def interpolate_point_at_distance_in_event(points, cumdist, target_m, ev_s, ev_e):
-    """
-    イベント範囲(ev_s..ev_e)内に限って、道なり距離target_m地点の (lat, lon) を線形補間で返す。
-    イベント外のtarget_mは None（= データ無し）を返す。
-    """
-    if ev_s is None or ev_e is None:
-        return None
-    if ev_s < 0 or ev_e >= len(points):
-        return None
-    if ev_e - ev_s < 1:
-        return None  # 線分が無い
-
-    lo_m = cumdist[ev_s]
-    hi_m = cumdist[ev_e]
-    if target_m < lo_m or target_m > hi_m:
-        return None
-
-    # target_mがイベント内にある前提で、二分探索
-    j = bisect.bisect_right(cumdist, target_m) - 1
-    # イベント内の線分にクランプ（線分は j..j+1 を使う）
-    j = max(ev_s, min(j, ev_e - 1))
-
-    d0 = cumdist[j]
-    d1 = cumdist[j + 1]
-    if d1 <= d0:
-        return points[j]
-
-    r = (target_m - d0) / (d1 - d0)
-    lat0, lon0 = points[j]
-    lat1, lon1 = points[j + 1]
-    return (lat0 + r * (lat1 - lat0), lon0 + r * (lon1 - lon0))
-
-
 def trip_passes_crossroad(points, center_lat, center_lon):
     """このトリップが交差点を通過したかどうかを判定する。"""
     import math
@@ -339,105 +321,6 @@ def trip_passes_crossroad(points, center_lat, center_lon):
             return True
 
     return False
-
-
-def find_crossing_events(points, center_lat, center_lon):
-    """
-    距離ベースのイベント分割（むやみに分割しない版）
-
-    仕様：
-    - 設定半径(R_IN)に入ったらイベント開始
-    - 100m(R_OUT)以上に一度でも離脱したら armed（次の再侵入で分割可能）状態
-    - armed状態のまま、再びR_INに入った瞬間にイベント分割（新イベント開始）
-    - 100m離脱しないうちは、再接近しても同一イベントとして扱う
-    return: List[tuple[start_idx, end_idx]]  (end_idxは含む)
-    """
-    import math
-
-    valid = [i for i, (lat, lon) in enumerate(points)
-             if not (math.isnan(lat) or math.isnan(lon))]
-    if not valid:
-        return []
-
-    R_IN = EVENT_SPLIT_IN_DIST_M if EVENT_SPLIT_IN_DIST_M is not None else CROSSROAD_HIT_DIST_M
-    R_OUT = EVENT_SPLIT_OUT_DIST_M
-    cumdist = build_cumdist(points)
-
-    events = []
-
-    state = "OUTSIDE"   # OUTSIDE / IN_EVENT / ARMED
-    cur_start = None
-    last_idx = None
-    prev_idx = None
-
-    for idx in valid:
-        lat, lon = points[idx]
-        d_point = haversine_m(lat, lon, center_lat, center_lon)
-
-        # 線分距離（直前の有効点がある場合）
-        d_seg = None
-        if prev_idx is not None:
-            plat, plon = points[prev_idx]
-            # center_lon, center_lat の順に注意（point_to_segment_distance_mの引数順に合わせる）
-            d_seg = point_to_segment_distance_m(
-                center_lon, center_lat,
-                plon, plat, lon, lat
-            )
-
-        hit_in = (d_point <= R_IN) or (d_seg is not None and d_seg <= R_IN)
-        hit_in_by_seg = (d_seg is not None and d_seg <= R_IN) and not (d_point <= R_IN)
-
-        if state == "OUTSIDE":
-            # まだイベント外。設定半径に入ったらイベント開始
-            if hit_in:
-                # 線分HITで入った場合、イベント開始を一つ前の点に寄せる（中心前後の欠けを防ぐ）
-                start_i = prev_idx if (hit_in_by_seg and prev_idx is not None) else idx
-
-                # イベント開始を道なりで手前へ前倒し
-                if EVENT_PREBUFFER_M and EVENT_PREBUFFER_M > 0 and start_i is not None:
-                    start_pos = cumdist[start_i] - EVENT_PREBUFFER_M
-                    start_i = index_at_cumdist(cumdist, start_pos)
-
-                cur_start = start_i
-                state = "IN_EVENT"
-                last_idx = idx
-
-        elif state == "IN_EVENT":
-            # イベント中
-            last_idx = idx
-
-            # 100m以上に一度でも出たら armed（ただし分割はしない）
-            if d_point >= R_OUT:
-                state = "ARMED"
-
-        elif state == "ARMED":
-            # 100m離脱済み。再侵入（R_IN以内）した瞬間にイベント分割
-            last_idx = idx
-
-            if hit_in:
-                # 直前イベントを確定（現在idxは新イベントの開始点なので含めない）
-                if cur_start is not None and prev_idx is not None and prev_idx >= cur_start:
-                    events.append((cur_start, prev_idx))
-
-                # 新イベント開始（線分HITなら一つ前に寄せる）
-                start_i = prev_idx if (hit_in_by_seg and prev_idx is not None) else idx
-
-                # 新イベント開始を道なりで手前へ前倒し
-                if EVENT_PREBUFFER_M and EVENT_PREBUFFER_M > 0 and start_i is not None:
-                    start_pos = cumdist[start_i] - EVENT_PREBUFFER_M
-                    start_i = index_at_cumdist(cumdist, start_pos)
-
-                cur_start = start_i
-                state = "IN_EVENT"
-                last_idx = idx
-
-        prev_idx = idx
-
-    # 最後のイベントを閉じる
-    if cur_start is not None and last_idx is not None and last_idx >= cur_start:
-        events.append((cur_start, last_idx))
-
-    return events
 
 
 def closest_segment_to_center_in_range(points, center_lat, center_lon, i_start, i_end, pad=6):
@@ -919,13 +802,19 @@ def main() -> None:
                             cross_notpass_trips += 1
                             continue
 
-                        events = find_crossing_events(points, cross.center_lat, cross.center_lon)
-                        if not events:
+                        closest_points = find_closest_approach_points(
+                            points,
+                            cross.center_lat,
+                            cross.center_lon,
+                            hit_dist_m=CLOSEST_HIT_DIST_M,
+                            min_separation_m=CLOSEST_MIN_SEPARATION_M,
+                        )
+                        if not closest_points:
                             cross_notpass_trips += 1
                             continue
 
-                        # --------- ここから：通過イベントごとに必ず1行出す ---------
-                        for pass_no, (ev_s, ev_e) in enumerate(events, start=1):
+                        # --------- ここから：最接近点ごとに必ず1行出す ---------
+                        for pass_no, cp in enumerate(closest_points, start=1):
                             trip_id = f"{trip_id_base}-P{pass_no:02d}"
 
                             cumdist = build_cumdist(points)
@@ -956,11 +845,10 @@ def main() -> None:
                             center_lat_calc_s = ""
                             center_time_calc_s = ""
 
-                            # 最近接線分（中心への最短距離となる線分）を求める
-                            seg_i_i, seg_t_f, seg_d_f = closest_segment_to_center_in_range(
-                                points, cross.center_lat, cross.center_lon, ev_s, ev_e, pad=6
-                            )
-                            seg_i = seg_i_i
+                            # 最接近候補をそのまま採用
+                            seg_i = cp["seg_i"]
+                            seg_t_f = cp["seg_t"]
+                            seg_d_f = cp["seg_d"]
 
                             # 交差点指定中心（比較表示用）
                             cross_center_lon_s = f"{cross.center_lon:.8f}"
@@ -975,11 +863,8 @@ def main() -> None:
                                 center_lon_calc_s = f"{lon_c:.8f}"
                                 center_lat_calc_s = f"{lat_c:.8f}"
 
-                            # --- 枝判定用中心位置（道なり距離）は seg_i/seg_t に統一 ---
-                            center_pos_for_branch = None
-                            if seg_i is not None:
-                                seg_len_dir = cumdist[seg_i + 1] - cumdist[seg_i]
-                                center_pos_for_branch = cumdist[seg_i] + seg_t_f * seg_len_dir
+                            # --- 枝判定用中心位置（道なり距離）は最接近候補を採用 ---
+                            center_pos_for_branch = cp["center_pos"]
 
                             # 流入/流出枝番：最近接線分の前後点を使用。
                             if seg_i is not None:
@@ -995,12 +880,7 @@ def main() -> None:
                             # ============================================================
                             # 枝判定角度：6段階判定（20-50m / 20-70m / 20-100m / 10-40m / 10-30m / 10-20m）
                             # ============================================================
-                            def _infer_branch_3step(
-                                center_pos_val: float,
-                                is_in: bool,
-                                ev_s: int | None = None,
-                                ev_e: int | None = None,
-                            ):
+                            def _infer_branch_3step(center_pos_val: float, is_in: bool):
                                 """
                                 Returns:
                                   angle_deg: Optional[float]
@@ -1013,24 +893,6 @@ def main() -> None:
                                 if center_pos_val is None:
                                     return None, "", float("inf"), ("IN:NO_CENTER" if is_in else "OUT:NO_CENTER"), None, None
 
-                                # 検証用：枝判定は常にイベント制約なしで補間する
-                                if DISABLE_EVENT_BOUNDS_FOR_BRANCH:
-                                    ev_s = None
-                                    ev_e = None
-
-                                use_event_bounds = (ev_s is not None) and (ev_e is not None)
-
-                                def interp_wrap(target_m: float):
-                                    if use_event_bounds:
-                                        return interpolate_point_at_distance_in_event(
-                                            points,
-                                            cumdist,
-                                            target_m,
-                                            ev_s,
-                                            ev_e,
-                                        )
-                                    return interpolate_point_at_distance(points, cumdist, target_m)
-
                                 any_in_range = False  # 1回でも必要点が取れたステップがあるか
                                 last_p_near = None
                                 last_p_far = None
@@ -1041,8 +903,8 @@ def main() -> None:
                                     th = step["th"]
 
                                     if is_in:
-                                        p_far = interp_wrap(center_pos_val - far)
-                                        p_near = interp_wrap(center_pos_val - near)
+                                        p_far = interpolate_point_at_distance(points, cumdist, center_pos_val - far)
+                                        p_near = interpolate_point_at_distance(points, cumdist, center_pos_val - near)
                                         if (p_far is None) or (p_near is None):
                                             continue
 
@@ -1055,8 +917,8 @@ def main() -> None:
                                         if diff <= th:
                                             return angle_try, br, diff, f"IN:{int(near)}-{int(far)}m", p_near, p_far
                                     else:
-                                        p_near = interp_wrap(center_pos_val + near)
-                                        p_far = interp_wrap(center_pos_val + far)
+                                        p_near = interpolate_point_at_distance(points, cumdist, center_pos_val + near)
+                                        p_far = interpolate_point_at_distance(points, cumdist, center_pos_val + far)
                                         if (p_near is None) or (p_far is None):
                                             continue
 
@@ -1080,39 +942,14 @@ def main() -> None:
                                 in_p_near, in_p_far = None, None
                                 out_p_near, out_p_far = None, None
                             else:
-                                use_event_bounds_for_branch = (len(events) >= 2) and (not DISABLE_EVENT_BOUNDS_FOR_BRANCH)
-                                if use_event_bounds_for_branch:
-                                    ev_s2, ev_e2 = expand_event_index_range_by_meter(
-                                        cumdist,
-                                        ev_s,
-                                        ev_e,
-                                        EVENT_BRANCH_BUFFER_M,
-                                    )
-                                    in_angle, in_branch, in_diff, in_method, in_p_near, in_p_far = _infer_branch_3step(
-                                        center_pos_for_branch,
-                                        True,
-                                        ev_s=ev_s2,
-                                        ev_e=ev_e2,
-                                    )
-                                    out_angle, out_branch, out_diff, out_method, out_p_near, out_p_far = _infer_branch_3step(
-                                        center_pos_for_branch,
-                                        False,
-                                        ev_s=ev_s2,
-                                        ev_e=ev_e2,
-                                    )
-                                else:
-                                    in_angle, in_branch, in_diff, in_method, in_p_near, in_p_far = _infer_branch_3step(
-                                        center_pos_for_branch,
-                                        True,
-                                        ev_s=None,
-                                        ev_e=None,
-                                    )
-                                    out_angle, out_branch, out_diff, out_method, out_p_near, out_p_far = _infer_branch_3step(
-                                        center_pos_for_branch,
-                                        False,
-                                        ev_s=None,
-                                        ev_e=None,
-                                    )
+                                in_angle, in_branch, in_diff, in_method, in_p_near, in_p_far = _infer_branch_3step(
+                                    center_pos_for_branch,
+                                    True,
+                                )
+                                out_angle, out_branch, out_diff, out_method, out_p_near, out_p_far = _infer_branch_3step(
+                                    center_pos_for_branch,
+                                    False,
+                                )
                             angle_method_str = f"{in_method}/{out_method}"
                             in_near_lon, in_near_lat = _fmt_ll(in_p_near)
                             in_far_lon, in_far_lat = _fmt_ll(in_p_far)
@@ -1146,9 +983,7 @@ def main() -> None:
                                     time_reason = "NO_SEGMENT"
                                     no_segment_trips += 1
                                 else:
-                                    center_pos_for_time = None
-                                    seg_len = cumdist[seg_i + 1] - cumdist[seg_i]
-                                    center_pos_for_time = cumdist[seg_i] + seg_t_f * seg_len
+                                    center_pos_for_time = center_pos_for_branch
 
                                     center_pos_m = f"{center_pos_for_time:.3f}"
 
