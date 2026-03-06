@@ -710,6 +710,7 @@ def main() -> None:
             branch_ok_trips = 0
             branch_unknown_trips = 0
             cross_notpass_trips = 0
+            closest_fail_trips = 0
             bad_time_trips = 0
             out_of_range_trips = 0
             time_ok_trips = 0
@@ -802,6 +803,13 @@ def main() -> None:
                             cross_notpass_trips += 1
                             continue
 
+                        # 不通過判定は旧来ロジックで行う。
+                        # 第2スクリーニング済みCSVであっても、確認のためここで再判定する。
+                        # なお、closest_points が空の場合は「不通過」ではなく「最接近点抽出失敗」とする。
+                        if not trip_passes_crossroad(points, cross.center_lat, cross.center_lon):
+                            cross_notpass_trips += 1
+                            continue
+
                         closest_points = find_closest_approach_points(
                             points,
                             cross.center_lat,
@@ -810,7 +818,11 @@ def main() -> None:
                             min_separation_m=CLOSEST_MIN_SEPARATION_M,
                         )
                         if not closest_points:
-                            cross_notpass_trips += 1
+                            closest_fail_trips += 1
+                            print(
+                                f"[WARN] closest point not found: file={trip_csv.name}, "
+                                f"run_id={run_id}, trip_id={trip_id_base}"
+                            )
                             continue
 
                         # --------- ここから：最接近点ごとに必ず1行出す ---------
@@ -1136,6 +1148,7 @@ def main() -> None:
                         f"成功: {branch_ok_trips:6d}  "
                         f"不明: {branch_unknown_trips:6d}  "
                         f"不通過: {cross_notpass_trips:6d}  "
+                        f"中心失敗: {closest_fail_trips:6d}  "
                         f"経過時間: {elapsed_cfg/60:5.1f}分"
                     )
                     if non_tty_mode:
@@ -1207,6 +1220,7 @@ def main() -> None:
         print(
             f"  完了: ファイル={total_files}, 曜日後={total_trips}, 行数={perf_rows}, "
             f"成功={branch_ok_trips}, 不明={branch_unknown_trips}, 不通過={cross_notpass_trips}, "
+            f"中心抽出失敗={closest_fail_trips}, "
             f"所要時間OK={time_ok_trips}, 所要時間NG={time_ng_trips}, "
             f"所要時間NG(時刻欠損)={bad_time_trips}, 所要時間NG(区間範囲外)={out_of_range_trips}, "
             f"所要時間NG(線分取得不可)={no_segment_trips}, "
@@ -1216,6 +1230,7 @@ def main() -> None:
         print(
             f"  [SUMMARY31] 対象トリップ={total_trips}, 枝判定成功={branch_ok_trips}, "
             f"枝不明={branch_unknown_trips}, 交差点不通過={cross_notpass_trips}, "
+            f"中心抽出失敗={closest_fail_trips}, "
             f"所要時間NG(時刻欠損)={bad_time_trips}, 所要時間NG(区間範囲外)={out_of_range_trips}, "
             f"所要時間NG(線分取得不可)={no_segment_trips}, "
             f"weekday_skip={weekday_skip}, bad_date={bad_date}, bad_points={bad_points}"
