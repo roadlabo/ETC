@@ -83,6 +83,7 @@ EVENT_SPLIT_OUT_DIST_M = 100.0   # これを超えたら「離脱した」とみ
 EVENT_SPLIT_IN_DIST_M  = None    # Noneの場合は CROSSROAD_HIT_DIST_M を使用（=設定半径）
 EVENT_PREBUFFER_M = 120.0        # イベント開始を hit_in から道なりで手前に伸ばす距離
 EVENT_BRANCH_BUFFER_M = 150.0    # 枝判定用：イベント範囲の前後を道なりで±この距離だけ許容
+DISABLE_EVENT_BOUNDS_FOR_BRANCH = True  # 一時検証用：枝判定でイベント範囲制約を無効化
 
 CROSSROAD_MIN_HITS = 1
 EARTH_RADIUS_M = 6_371_000.0
@@ -1012,6 +1013,11 @@ def main() -> None:
                                 if center_pos_val is None:
                                     return None, "", float("inf"), ("IN:NO_CENTER" if is_in else "OUT:NO_CENTER"), None, None
 
+                                # 検証用：枝判定は常にイベント制約なしで補間する
+                                if DISABLE_EVENT_BOUNDS_FOR_BRANCH:
+                                    ev_s = None
+                                    ev_e = None
+
                                 use_event_bounds = (ev_s is not None) and (ev_e is not None)
 
                                 def interp_wrap(target_m: float):
@@ -1074,7 +1080,7 @@ def main() -> None:
                                 in_p_near, in_p_far = None, None
                                 out_p_near, out_p_far = None, None
                             else:
-                                use_event_bounds_for_branch = (len(events) >= 2)
+                                use_event_bounds_for_branch = (len(events) >= 2) and (not DISABLE_EVENT_BOUNDS_FOR_BRANCH)
                                 if use_event_bounds_for_branch:
                                     ev_s2, ev_e2 = expand_event_index_range_by_meter(
                                         cumdist,
@@ -1098,10 +1104,14 @@ def main() -> None:
                                     in_angle, in_branch, in_diff, in_method, in_p_near, in_p_far = _infer_branch_3step(
                                         center_pos_for_branch,
                                         True,
+                                        ev_s=None,
+                                        ev_e=None,
                                     )
                                     out_angle, out_branch, out_diff, out_method, out_p_near, out_p_far = _infer_branch_3step(
                                         center_pos_for_branch,
                                         False,
+                                        ev_s=None,
+                                        ev_e=None,
                                     )
                             angle_method_str = f"{in_method}/{out_method}"
                             in_near_lon, in_near_lat = _fmt_ll(in_p_near)
