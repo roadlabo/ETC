@@ -812,7 +812,7 @@ def main() -> None:
                         # closest point extraction
                         # この距離以内の最接近候補だけ採用対象
                         # STEP3半径(radius_m)と同一値を使用
-                        log(f"[DEBUG] closest search radius = {args.radius_m} m")
+                        # log(f"[DEBUG] closest search radius = {args.radius_m} m")
                         closest_points = find_closest_approach_points(
                             points,
                             cross.center_lat,
