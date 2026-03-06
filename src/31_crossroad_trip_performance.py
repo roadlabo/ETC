@@ -567,6 +567,13 @@ def load_crossroad_file(path: Path) -> Crossroad:
     return cross
 
 
+def _fmt_ll(p):
+    if not p:
+        return "", ""
+    lat, lon = p
+    return f"{lon:.8f}", f"{lat:.8f}"
+
+
 HEADER = [
     "交差点ファイル名",
     "交差点ID",
@@ -584,6 +591,10 @@ HEADER = [
     "流入角度差(deg)",
     "流出角度差(deg)",
     "角度算出方式",
+    "IN_near_経度", "IN_near_緯度",
+    "IN_far_経度", "IN_far_緯度",
+    "OUT_near_経度", "OUT_near_緯度",
+    "OUT_far_経度", "OUT_far_緯度",
     "計測距離(m)",
     "所要時間(s)",
     "閑散時所要時間(s)",
@@ -966,9 +977,11 @@ def main() -> None:
                                   branch_no: str
                                   diff_deg: float
                                   method: str
+                                  p_near: Optional[tuple[float, float]]
+                                  p_far: Optional[tuple[float, float]]
                                 """
                                 if center_pos_val is None:
-                                    return None, "", float("inf"), ("IN:NO_CENTER" if is_in else "OUT:NO_CENTER")
+                                    return None, "", float("inf"), ("IN:NO_CENTER" if is_in else "OUT:NO_CENTER"), None, None
 
                                 use_event_bounds = (ev_s is not None) and (ev_e is not None)
 
@@ -984,6 +997,8 @@ def main() -> None:
                                     return interpolate_point_at_distance(points, cumdist, target_m)
 
                                 any_in_range = False  # 1回でも必要点が取れたステップがあるか
+                                last_p_near = None
+                                last_p_far = None
 
                                 for step in BRANCH_JUDGE_STEPS:
                                     near = step["near"]
@@ -997,11 +1012,13 @@ def main() -> None:
                                             continue
 
                                         any_in_range = True
+                                        last_p_near = p_near
+                                        last_p_far = p_far
                                         approach_bearing = bearing_deg(p_far[0], p_far[1], p_near[0], p_near[1])
                                         angle_try = (approach_bearing + 180.0) % 360.0
                                         br, diff = find_nearest_branch_with_diff(angle_try, cross.branches)
                                         if diff <= th:
-                                            return angle_try, br, diff, f"IN:{int(near)}-{int(far)}m"
+                                            return angle_try, br, diff, f"IN:{int(near)}-{int(far)}m", p_near, p_far
                                     else:
                                         p_near = interp_wrap(center_pos_val + near)
                                         p_far = interp_wrap(center_pos_val + far)
@@ -1009,20 +1026,24 @@ def main() -> None:
                                             continue
 
                                         any_in_range = True
+                                        last_p_near = p_near
+                                        last_p_far = p_far
                                         angle_try = bearing_deg(p_near[0], p_near[1], p_far[0], p_far[1])
                                         br, diff = find_nearest_branch_with_diff(angle_try, cross.branches)
                                         if diff <= th:
-                                            return angle_try, br, diff, f"OUT:{int(near)}-{int(far)}m"
+                                            return angle_try, br, diff, f"OUT:{int(near)}-{int(far)}m", p_near, p_far
 
                                 if not any_in_range:
-                                    return None, "", float("inf"), ("IN:OUT_OF_RANGE" if is_in else "OUT:OUT_OF_RANGE")
+                                    return None, "", float("inf"), ("IN:OUT_OF_RANGE" if is_in else "OUT:OUT_OF_RANGE"), None, None
 
-                                return None, "", float("inf"), ("IN:UNKNOWN" if is_in else "OUT:UNKNOWN")
+                                return None, "", float("inf"), ("IN:UNKNOWN" if is_in else "OUT:UNKNOWN"), last_p_near, last_p_far
 
                             # center_pos_for_branch が取れない場合は枝判定も不可（通過扱いは維持）
                             if center_pos_for_branch is None:
                                 in_angle, in_branch, in_diff, in_method = None, "", float("inf"), "IN:NO_SEGMENT"
                                 out_angle, out_branch, out_diff, out_method = None, "", float("inf"), "OUT:NO_SEGMENT"
+                                in_p_near, in_p_far = None, None
+                                out_p_near, out_p_far = None, None
                             else:
                                 use_event_bounds_for_branch = (len(events) >= 2)
                                 if use_event_bounds_for_branch:
@@ -1032,28 +1053,32 @@ def main() -> None:
                                         ev_e,
                                         EVENT_BRANCH_BUFFER_M,
                                     )
-                                    in_angle, in_branch, in_diff, in_method = _infer_branch_3step(
+                                    in_angle, in_branch, in_diff, in_method, in_p_near, in_p_far = _infer_branch_3step(
                                         center_pos_for_branch,
                                         True,
                                         ev_s=ev_s2,
                                         ev_e=ev_e2,
                                     )
-                                    out_angle, out_branch, out_diff, out_method = _infer_branch_3step(
+                                    out_angle, out_branch, out_diff, out_method, out_p_near, out_p_far = _infer_branch_3step(
                                         center_pos_for_branch,
                                         False,
                                         ev_s=ev_s2,
                                         ev_e=ev_e2,
                                     )
                                 else:
-                                    in_angle, in_branch, in_diff, in_method = _infer_branch_3step(
+                                    in_angle, in_branch, in_diff, in_method, in_p_near, in_p_far = _infer_branch_3step(
                                         center_pos_for_branch,
                                         True,
                                     )
-                                    out_angle, out_branch, out_diff, out_method = _infer_branch_3step(
+                                    out_angle, out_branch, out_diff, out_method, out_p_near, out_p_far = _infer_branch_3step(
                                         center_pos_for_branch,
                                         False,
                                     )
                             angle_method_str = f"{in_method}/{out_method}"
+                            in_near_lon, in_near_lat = _fmt_ll(in_p_near)
+                            in_far_lon, in_far_lat = _fmt_ll(in_p_far)
+                            out_near_lon, out_near_lat = _fmt_ll(out_p_near)
+                            out_far_lon, out_far_lat = _fmt_ll(out_p_far)
 
                             # 最近接線分の診断情報（可能な範囲で記録）
                             if seg_i is not None:
@@ -1179,6 +1204,14 @@ def main() -> None:
                                 in_diff_s,
                                 out_diff_s,
                                 angle_method_str,
+                                in_near_lon,
+                                in_near_lat,
+                                in_far_lon,
+                                in_far_lat,
+                                out_near_lon,
+                                out_near_lat,
+                                out_far_lon,
+                                out_far_lat,
                                 f"{dist_m:.3f}",
                                 f"{elapsed:.3f}" if elapsed is not None else "",
                                 "",

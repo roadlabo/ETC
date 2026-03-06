@@ -316,6 +316,7 @@ LEAFLET_HTML = r"""
 
   let branchLayer = null;
   let tripLayer = null;
+  let nfLayer = null;
   let branchPoints = [];
 
   let animTimer = null;
@@ -567,6 +568,7 @@ LEAFLET_HTML = r"""
 
     branchLayer.addTo(map);
     tripLayer.addTo(map);
+    nfLayer.addTo(map);
     trailLayer = L.layerGroup().addTo(map);
 
     map.setView([centerLat, centerLon], zoom || 17);
@@ -591,6 +593,9 @@ LEAFLET_HTML = r"""
     }
     if (!tripLayer || typeof tripLayer.addTo !== 'function') {
       tripLayer = L.layerGroup();
+    }
+    if (!nfLayer || typeof nfLayer.addTo !== 'function') {
+      nfLayer = L.layerGroup();
     }
   }
 
@@ -685,6 +690,7 @@ LEAFLET_HTML = r"""
     if (!map) initMap(tr.center_spec.lat, tr.center_spec.lon, 18);
 
     clearLayer(tripLayer);
+    clearLayer(nfLayer);
     // [ANIM] トリップ切替時は前回アニメと残像を必ず停止/掃除
     stopTrajectoryAnimation();
     clearTrail();
@@ -762,6 +768,25 @@ LEAFLET_HTML = r"""
         zIndexOffset: 1100,
       }).addTo(tripLayer);
     }
+
+    function drawNearFar(nearP, farP, color, labelPrefix){
+      if (!nearP || !farP) return;
+
+      const nearLL = [nearP.lat, nearP.lon];
+      const farLL = [farP.lat, farP.lon];
+
+      L.circleMarker(nearLL, {radius: 6, color: color, weight: 2, fillOpacity: 1.0})
+        .addTo(nfLayer).bindTooltip(labelPrefix + "_near");
+
+      L.circleMarker(farLL, {radius: 6, color: color, weight: 2, fillOpacity: 1.0})
+        .addTo(nfLayer).bindTooltip(labelPrefix + "_far");
+
+      L.polyline([farLL, nearLL], {color: color, weight: 3, dashArray: "2 6"})
+        .addTo(nfLayer);
+    }
+
+    drawNearFar(tr.in_near, tr.in_far, "red", "IN");
+    drawNearFar(tr.out_near, tr.out_far, "blue", "OUT");
 
     // ===== [ANIM] animation: neon bead loops on black dashed trajectory =====
     // [ANIM] use the same trajectory coordinates used by black dashed polyline
@@ -1550,6 +1575,15 @@ class BranchCheckWindow(QMainWindow):
             except Exception:
                 continue
 
+        def _get_ll(row_obj, lon_col, lat_col):
+            if lon_col not in self.df.columns or lat_col not in self.df.columns:
+                return None
+            lon = pd.to_numeric(row_obj.get(lon_col, ""), errors="coerce")
+            lat = pd.to_numeric(row_obj.get(lat_col, ""), errors="coerce")
+            if pd.isna(lon) or pd.isna(lat):
+                return None
+            return {"lat": float(lat), "lon": float(lon)}
+
         in_angle_deg = pd.to_numeric(row.get("流入角度deg"), errors="coerce") if "流入角度deg" in self.df.columns else np.nan
         out_angle_deg = pd.to_numeric(row.get("流出角度deg"), errors="coerce") if "流出角度deg" in self.df.columns else np.nan
         in_delta_deg = pd.to_numeric(row.get("流入角度差(deg)"), errors="coerce") if "流入角度差(deg)" in self.df.columns else np.nan
@@ -1576,6 +1610,10 @@ class BranchCheckWindow(QMainWindow):
             "in_delta_deg": (None if pd.isna(in_delta_deg) else float(in_delta_deg)),
             "out_delta_deg": (None if pd.isna(out_delta_deg) else float(out_delta_deg)),
             "raw_points": raw_points,
+            "in_near": _get_ll(row, "IN_near_経度", "IN_near_緯度"),
+            "in_far": _get_ll(row, "IN_far_経度", "IN_far_緯度"),
+            "out_near": _get_ll(row, "OUT_near_経度", "OUT_near_緯度"),
+            "out_far": _get_ll(row, "OUT_far_経度", "OUT_far_緯度"),
         }
         js = f"window._branchCheck.showTrip({json.dumps(tr)});"
         self._run_branch_js(js)
