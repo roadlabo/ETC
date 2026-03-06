@@ -77,7 +77,6 @@ CROSSROAD_SEG_HIT_DIST_M = 20.0
 # ============================================================
 # 最接近点（closest approach）ベースの通過抽出
 # ============================================================
-CLOSEST_HIT_DIST_M = 20.0          # この距離以内の最接近候補だけ採用対象
 CLOSEST_MIN_SEPARATION_M = 100.0   # 累積距離差100m以内の候補は同一通過として統合
 
 CROSSROAD_MIN_HITS = 1
@@ -810,11 +809,15 @@ def main() -> None:
                             cross_notpass_trips += 1
                             continue
 
+                        # closest point extraction
+                        # この距離以内の最接近候補だけ採用対象
+                        # STEP3半径(radius_m)と同一値を使用
+                        log(f"[DEBUG] closest search radius = {args.radius_m} m")
                         closest_points = find_closest_approach_points(
                             points,
                             cross.center_lat,
                             cross.center_lon,
-                            hit_dist_m=CLOSEST_HIT_DIST_M,
+                            hit_dist_m=args.radius_m,
                             min_separation_m=CLOSEST_MIN_SEPARATION_M,
                         )
                         if not closest_points:
