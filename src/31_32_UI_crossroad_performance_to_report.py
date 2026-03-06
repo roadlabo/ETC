@@ -46,6 +46,10 @@ WEEKDAY_KANJI = ["月", "火", "水", "木", "金", "土", "日"]
 WEEKDAY_KANJI_TO_ABBR = {"月": "MON", "火": "TUE", "水": "WED", "木": "THU", "金": "FRI", "土": "SAT", "日": "SUN"}
 
 RE_PROGRESS = re.compile(r"進捗:\s*(\d+)\s*/\s*(\d+)")
+# 31の集計定義（ログ出力由来）:
+# - 成功: IN/OUTの枝番が両方とも確定
+# - 枝不明: IN/OUTのどちらか一方以上が欠損
+# - 不通過: 半径内に一度も入らずperformance.csvに未出力
 RE_STATS = re.compile(r"曜日後:\s*(\d+).*?行数:\s*(\d+).*?成功:\s*(\d+).*?不明:\s*(\d+).*?不通過:\s*(\d+)")
 RE_DONE = re.compile(r"完了:\s*ファイル=(\d+).*?曜日後=(\d+).*?行数=(\d+).*?成功=(\d+).*?不明=(\d+).*?不通過=(\d+)")
 RE_LEVEL = re.compile(r"\[(INFO|WARN|WARNING|ERROR|DEBUG)\]")

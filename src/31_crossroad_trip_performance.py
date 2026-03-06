@@ -1277,7 +1277,7 @@ def main() -> None:
                             row_out[idx_t0] = ""
                             row_out[idx_delay] = ""
 
-                            if in_branch or out_branch:
+                            if (str(in_branch).strip() != "") and (str(out_branch).strip() != ""):
                                 branch_ok_trips += 1
                             else:
                                 branch_unknown_trips += 1

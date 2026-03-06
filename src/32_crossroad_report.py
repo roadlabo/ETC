@@ -115,12 +115,14 @@ class _ExcelReportHelper:
         crossroad_path: Path,
         image_path: Path,
         performance_path: Path,
+        all_df: pd.DataFrame,
         clean_df: pd.DataFrame,
         unique_dates: list[date],
     ) -> None:
         self.crossroad_path = crossroad_path
         self.image_path = image_path
         self.performance_path = performance_path
+        self.all_df = all_df
         self.clean_df = clean_df
         self.unique_dates = unique_dates
 
@@ -351,9 +353,11 @@ class _ExcelReportHelper:
             unique_weekdays = sorted({d.weekday() for d in self.unique_dates}, key=weekday_order.index)
             weekdays = "・".join(weekday_map[d] for d in unique_weekdays)
 
-        total_records = len(self.clean_df)
-        ok_records = int(self.clean_df["time_valid"].sum()) if not self.clean_df.empty else 0
+        total_records = len(self.all_df)
+        ok_records = int(self.all_df["time_valid"].sum()) if total_records else 0
         ng_records = total_records - ok_records
+        branch_ok = int((self.all_df["in_b"].notna() & self.all_df["out_b"].notna()).sum()) if total_records else 0
+        branch_ng = total_records - branch_ok
         date_range = self._format_date_range(start_date, end_date)
         total_days_text = f"{len(self.unique_dates)}日（{date_range}）" if date_range else f"{len(self.unique_dates)}日"
         info_pairs = [
@@ -362,6 +366,7 @@ class _ExcelReportHelper:
             ("総日数", total_days_text, None),
             ("対象曜日", weekdays, None),
             ("総レコード数（通過）（台）", total_records, None),
+            ("枝判定 OK/NG（台）", f"{branch_ok} / {branch_ng}", None),
             ("所要時間算出 OK/NG（台）", f"{ok_records} / {ng_records}", None),
         ]
 
@@ -633,7 +638,7 @@ def create_excel_report_headless(
     t_fallback = df_perf[COL_TIME_PRIMARY].fillna("").astype(str).str.strip()
     time_series = t_primary.where(t_primary != "", t_fallback)
 
-    data = pd.DataFrame(
+    data_all = pd.DataFrame(
         {
             "date": date_series,
             "in_b": in_branch,
@@ -644,18 +649,21 @@ def create_excel_report_headless(
             "time_valid": time_valid,
             "time": time_series,
         }
-    ).dropna(subset=["date", "in_b", "out_b"])
+    )
 
-    data["time_valid"] = data["time_valid"].fillna(0).astype(int)
-    data["in_b"] = data["in_b"].astype(int)
-    data["out_b"] = data["out_b"].astype(int)
-    unique_dates = sorted({d for d in data["date"]})
+    data_all["time_valid"] = pd.to_numeric(data_all["time_valid"], errors="coerce").fillna(0).astype(int)
+
+    data_clean = data_all.dropna(subset=["date", "in_b", "out_b"]).copy()
+    data_clean["in_b"] = data_clean["in_b"].astype(int)
+    data_clean["out_b"] = data_clean["out_b"].astype(int)
+    unique_dates = sorted({d for d in data_all["date"] if pd.notna(d)})
 
     helper = _ExcelReportHelper(
         crossroad_path=crossroad_csv,
         image_path=crossroad_img,
         performance_path=performance_csv,
-        clean_df=data,
+        all_df=data_all,
+        clean_df=data_clean,
         unique_dates=unique_dates,
     )
     helper.crossroad_df = df_cross
