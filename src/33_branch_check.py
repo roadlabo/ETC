@@ -15,11 +15,11 @@ NOGUI_MODE = "--nogui" in sys.argv[1:]
 UI_LOGO_FILENAME = "logo_33_branch_check.png"
 
 if not NOGUI_MODE:
-    from PyQt6.QtCore import Qt
+    from PyQt6.QtCore import Qt, QSize, QRect
     from PyQt6.QtCore import QTimer, QPropertyAnimation
     from PyQt6.QtCore import QUrl
     from PyQt6.QtWebEngineCore import QWebEngineSettings
-    from PyQt6.QtGui import QPixmap, QColor
+    from PyQt6.QtGui import QPixmap, QColor, QPainter
     from PyQt6.QtWidgets import (
         QApplication,
         QFileDialog,
@@ -38,15 +38,17 @@ if not NOGUI_MODE:
         QWidget,
         QGridLayout,
         QHeaderView,
+        QStyleOptionHeader,
+        QStyle,
     )
     from PyQt6.QtWebEngineWidgets import QWebEngineView
 else:
-    Qt = QUrl = QWebEngineSettings = QTimer = QPropertyAnimation = object
-    QPixmap = QColor = object
+    Qt = QUrl = QWebEngineSettings = QTimer = QPropertyAnimation = QSize = QRect = object
+    QPixmap = QColor = QPainter = object
     QApplication = QFileDialog = QHBoxLayout = QLabel = QGraphicsOpacityEffect = QGraphicsDropShadowEffect = QMainWindow = object
     QMessageBox = QPushButton = QProgressDialog = QSplitter = QTableWidget = object
     QTableWidgetItem = QVBoxLayout = QWidget = QGridLayout = object
-    QHeaderView = QWebEngineView = object
+    QHeaderView = QStyleOptionHeader = QStyle = QWebEngineView = object
 
 if not NOGUI_MODE:
     # --- Table sort: force numeric sort via custom item ---
@@ -65,9 +67,61 @@ if not NOGUI_MODE:
             except Exception:
                 pass
             return super().__lt__(other)
+
+
+    class WrapHeader(QHeaderView):
+        def __init__(self, orientation, parent=None):
+            super().__init__(orientation, parent)
+            self.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.setSectionsClickable(True)
+            self.setStretchLastSection(False)
+
+        def sectionSizeFromContents(self, logicalIndex: int) -> QSize:
+            base = super().sectionSizeFromContents(logicalIndex)
+            model = self.model()
+            if model is None:
+                return base
+
+            text = str(model.headerData(logicalIndex, self.orientation(), Qt.ItemDataRole.DisplayRole) or "")
+            fm = self.fontMetrics()
+
+            # 幅は抑えめ、高さで稼ぐ
+            max_width = max(56, min(96, base.width()))
+            rect = fm.boundingRect(
+                QRect(0, 0, max_width, 200),
+                int(Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignCenter),
+                text,
+            )
+            return QSize(max_width, max(base.height(), rect.height() + 14))
+
+        def paintSection(self, painter: QPainter, rect: QRect, logicalIndex: int):
+            if not rect.isValid():
+                return
+
+            opt = QStyleOptionHeader()
+            self.initStyleOption(opt)
+            opt.rect = rect
+            opt.section = logicalIndex
+            opt.text = ""
+            self.style().drawControl(QStyle.ControlElement.CE_Header, opt, painter, self)
+
+            model = self.model()
+            text = ""
+            if model is not None:
+                text = str(model.headerData(logicalIndex, self.orientation(), Qt.ItemDataRole.DisplayRole) or "")
+
+            painter.save()
+            text_rect = rect.adjusted(4, 4, -4, -4)
+            painter.drawText(
+                text_rect,
+                int(Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter),
+                text,
+            )
+            painter.restore()
 else:
     ROLE_DFKEY = ROLE_SORTKEY = None
     SortableItem = QTableWidgetItem
+    WrapHeader = QHeaderView
 
 # -----------------------------
 # Utilities
@@ -1295,6 +1349,8 @@ class BranchCheckWindow(QMainWindow):
         left_layout.addLayout(top_bar)
 
         self.table = QTableWidget()
+        wrap_header = WrapHeader(Qt.Orientation.Horizontal, self.table)
+        self.table.setHorizontalHeader(wrap_header)
         self.table.setColumnCount(len(DISPLAY_COLS_IN_TABLE))
         self.table.setHorizontalHeaderLabels(DISPLAY_COLS_IN_TABLE)
         # IMPORTANT: populate中はsortingを必ずOFF（ONだと行が動いて他列が空白になる）
@@ -1306,8 +1362,10 @@ class BranchCheckWindow(QMainWindow):
         self.table.setAlternatingRowColors(True)
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        hh.setDefaultSectionSize(78)
-        hh.setMinimumSectionSize(60)
+        hh.setMinimumSectionSize(36)
+        hh.setDefaultSectionSize(64)
+        hh.setFixedHeight(52)
+        hh.setTextElideMode(Qt.TextElideMode.ElideNone)
 
         # --- DBG: 4行目が空に見える原因調査 ---
         try:
@@ -1317,6 +1375,26 @@ class BranchCheckWindow(QMainWindow):
             _ = {c: bool(pd.isna(row.get(c, None))) for c in DISPLAY_COLS_IN_TABLE}
         except Exception:
             pass
+
+        preferred_widths = {
+            "運行日": 74,
+            "曜日": 46,
+            "運行ID": 72,
+            "トリップID": 70,
+            "自動車の種別": 72,
+            "用途": 44,
+            "所要時間算出可否": 86,
+            "遅れ時間(s)": 78,
+            "流入枝番": 52,
+            "流出枝番": 52,
+            "流入角度差(deg)": 86,
+            "流出角度差(deg)": 86,
+            "地図表示可否": 68,
+            "地図表示不可理由": 150,
+        }
+
+        for idx, col_name in enumerate(DISPLAY_COLS_IN_TABLE):
+            self.table.setColumnWidth(idx, preferred_widths.get(col_name, 64))
 
         for r in range(len(self.df)):
             df_i = int(self.df.index[r])
