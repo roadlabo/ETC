@@ -81,6 +81,7 @@ CROSSROAD_SEG_HIT_DIST_M = 20.0
 # ============================================================
 EVENT_SPLIT_OUT_DIST_M = 100.0   # これを超えたら「離脱した」とみなしてarmedになる
 EVENT_SPLIT_IN_DIST_M  = None    # Noneの場合は CROSSROAD_HIT_DIST_M を使用（=設定半径）
+EVENT_PREBUFFER_M = 120.0        # イベント開始を hit_in から道なりで手前に伸ばす距離
 EVENT_BRANCH_BUFFER_M = 150.0    # 枝判定用：イベント範囲の前後を道なりで±この距離だけ許容
 
 CROSSROAD_MIN_HITS = 1
@@ -211,6 +212,19 @@ def expand_event_index_range_by_meter(cumdist, ev_s, ev_e, buffer_m):
     if hi - lo < 1:
         return ev_s, ev_e
     return lo, hi
+
+
+def index_at_cumdist(cumdist, target_m):
+    """cumdist配列から、target_m以上となる最初のindexを返す（範囲内にクランプ）。"""
+    if not cumdist:
+        return 0
+    target_m = max(0.0, min(float(target_m), float(cumdist[-1])))
+    i = bisect.bisect_left(cumdist, target_m)
+    if i < 0:
+        return 0
+    if i >= len(cumdist):
+        return len(cumdist) - 1
+    return i
 
 
 def interpolate_at_distance(points, dt_list, cumdist, target_m):
@@ -346,6 +360,7 @@ def find_crossing_events(points, center_lat, center_lon):
 
     R_IN = EVENT_SPLIT_IN_DIST_M if EVENT_SPLIT_IN_DIST_M is not None else CROSSROAD_HIT_DIST_M
     R_OUT = EVENT_SPLIT_OUT_DIST_M
+    cumdist = build_cumdist(points)
 
     events = []
 
@@ -375,7 +390,14 @@ def find_crossing_events(points, center_lat, center_lon):
             # まだイベント外。設定半径に入ったらイベント開始
             if hit_in:
                 # 線分HITで入った場合、イベント開始を一つ前の点に寄せる（中心前後の欠けを防ぐ）
-                cur_start = prev_idx if (hit_in_by_seg and prev_idx is not None) else idx
+                start_i = prev_idx if (hit_in_by_seg and prev_idx is not None) else idx
+
+                # イベント開始を道なりで手前へ前倒し
+                if EVENT_PREBUFFER_M and EVENT_PREBUFFER_M > 0 and start_i is not None:
+                    start_pos = cumdist[start_i] - EVENT_PREBUFFER_M
+                    start_i = index_at_cumdist(cumdist, start_pos)
+
+                cur_start = start_i
                 state = "IN_EVENT"
                 last_idx = idx
 
@@ -397,7 +419,14 @@ def find_crossing_events(points, center_lat, center_lon):
                     events.append((cur_start, prev_idx))
 
                 # 新イベント開始（線分HITなら一つ前に寄せる）
-                cur_start = prev_idx if (hit_in_by_seg and prev_idx is not None) else idx
+                start_i = prev_idx if (hit_in_by_seg and prev_idx is not None) else idx
+
+                # 新イベント開始を道なりで手前へ前倒し
+                if EVENT_PREBUFFER_M and EVENT_PREBUFFER_M > 0 and start_i is not None:
+                    start_pos = cumdist[start_i] - EVENT_PREBUFFER_M
+                    start_i = index_at_cumdist(cumdist, start_pos)
+
+                cur_start = start_i
                 state = "IN_EVENT"
                 last_idx = idx
 
