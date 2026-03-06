@@ -880,8 +880,17 @@ DISPLAY_COLS_IN_TABLE = [
     "流出枝番",
     "流入角度差(deg)",
     "流出角度差(deg)",
+    "地図表示可否",
+    "地図表示不可理由",
 ]
 DISPLAY_COLS_IN_TABLE = [c for c in DISPLAY_COLS_IN_TABLE if c is not None]
+
+COORD_COLS = [
+    "計測開始_経度(補間)", "計測開始_緯度(補間)",
+    "計測終了_経度(補間)", "計測終了_緯度(補間)",
+    "交差点中心_経度", "交差点中心_緯度",
+    "算出中心_経度", "算出中心_緯度",
+]
 
 NUMERIC_SORT_COLS = {
     "運行日",
@@ -977,13 +986,9 @@ class BranchCheckWindow(QMainWindow):
                 self.df[c] = pd.to_numeric(self.df[c], errors="coerce")
 
         self._ensure_speed_column()
+        self._add_map_visibility_columns()
         self._report_progress("ソート準備中…")
         self._sort_trips()
-
-        self.df = self.df.dropna(subset=[
-            "計測開始_経度(補間)", "計測開始_緯度(補間)", "計測終了_経度(補間)", "計測終了_緯度(補間)",
-            "交差点中心_経度", "交差点中心_緯度", "算出中心_経度", "算出中心_緯度",
-        ]).reset_index(drop=True)
 
         # 交差点中心（パフォーマンスCSV側）
         self.performance_center_lon = float(np.nanmedian(self.df["交差点中心_経度"].to_numpy()))
@@ -1342,6 +1347,9 @@ class BranchCheckWindow(QMainWindow):
                     except Exception:
                         pass
 
+                if row.get("地図表示可否", "") == "不可":
+                    item.setBackground(QColor(255, 240, 240))
+
                 if c_idx == 0:
                     item.setData(ROLE_DFKEY, df_i)
 
@@ -1425,6 +1433,19 @@ class BranchCheckWindow(QMainWindow):
         speed = dist / duration * 3.6
         speed = speed.where(valid, np.nan)
         self.df.loc[:, speed_col] = speed
+
+    @staticmethod
+    def _missing_coord_reason(row: pd.Series) -> str:
+        missing = []
+        for c in COORD_COLS:
+            v = row.get(c, None)
+            if pd.isna(v) or str(v).strip() == "":
+                missing.append(c)
+        return ",".join(missing)
+
+    def _add_map_visibility_columns(self) -> None:
+        self.df["地図表示不可理由"] = self.df.apply(self._missing_coord_reason, axis=1)
+        self.df["地図表示可否"] = self.df["地図表示不可理由"].apply(lambda v: "可" if v == "" else "不可")
 
     def _sort_trips(self) -> None:
         ok_col = "所要時間算出可否"
@@ -1542,6 +1563,15 @@ class BranchCheckWindow(QMainWindow):
             elif key in {"流入枝番", "流出枝番"}:
                 text = self._format_branch(v)
             self.detail_labels[key].setText(text)
+
+        missing_reason = row.get("地図表示不可理由", "")
+        if missing_reason:
+            selected_row = self.table.currentRow()
+            if selected_row >= 0:
+                self.statusBar().showMessage(
+                    f"Selected: {selected_row + 1}/{len(self.df)} | 地図表示不可: {missing_reason}"
+                )
+            return
 
         # map payload
         raw_cols = [
