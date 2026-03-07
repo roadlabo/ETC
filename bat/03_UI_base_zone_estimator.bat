@@ -1,26 +1,24 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 
-REM =====================================
-REM Base Zone Estimator Launcher
-REM =====================================
+rem --- resolve repo root (this bat is in bat\) ---
+set "BAT_DIR=%~dp0"
+for %%I in ("%BAT_DIR%..") do set "ROOT_DIR=%%~fI"
 
-cd /d "%~dp0"
+set "PYW=%ROOT_DIR%\runtime\python\pythonw.exe"
+set "PY=%ROOT_DIR%\runtime\python\python.exe"
 
-REM runtime python を優先使用
-if exist "runtime\python.exe" (
-    set PYTHON_EXE=runtime\python.exe
+set "APP=%ROOT_DIR%\src\03_UI_base_zone_estimator.py"
+
+set "LOGDIR=%ROOT_DIR%\logs"
+if not exist "%LOGDIR%" mkdir "%LOGDIR%"
+set "LOG=%LOGDIR%\03_UI_base_zone_estimator_console.log"
+
+rem --- launch (NO start/cmd; direct pythonw/python) ---
+if exist "%PYW%" (
+  "%PYW%" "%APP%" 1>>"%LOG%" 2>>&1
 ) else (
-    set PYTHON_EXE=python
+  "%PY%" "%APP%" 1>>"%LOG%" 2>>&1
 )
 
-REM UI起動
-"%PYTHON_EXE%" "03_UI_base_zone_estimator.py"
-
-if errorlevel 1 (
-    echo.
-    echo エラーが発生しました。
-    pause
-)
-
-endlocal
+exit /b %errorlevel%

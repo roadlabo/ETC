@@ -175,7 +175,9 @@ class MainWindow(QMainWindow):
             args.append("--recursive")
 
         self.proc = QProcess(self)
-        runtime_py = Path(__file__).parent / "runtime" / "python.exe"
+
+        root_dir = Path(__file__).resolve().parent.parent
+        runtime_py = root_dir / "runtime" / "python" / "python.exe"
 
         if runtime_py.exists():
             python_exec = str(runtime_py)
