@@ -175,7 +175,14 @@ class MainWindow(QMainWindow):
             args.append("--recursive")
 
         self.proc = QProcess(self)
-        self.proc.setProgram(sys.executable)
+        runtime_py = Path(__file__).parent / "runtime" / "python.exe"
+
+        if runtime_py.exists():
+            python_exec = str(runtime_py)
+        else:
+            python_exec = sys.executable
+
+        self.proc.setProgram(python_exec)
         self.proc.setArguments(args)
         self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.proc.readyReadStandardOutput.connect(self.on_output)
