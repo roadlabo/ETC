@@ -18,7 +18,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
@@ -148,6 +148,45 @@ def parse_time_to_minutes(text: str | None) -> int | None:
     return None
 
 
+def parse_time_to_date(text: str | None) -> date | None:
+    if not text:
+        return None
+    t = str(text).strip()
+    if not t:
+        return None
+    m = re.search(r"(\d{4})[-/]?(\d{2})[-/]?(\d{2})", t)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+    digits = re.sub(r"\D", "", t)
+    if len(digits) >= 8:
+        try:
+            return datetime.strptime(digits[:8], "%Y%m%d").date()
+        except ValueError:
+            return None
+    return None
+
+
+def compact_dates(dates: list[date]) -> str:
+    if not dates:
+        return ""
+    by_ym: dict[tuple[int, int], list[int]] = defaultdict(list)
+    for d in sorted(dates):
+        by_ym[(d.year, d.month)].append(d.day)
+    parts = []
+    prev_year = None
+    for (y, m), ds in sorted(by_ym.items()):
+        dpart = "+".join(str(x) for x in sorted(ds))
+        if prev_year != y:
+            parts.append(f"{y}_{m}_{dpart}")
+        else:
+            parts.append(f"{m}_{dpart}")
+        prev_year = y
+    return "/".join(parts)
+
+
 def _open_csv_dict_reader(path: Path) -> tuple[csv.DictReader, object] | tuple[None, None]:
     for enc in ENCODINGS:
         try:
@@ -251,6 +290,7 @@ def process_file(
     polygons: Sequence[PolygonZone],
     center_lon: float,
     center_lat: float,
+    selected_dates: set[date],
 ) -> dict | None:
     reader, handle = _open_csv_dict_reader(file_path)
     if not reader or not handle:
@@ -264,12 +304,15 @@ def process_file(
         first = last = None
         c = 0
         for row in reader:
-            mm = parse_time_to_minutes(row.get(t_key))
+            ts = (row.get(t_key) or "").strip()
+            d = parse_time_to_date(ts)
+            if d is None or d not in selected_dates:
+                continue
+            mm = parse_time_to_minutes(ts)
             if mm is None or not (start_min <= mm < end_min):
                 continue
             lon = parse_float(row.get(lon_key))
             lat = parse_float(row.get(lat_key))
-            ts = (row.get(t_key) or "").strip()
             rec = {"lon": lon, "lat": lat, "time": ts}
             if first is None:
                 first = rec
@@ -311,6 +354,8 @@ def main() -> int:
     ap.add_argument("--center-lon", type=float, default=DEFAULT_CENTER_LON)
     ap.add_argument("--center-lat", type=float, default=DEFAULT_CENTER_LAT)
     ap.add_argument("--center-name", default=DEFAULT_CENTER_NAME)
+    ap.add_argument("--dates", required=True, help="JSON array of YYYY-MM-DD")
+    ap.add_argument("--dates-compact", default="")
     ap.add_argument("--keep-out-of-zone", action="store_true", help="互換オプション(現在は方向別ゾーン優先)")
     args = ap.parse_args()
 
@@ -332,6 +377,17 @@ def main() -> int:
     if not (-180 <= args.center_lon <= 180 and -90 <= args.center_lat <= 90):
         log("[ERROR] center座標が不正")
         return 2
+    try:
+        date_tokens = json.loads(args.dates)
+        if not isinstance(date_tokens, list):
+            raise ValueError
+        selected_dates = {datetime.strptime(str(x), "%Y-%m-%d").date() for x in date_tokens}
+    except Exception:
+        log("[ERROR] --dates の形式が不正です。JSON配列(YYYY-MM-DD)を指定してください")
+        return 2
+    if not selected_dates:
+        log("[ERROR] 対象日が0件です")
+        return 2
 
     csv_files = _iter_csv_files(input_dir, args.recursive)
     if not csv_files:
@@ -348,6 +404,7 @@ def main() -> int:
     log(f"[INFO] 開始: {now_text()}")
     log(f"[INFO] 対象CSV数: {total}")
     log(f"[INFO] 指定30分帯: {slot}")
+    log(f"[INFO] 対象日数: {len(selected_dates)}")
     log(f"[INFO] ゾーン数: {len(polygons)}")
     log(f"[INFO] 方向判定中心点: {args.center_name} lon={args.center_lon} lat={args.center_lat}")
 
@@ -362,7 +419,7 @@ def main() -> int:
 
     for i, fp in enumerate(csv_files, 1):
         try:
-            rec = process_file(fp, args.slot_index, polygons, args.center_lon, args.center_lat)
+            rec = process_file(fp, args.slot_index, polygons, args.center_lon, args.center_lat, selected_dates)
         except Exception as e:
             log(f"[ERROR] {fp.name}: {e}")
             log(f"進捗ファイル: {i}/{total}")
@@ -432,7 +489,8 @@ def main() -> int:
         fields = [
             "slot", "total_trips_in_slot", "same_zone_od_count", "same_zone_od_ratio",
             "east_zone_count", "west_zone_count", "north_zone_count", "south_zone_count", "missing_count",
-            "center_lon", "center_lat", "center_name",
+                "center_lon", "center_lat", "center_name",
+                "selected_day_count", "selected_dates_compact",
         ]
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
@@ -450,6 +508,8 @@ def main() -> int:
                 "center_lon": args.center_lon,
                 "center_lat": args.center_lat,
                 "center_name": args.center_name,
+                "selected_day_count": len(selected_dates),
+                "selected_dates_compact": args.dates_compact or compact_dates(sorted(selected_dates)),
             }
         )
 

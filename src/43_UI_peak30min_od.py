@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import math
 import os
@@ -8,7 +9,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, QProcess, QRect, Qt, QTimer, pyqtSignal, pyqtSlot
@@ -21,6 +22,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -28,6 +30,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -211,6 +214,9 @@ class MainWindow(QMainWindow):
         self.input_folder: Path | None = None
         self.zoning_file: Path | None = None
         self.csv_files: list[Path] = []
+        self.available_dates: list[date] = []
+        self.selected_dates: set[date] = set()
+        self.day_cells: dict[date, QPushButton] = {}
         self.total_files = self.done_files = self.error_count = 0
         self.zone_count = 0
         self.started_at = 0.0
@@ -247,15 +253,32 @@ class MainWindow(QMainWindow):
         row1 = QHBoxLayout()
         self.btn_pick = QPushButton("第1スクリーニングフォルダ選択"); self.btn_pick.clicked.connect(self.pick_folder)
         self.lbl_folder = QLabel("未選択")
-        self.chk_recursive = QCheckBox("サブフォルダも含める"); self.chk_recursive.stateChanged.connect(self.refresh_csv)
+        self.chk_recursive = QCheckBox("サブフォルダも含める"); self.chk_recursive.stateChanged.connect(self.on_recursive_changed)
         row1.addWidget(self.btn_pick); row1.addWidget(self.lbl_folder, 1); row1.addWidget(self.chk_recursive)
         self.lbl_csv = QLabel("対象CSV数: 0")
         s1.addLayout(row1); s1.addWidget(self.lbl_csv)
         left.addWidget(StepBox("STEP 1：第1スクリーニングフォルダの選択", s1w))
 
         # STEP2
+        s2w = QWidget(); s2 = QVBoxLayout(s2w); s2.setContentsMargins(0, 0, 0, 0)
+        togg = QHBoxLayout()
+        self.btn_all = QPushButton("ALL"); self.btn_all.clicked.connect(self.toggle_all_dates); togg.addWidget(self.btn_all)
+        self.wday_buttons = []
+        for i, wd in enumerate(["月", "火", "水", "木", "金", "土", "日"]):
+            b = QPushButton(wd); b.clicked.connect(lambda _=False, x=i: self.toggle_weekday(x)); self.wday_buttons.append(b); togg.addWidget(b)
+        togg.addStretch(1)
+        self.lbl_date_stats = QLabel("選択中: 0日 / 全0日")
+        s2.addLayout(togg); s2.addWidget(self.lbl_date_stats)
+        self.calendar_container = QWidget(); self.calendar_layout = QVBoxLayout(self.calendar_container); self.calendar_layout.setContentsMargins(0, 0, 0, 0)
+        self.calendar_layout.addWidget(QLabel("フォルダ選択後に日付をスキャンします。"))
+        self.scr = QScrollArea(); self.scr.setWidgetResizable(True); self.scr.setWidget(self.calendar_container)
+        s2.addWidget(self.scr, 1)
+        left.addWidget(StepBox("STEP 2：対象日の選択（カレンダー）", s2w), 1)
+
+        # STEP3
         s2w = QWidget(); s2 = QFormLayout(s2w)
         self.cmb_slot = QComboBox(); self.cmb_slot.addItems(self._slot_labels())
+        self.cmb_slot.currentIndexChanged.connect(self._update_conditions)
         zrow = QHBoxLayout()
         self.btn_zone = QPushButton("ゾーニングCSV選択"); self.btn_zone.clicked.connect(self.pick_zoning)
         self.lbl_zone = QLabel("未選択")
@@ -275,26 +298,23 @@ class MainWindow(QMainWindow):
         s2.addRow("30分帯", self.cmb_slot)
         s2.addRow("ゾーニング", w)
         s2.addRow("方向判定中心点", cw2)
-        left.addWidget(StepBox("STEP 2：30分帯とゾーニングファイルの指定", s2w))
+        left.addWidget(StepBox("STEP 3：30分帯・ゾーニング・中心点の指定", s2w))
 
-        # STEP3
+        # STEP4
         s3w = QWidget(); s3 = QVBoxLayout(s3w); s3.setContentsMargins(0, 0, 0, 0)
         self.lbl_conditions = QLabel("対象CSV数: 0\n指定30分帯: --\nゾーン数: 0")
         self.lbl_out_desc = QLabel("ポリゴン外の点は、設定した中心点との位置関係に基づき東西南北ゾーンへ自動分類します。\n座標欠損のみ MISSING とします。")
         self.lbl_out_desc.setWordWrap(True)
         self.chk_single_info = QCheckBox("30分帯内に1点しかない場合は同一点をO/Dとみなす（固定）")
         self.chk_single_info.setChecked(True); self.chk_single_info.setEnabled(False)
-        s3.addWidget(self.lbl_conditions); s3.addWidget(self.lbl_out_desc); s3.addWidget(self.chk_single_info)
-        left.addWidget(StepBox("STEP 3：OD抽出条件の確認", s3w))
-
-        # STEP4
-        s4w = QWidget(); s4 = QHBoxLayout(s4w); s4.setContentsMargins(0, 0, 0, 0)
+        s4 = QHBoxLayout(); s4.setContentsMargins(0, 0, 0, 0)
         self.btn_run = QPushButton("OD抽出スタート"); self.btn_run.clicked.connect(self.start_run)
         self.btn_open_matrix = QPushButton("出力CSVを開く"); self.btn_open_matrix.clicked.connect(lambda: self._open(self.last_output_matrix)); self.btn_open_matrix.setEnabled(False)
         self.btn_open_detail = QPushButton("明細CSVを開く"); self.btn_open_detail.clicked.connect(lambda: self._open(self.last_output_detail)); self.btn_open_detail.setEnabled(False)
         self.btn_open_folder = QPushButton("保存先フォルダを開く"); self.btn_open_folder.clicked.connect(self.open_folder); self.btn_open_folder.setEnabled(False)
         s4.addWidget(self.btn_run); s4.addWidget(self.btn_open_matrix); s4.addWidget(self.btn_open_detail); s4.addWidget(self.btn_open_folder); s4.addStretch(1)
-        left.addWidget(StepBox("STEP 4：実行", s4w))
+        s3.addWidget(self.lbl_conditions); s3.addWidget(self.lbl_out_desc); s3.addWidget(self.chk_single_info); s3.addLayout(s4)
+        left.addWidget(StepBox("STEP 4：OD抽出条件の確認と実行", s3w))
 
         self.chart = RealtimeODChart(); left.addWidget(self.chart)
         self.progress = QProgressBar(); self.progress.setRange(0, 1000); left.addWidget(self.progress)
@@ -328,6 +348,7 @@ class MainWindow(QMainWindow):
             QPushButton{background:#083424;border:1px solid #13d989;border-radius:10px;padding:6px 12px;}
             QPushButton:disabled{background:#0d1814;color:#6f887e;border-color:#365247;}
             QComboBox,QPlainTextEdit,QProgressBar{background:#0b1412;border:1px solid #1f4a3d;border-radius:8px;}
+            QScrollArea{border:1px solid #1f4a3d;}
             QLabel#title{color:#76ff8e;}
         """)
 
@@ -353,7 +374,11 @@ class MainWindow(QMainWindow):
             return
         self.input_folder = Path(d)
         self.lbl_folder.setText(self.input_folder.name)
-        self.refresh_csv()
+        self.refresh_csv_and_dates()
+
+    def on_recursive_changed(self):
+        if self.input_folder:
+            self.refresh_csv_and_dates()
 
     def _list_csv(self) -> list[Path]:
         if not self.input_folder:
@@ -361,7 +386,32 @@ class MainWindow(QMainWindow):
         gen = self.input_folder.rglob("*.csv") if self.chk_recursive.isChecked() else self.input_folder.glob("*.csv")
         return sorted(p for p in gen if p.is_file())
 
-    def refresh_csv(self):
+    def _scan_dates(self, files: list[Path]) -> list[date]:
+        out: set[date] = set()
+        for fp in files:
+            try:
+                with fp.open("r", encoding="utf-8-sig", errors="ignore", newline="") as f:
+                    r = csv.reader(f)
+                    first = next(r, None)
+                    if first is None:
+                        continue
+                    idx = 6
+                    has_header = any(not re.fullmatch(r"[-+]?\d+(\.\d+)?", c.strip()) for c in first)
+                    rows = r if has_header else [first]
+                    for row in rows:
+                        if idx >= len(row):
+                            continue
+                        tok = row[idx].strip()
+                        if len(tok) >= 8 and tok[:8].isdigit():
+                            try:
+                                out.add(datetime.strptime(tok[:8], "%Y%m%d").date())
+                            except ValueError:
+                                pass
+            except Exception:
+                continue
+        return sorted(out)
+
+    def refresh_csv_and_dates(self):
         if not self.input_folder:
             return
         self.csv_files = self._list_csv()
@@ -371,7 +421,109 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "CSVが0件です。")
             self.input_folder = None
             self.lbl_folder.setText("未選択")
+            self.available_dates = []
+            self.selected_dates = set()
+            self._rebuild_calendar()
+            self._update_conditions()
+            return
+        self.available_dates = self._scan_dates(self.csv_files)
+        self.selected_dates = set(self.available_dates)
+        self._rebuild_calendar()
+        if not self.available_dates:
+            QMessageBox.warning(self, "警告", "CSVから抽出できる日付がありません。")
+        self.append_log(f"[INFO] 対象CSV数: {self.total_files}")
+        self.append_log(f"[INFO] 抽出日数: {len(self.available_dates)}")
         self._update_conditions()
+
+    def _rebuild_calendar(self):
+        while self.calendar_layout.count():
+            item = self.calendar_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        self.day_cells.clear()
+        if not self.available_dates:
+            self.calendar_layout.addWidget(QLabel("日付データなし"))
+            self.lbl_date_stats.setText("選択中: 0日 / 全0日")
+            return
+        by_month: dict[tuple[int, int], list[date]] = defaultdict(list)
+        for d in self.available_dates:
+            by_month[(d.year, d.month)].append(d)
+        for ym in sorted(by_month.keys()):
+            y, m = ym
+            box = QFrame(); lv = QVBoxLayout(box)
+            lv.addWidget(QLabel(f"{y}年{m}月"))
+            grid = QGridLayout(); lv.addLayout(grid)
+            for c, wd in enumerate(["月", "火", "水", "木", "金", "土", "日"]):
+                h = QLabel(wd); h.setAlignment(Qt.AlignmentFlag.AlignCenter); grid.addWidget(h, 0, c)
+            row = 1
+            col = date(y, m, 1).weekday()
+            for d in sorted(by_month[ym]):
+                b = QPushButton(str(d.day)); b.setCheckable(True); b.setChecked(True)
+                b.clicked.connect(lambda _=False, dd=d: self.toggle_day(dd))
+                grid.addWidget(b, row, col)
+                self.day_cells[d] = b
+                col += 1
+                if col >= 7:
+                    col = 0; row += 1
+            self.calendar_layout.addWidget(box)
+        self.calendar_layout.addStretch(1)
+        self._update_day_styles()
+
+    def _update_day_styles(self):
+        for d, b in self.day_cells.items():
+            on = d in self.selected_dates
+            b.setChecked(on)
+            if on:
+                b.setStyleSheet("background:#00aa66;border:1px solid #76ff8e;border-radius:7px;")
+            else:
+                b.setStyleSheet("background:#1a2320;border:1px solid #42544d;border-radius:7px;")
+        self.lbl_date_stats.setText(f"選択中: {len(self.selected_dates)}日 / 全{len(self.available_dates)}日")
+        self._update_conditions()
+
+    def toggle_day(self, d: date):
+        if d in self.selected_dates:
+            self.selected_dates.remove(d)
+        else:
+            self.selected_dates.add(d)
+        self._update_day_styles()
+
+    def toggle_all_dates(self):
+        if len(self.selected_dates) == len(self.available_dates):
+            self.selected_dates.clear()
+        else:
+            self.selected_dates = set(self.available_dates)
+        self._update_day_styles()
+
+    def toggle_weekday(self, monday0: int):
+        targets = [d for d in self.available_dates if d.weekday() == monday0]
+        if not targets:
+            return
+        all_on = all(d in self.selected_dates for d in targets)
+        if all_on:
+            for d in targets:
+                self.selected_dates.discard(d)
+        else:
+            for d in targets:
+                self.selected_dates.add(d)
+        self._update_day_styles()
+
+    def _compact_dates(self, dates: list[date]) -> str:
+        if not dates:
+            return ""
+        by_ym: dict[tuple[int, int], list[int]] = defaultdict(list)
+        for d in sorted(dates):
+            by_ym[(d.year, d.month)].append(d.day)
+        parts = []
+        prev_year = None
+        for (y, m), ds in sorted(by_ym.items()):
+            dpart = "+".join(str(x) for x in sorted(ds))
+            if prev_year != y:
+                parts.append(f"{y}_{m}_{dpart}")
+            else:
+                parts.append(f"{m}_{dpart}")
+            prev_year = y
+        return "/".join(parts)
 
     def pick_zoning(self):
         f, _ = QFileDialog.getOpenFileName(self, "ゾーニングCSVを選択", "", "CSV (*.csv);;All (*.*)")
@@ -416,6 +568,7 @@ class MainWindow(QMainWindow):
         slot = self.cmb_slot.currentText()
         self.lbl_conditions.setText(
             f"対象CSV数: {self.total_files:,}\n指定30分帯: {slot}\nゾーン数: {self.zone_count:,}\n"
+            f"選択中日数: {len(self.selected_dates):,}\n"
             f"中心点: {self.center_name} ({self.center_lon:.6f},{self.center_lat:.6f})"
         )
 
@@ -425,6 +578,9 @@ class MainWindow(QMainWindow):
             return False
         if self.total_files <= 0:
             QMessageBox.warning(self, "警告", "CSVが0件です。")
+            return False
+        if not self.selected_dates:
+            QMessageBox.warning(self, "警告", "対象日を1日以上選択してください。")
             return False
         if not self.zoning_file or not self.zoning_file.exists():
             QMessageBox.warning(self, "警告", "ゾーニングCSVを選択してください。")
@@ -449,11 +605,14 @@ class MainWindow(QMainWindow):
 
         py = sys.executable
         script = Path(__file__).resolve().parent / "43_peak30min_od.py"
+        date_list = [d.strftime("%Y-%m-%d") for d in sorted(self.selected_dates)]
+        compact_dates = self._compact_dates(sorted(self.selected_dates))
         args = [
             str(script), "--input", str(self.input_folder), "--zoning", str(self.zoning_file),
             "--slot-index", str(self.cmb_slot.currentIndex()),
             "--output-matrix", str(out_matrix), "--output-detail", str(out_detail), "--output-summary", str(out_summary),
             "--center-lon", str(self.center_lon), "--center-lat", str(self.center_lat), "--center-name", self.center_name,
+            "--dates", json.dumps(date_list, ensure_ascii=False), "--dates-compact", compact_dates,
         ]
         if self.chk_recursive.isChecked():
             args.append("--recursive")
@@ -474,6 +633,7 @@ class MainWindow(QMainWindow):
         self._set_inputs_enabled(False)
         self._eta_done = 0; self._eta_total = self.total_files; self._reset_eta_estimator()
         self.append_log(f"[INFO] 対象CSV数: {self.total_files}")
+        self.append_log(f"[INFO] 対象日数: {len(self.selected_dates)}")
         self.append_log(f"[INFO] 指定30分帯: {self.cmb_slot.currentText()}")
         self.append_log(f"[INFO] 方向判定中心点: {self.center_name} lon={self.center_lon:.6f} lat={self.center_lat:.6f}")
         self.proc.start()
@@ -481,6 +641,11 @@ class MainWindow(QMainWindow):
     def _set_inputs_enabled(self, b: bool):
         for w in [self.btn_pick, self.chk_recursive, self.btn_zone, self.cmb_slot, self.btn_pick_center, self.btn_center_default, self.btn_run]:
             w.setEnabled(b)
+        self.btn_all.setEnabled(b)
+        for wb in self.wday_buttons:
+            wb.setEnabled(b)
+        for db in self.day_cells.values():
+            db.setEnabled(b)
 
     def _on_stdout(self):
         if not self.proc:
@@ -597,6 +762,8 @@ class MainWindow(QMainWindow):
         self.lbl_tel.setText(
             "CYBER TELEMETRY\n"
             f"対象CSV数: {self.total_files:,}\n"
+            f"抽出日数: {len(self.available_dates):,}\n"
+            f"選択中日数: {len(self.selected_dates):,}\n"
             f"ゾーン数: {self.zone_count:,}\n"
             f"進捗ファイル: {self.done_files:,}/{self.total_files:,}\n"
             f"エラー数: {self.error_count:,}\n"
@@ -637,6 +804,8 @@ class MainWindow(QMainWindow):
             f"Input: {self.input_folder}",
             f"Zoning: {self.zoning_file}",
             f"Slot: {self.cmb_slot.currentText()} ({self.cmb_slot.currentIndex()})",
+            f"Dates: {','.join(d.strftime('%Y-%m-%d') for d in sorted(self.selected_dates))}",
+            f"DatesCompact: {self._compact_dates(sorted(self.selected_dates))}",
             f"Center: {self.center_name} lon={self.center_lon:.6f} lat={self.center_lat:.6f}",
             f"開始: {datetime.fromtimestamp(self.started_at).strftime('%Y/%m/%d %H:%M:%S') if self.started_at else ''}",
             f"終了: {datetime.now().strftime('%Y/%m/%d %H:%M:%S')}",
