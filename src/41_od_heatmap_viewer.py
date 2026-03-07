@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -17,7 +18,6 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
-    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -33,6 +33,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+BASE_DIR = Path(__file__).resolve().parent
+ROOT_DIR = BASE_DIR.parent
+TEMP_DIR = ROOT_DIR / "temp"
+LOGO_DIR = ROOT_DIR / "assets" / "logos"
+TEMP_HTML_PATH = TEMP_DIR / "41_od_heatmap_current.html"
+
 REQUIRED_COLUMN_ALIASES: dict[str, list[str]] = {
     "origin_lon": ["起点経度", "o_lon", "origin_lon"],
     "origin_lat": ["起点緯度", "o_lat", "origin_lat"],
@@ -41,12 +47,12 @@ REQUIRED_COLUMN_ALIASES: dict[str, list[str]] = {
 }
 
 DEFAULTS = {
-    "radius": 16,
-    "blur": 18,
-    "min_opacity": 0.15,
-    "max_zoom": 12,
+    "radius": 20,
+    "blur": 15,
+    "min_opacity": 0.2,
+    "max_zoom": 18,
     "weight_multiplier": 1.0,
-    "map_zoom": 9,
+    "map_zoom": 10,
 }
 
 
@@ -56,18 +62,16 @@ class ODHeatmapViewer(QMainWindow):
         self.setWindowTitle("41 OD Heatmap Viewer")
         self.resize(1600, 980)
 
-        self.df_raw: pd.DataFrame | None = None
         self.df_valid: pd.DataFrame | None = None
-        self.center_lat: float | None = None
-        self.center_lon: float | None = None
+        self.center_lat: float = 35.681236
+        self.center_lon: float = 139.767125
         self.current_zoom: int = DEFAULTS["map_zoom"]
-        self.current_html: str = ""
-        self.current_mode: str = "Origin"
-        self.temp_dir = Path(__file__).resolve().parent / "temp"
-        self.temp_html_path = self.temp_dir / "41_od_heatmap_current.html"
+        self.map_loaded: bool = False
 
         self.build_ui()
         self.set_style()
+        TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        print(f"[INFO] TEMP_DIR ready: {TEMP_DIR}")
 
     def build_ui(self) -> None:
         root = QWidget()
@@ -82,44 +86,36 @@ class ODHeatmapViewer(QMainWindow):
         left_layout = QVBoxLayout(left)
         left_layout.setSpacing(10)
 
-        input_group = self._make_group("入力設定")
+        input_group = self._make_group("入力")
         input_layout = QGridLayout(input_group)
         self.csv_edit = QLineEdit()
-        self.csv_edit.setPlaceholderText("CSVファイルを選択")
+        self.csv_edit.setPlaceholderText("OD CSVファイルを選択")
         browse_btn = QPushButton("参照")
         load_btn = QPushButton("読込")
         browse_btn.clicked.connect(self.browse_csv)
         load_btn.clicked.connect(self.load_csv)
-        self.result_label = QLabel("未読込")
-        self.rows_label = QLabel("総行数: -")
-        self.origin_count_label = QLabel("有効Origin件数: -")
-        self.dest_count_label = QLabel("有効Destination件数: -")
-        self.center_label = QLabel("推定中心座標: -")
+        self.rows_label = QLabel("読込件数: -")
 
-        input_layout.addWidget(QLabel("CSV"), 0, 0)
+        input_layout.addWidget(QLabel("CSVファイル"), 0, 0)
         input_layout.addWidget(self.csv_edit, 0, 1, 1, 2)
         input_layout.addWidget(browse_btn, 0, 3)
         input_layout.addWidget(load_btn, 0, 4)
-        input_layout.addWidget(self.result_label, 1, 0, 1, 5)
-        input_layout.addWidget(self.rows_label, 2, 0, 1, 5)
-        input_layout.addWidget(self.origin_count_label, 3, 0, 1, 5)
-        input_layout.addWidget(self.dest_count_label, 4, 0, 1, 5)
-        input_layout.addWidget(self.center_label, 5, 0, 1, 5)
+        input_layout.addWidget(self.rows_label, 1, 0, 1, 5)
 
         mode_group = self._make_group("表示対象")
         mode_layout = QHBoxLayout(mode_group)
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Origin", "Destination"])
-        mode_layout.addWidget(QLabel("表示モード"))
+        mode_layout.addWidget(QLabel("描画対象"))
         mode_layout.addWidget(self.mode_combo)
 
         setting_group = self._make_group("ヒートマップ設定")
         setting_layout = QGridLayout(setting_group)
-        self.radius_spin = QSpinBox(); self.radius_spin.setRange(1, 80); self.radius_spin.setValue(DEFAULTS["radius"])
-        self.blur_spin = QSpinBox(); self.blur_spin.setRange(1, 80); self.blur_spin.setValue(DEFAULTS["blur"])
+        self.radius_spin = QSpinBox(); self.radius_spin.setRange(1, 100); self.radius_spin.setValue(DEFAULTS["radius"])
+        self.blur_spin = QSpinBox(); self.blur_spin.setRange(1, 100); self.blur_spin.setValue(DEFAULTS["blur"])
         self.min_opacity_spin = QDoubleSpinBox(); self.min_opacity_spin.setRange(0.01, 1.0); self.min_opacity_spin.setSingleStep(0.01); self.min_opacity_spin.setValue(DEFAULTS["min_opacity"])
         self.max_zoom_spin = QSpinBox(); self.max_zoom_spin.setRange(1, 22); self.max_zoom_spin.setValue(DEFAULTS["max_zoom"])
-        self.weight_mul_spin = QDoubleSpinBox(); self.weight_mul_spin.setRange(0.1, 20.0); self.weight_mul_spin.setSingleStep(0.1); self.weight_mul_spin.setValue(DEFAULTS["weight_multiplier"])
+        self.weight_mul_spin = QDoubleSpinBox(); self.weight_mul_spin.setRange(0.1, 99.9); self.weight_mul_spin.setSingleStep(0.1); self.weight_mul_spin.setValue(DEFAULTS["weight_multiplier"])
 
         setting_layout.addWidget(QLabel("Radius"), 0, 0); setting_layout.addWidget(self.radius_spin, 0, 1)
         setting_layout.addWidget(QLabel("Blur"), 1, 0); setting_layout.addWidget(self.blur_spin, 1, 1)
@@ -130,11 +126,11 @@ class ODHeatmapViewer(QMainWindow):
         action_group = self._make_group("操作")
         action_layout = QGridLayout(action_group)
         redraw_btn = QPushButton("再描画")
-        save_png_btn = QPushButton("現在表示を画像保存")
+        save_png_btn = QPushButton("PNG保存")
         save_html_btn = QPushButton("HTML保存")
         reset_btn = QPushButton("初期値へ戻す")
 
-        redraw_btn.clicked.connect(self.capture_current_view_and_rerender)
+        redraw_btn.clicked.connect(self.rerender_preserve_view)
         save_png_btn.clicked.connect(self.save_png)
         save_html_btn.clicked.connect(self.save_html)
         reset_btn.clicked.connect(self.reset_defaults)
@@ -146,9 +142,12 @@ class ODHeatmapViewer(QMainWindow):
 
         guide_group = self._make_group("説明")
         guide_layout = QVBoxLayout(guide_group)
-        guide_layout.addWidget(QLabel("・UI上でヒートマップ条件を調整できます。\n"
-                                     "・再描画しても中心位置と縮尺を保持します。\n"
-                                     "・保存画像は報告資料に利用できます。"))
+        guide_layout.addWidget(QLabel(
+            "1) CSVを読み込み\n"
+            "2) Origin / Destination を選択\n"
+            "3) パラメータ調整後に再描画\n"
+            "4) PNG / HTML で保存"
+        ))
 
         for grp in [input_group, mode_group, setting_group, action_group, guide_group]:
             left_layout.addWidget(grp)
@@ -160,6 +159,7 @@ class ODHeatmapViewer(QMainWindow):
         title.setObjectName("panelTitle")
         title.setFont(QFont("Segoe UI", 14, QFont.Weight.DemiBold))
         self.web_view = QWebEngineView()
+        self.web_view.loadFinished.connect(self._on_map_loaded)
         right_layout.addWidget(title)
         right_layout.addWidget(self.web_view, 1)
 
@@ -176,37 +176,39 @@ class ODHeatmapViewer(QMainWindow):
     def set_style(self) -> None:
         self.setStyleSheet(
             """
-            QMainWindow, QWidget { background-color: #0b1117; color: #d7f7ff; font-size: 13px; }
+            QMainWindow, QWidget { background-color: #0b1218; color: #d8faff; font-size: 13px; }
             QGroupBox {
-                border: 1px solid #1f3641; border-radius: 12px; margin-top: 10px;
-                background-color: #111a22; padding-top: 10px;
+                border: 1px solid #1f3d4a; border-radius: 12px; margin-top: 10px;
+                background-color: #111c23; padding-top: 10px;
             }
             QGroupBox::title {
                 subcontrol-origin: margin; left: 10px; padding: 0 6px;
-                color: #55d6f6; font-weight: 600;
+                color: #58e5ff; font-weight: 600;
             }
             QLabel#panelTitle {
-                background: #13212b; border: 1px solid #274353; border-radius: 10px;
-                padding: 10px; color: #71f0ff;
+                background: #13242c; border: 1px solid #2d4b58; border-radius: 10px;
+                padding: 10px; color: #6ff4ff;
             }
             QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
-                background-color: #0f181f; border: 1px solid #33505f; border-radius: 8px;
-                padding: 6px; color: #ddf9ff;
+                background-color: #0f191f; border: 1px solid #355868; border-radius: 8px;
+                padding: 6px; color: #e3fbff;
             }
             QPushButton {
-                background-color: #123243; border: 1px solid #2f667d; border-radius: 8px;
-                padding: 8px 10px; color: #d6f8ff; font-weight: 600;
+                background-color: #123646; border: 1px solid #2f6e86; border-radius: 8px;
+                padding: 8px 10px; color: #defbff; font-weight: 600;
             }
-            QPushButton:hover { background-color: #1a4a62; }
-            QPushButton:pressed { background-color: #0f2c3b; }
-            QStatusBar { border-top: 1px solid #1f3641; }
+            QPushButton:hover { background-color: #1a4f64; }
+            QPushButton:pressed { background-color: #10313f; }
+            QStatusBar { border-top: 1px solid #1f3d4a; }
             """
         )
 
     def _make_group(self, title: str) -> QGroupBox:
-        grp = QGroupBox(title)
-        grp.setObjectName("card")
-        return grp
+        return QGroupBox(title)
+
+    def _on_map_loaded(self, ok: bool) -> None:
+        self.map_loaded = ok
+        print(f"[INFO] map loaded: {ok}")
 
     def browse_csv(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "CSV選択", "", "CSV Files (*.csv);;All Files (*)")
@@ -216,46 +218,39 @@ class ODHeatmapViewer(QMainWindow):
     def load_csv(self) -> None:
         csv_path = self.csv_edit.text().strip()
         if not csv_path:
-            QMessageBox.warning(self, "CSV未選択", "CSVファイルを選択してください。")
+            print("[WARN] CSV未指定")
+            QMessageBox.warning(self, "CSV未指定", "CSVファイルを選択してください。")
             return
 
+        print(f"[INFO] CSV読込開始: {csv_path}")
         try:
             df = self.read_csv_robust(csv_path)
-            if df is None or df.empty:
-                raise ValueError("CSVが空、または読み込みできませんでした。")
             valid_df = self.validate_dataframe(df)
+            if valid_df.empty:
+                raise ValueError("有効な座標データがありません。")
         except Exception as e:
+            print(f"[ERROR] CSV読込失敗: {e}")
             QMessageBox.critical(self, "CSV読込失敗", str(e))
             return
 
-        if valid_df.empty:
-            QMessageBox.warning(self, "有効座標なし", "有効な緯度経度データが見つかりません。")
-            return
-
-        self.df_raw = df
         self.df_valid = valid_df
-        self.current_mode = self.mode_combo.currentText()
+        self.rows_label.setText(f"読込件数: {len(df):,} 行 / 有効件数: {len(valid_df):,}")
 
-        lat_center, lon_center = self.estimate_weighted_center(valid_df)
-        self.center_lat = lat_center
-        self.center_lon = lon_center
+        self.center_lat, self.center_lon = self.estimate_weighted_center(valid_df)
         self.current_zoom = DEFAULTS["map_zoom"]
 
-        self.result_label.setText("読込結果: 成功")
-        self.rows_label.setText(f"総行数: {len(df):,}")
-        self.origin_count_label.setText(f"有効Origin件数: {valid_df['origin_lat'].notna().sum():,}")
-        self.dest_count_label.setText(f"有効Destination件数: {valid_df['dest_lat'].notna().sum():,}")
-        self.center_label.setText(f"推定中心座標: ({lat_center:.6f}, {lon_center:.6f})")
+        print(f"[INFO] CSV読込成功: rows={len(df)}, valid={len(valid_df)}")
+        print(f"[INFO] 有効点数(Origin)={valid_df[['origin_lat','origin_lon']].dropna().shape[0]}, (Destination)={valid_df[['dest_lat','dest_lon']].dropna().shape[0]}")
+        self.render_map(self.center_lat, self.center_lon, self.current_zoom)
 
-        self.render_map(lat_center, lon_center, self.current_zoom)
-        self.statusBar().showMessage(f"CSV読込完了: {Path(csv_path).name}")
-
-    def read_csv_robust(self, path: str) -> pd.DataFrame | None:
+    def read_csv_robust(self, path: str) -> pd.DataFrame:
         candidates = [
-            {},
             {"encoding": "utf-8-sig"},
+            {"encoding": "utf-8"},
             {"encoding": "cp932"},
-            {"sep": None, "engine": "python"},
+            {"encoding": "shift_jis"},
+            {"encoding": "utf-16"},
+            {"sep": None, "engine": "python", "encoding": "utf-8-sig"},
             {"sep": None, "engine": "python", "encoding": "cp932"},
         ]
         for kwargs in candidates:
@@ -263,7 +258,7 @@ class ODHeatmapViewer(QMainWindow):
                 return pd.read_csv(path, **kwargs)
             except Exception:
                 continue
-        return None
+        raise ValueError("CSVを読み込めませんでした（エンコーディングまたは区切りの問題の可能性）。")
 
     def validate_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         resolved: dict[str, str] = {}
@@ -299,7 +294,7 @@ class ODHeatmapViewer(QMainWindow):
             return float(value)
         except Exception:
             try:
-                return float(str(value).replace(",", ""))
+                return float(str(value).replace(",", "").replace(" ", ""))
             except Exception:
                 return np.nan
 
@@ -329,14 +324,14 @@ class ODHeatmapViewer(QMainWindow):
 
     @staticmethod
     def estimate_weighted_center(df_valid: pd.DataFrame) -> tuple[float, float]:
-        combined = pd.concat(
+        all_points = pd.concat(
             [
                 df_valid[["origin_lat", "origin_lon"]].rename(columns={"origin_lat": "lat", "origin_lon": "lon"}),
                 df_valid[["dest_lat", "dest_lon"]].rename(columns={"dest_lat": "lat", "dest_lon": "lon"}),
             ],
             ignore_index=True,
         )
-        return float(combined["lat"].mean()), float(combined["lon"].mean())
+        return float(all_points["lat"].mean()), float(all_points["lon"].mean())
 
     def map_settings(self) -> dict[str, float | int]:
         return {
@@ -366,54 +361,51 @@ class ODHeatmapViewer(QMainWindow):
                 min_opacity=settings["min_opacity"],
                 max_zoom=settings["max_zoom"],
             ).add_to(m)
-        else:
-            folium.Marker([center_lat, center_lon], tooltip="有効点なし").add_to(m)
 
         map_name = m.get_name()
         html = m.get_root().render()
         state_script = f"""
 <script>
-window.getMapState = function() {{
-  try {{
-    var c = {map_name}.getCenter();
-    return JSON.stringify({{lat: c.lat, lng: c.lng, zoom: {map_name}.getZoom()}});
-  }} catch (e) {{
-    return JSON.stringify({{lat: {center_lat}, lng: {center_lon}, zoom: {zoom}}});
-  }}
-}};
+(function() {{
+  window.__od_heatmap_map = {map_name};
+  window.__od_heatmap_get_state = function() {{
+    if (!window.__od_heatmap_map) return null;
+    var c = window.__od_heatmap_map.getCenter();
+    return JSON.stringify({{lat: c.lat, lng: c.lng, zoom: window.__od_heatmap_map.getZoom()}});
+  }};
+}})();
 </script>
 """
         return html.replace("</body>", state_script + "\n</body>")
 
     def render_map(self, center_lat: float, center_lon: float, zoom: int) -> None:
         if self.df_valid is None:
-            QMessageBox.warning(self, "地図再描画失敗", "CSVを先に読み込んでください。")
+            QMessageBox.warning(self, "再描画失敗", "CSVを先に読み込んでください。")
             return
+
+        print("[INFO] 再描画開始")
         try:
             mode = self.mode_combo.currentText()
-            self.current_mode = mode
-            self.current_html = self.build_map_html(mode, center_lat, center_lon, zoom)
-            self.temp_dir.mkdir(parents=True, exist_ok=True)
-            self.temp_html_path.write_text(self.current_html, encoding="utf-8")
-            self.web_view.setUrl(QUrl.fromLocalFile(str(self.temp_html_path.resolve())))
-            self.center_lat = center_lat
-            self.center_lon = center_lon
-            self.current_zoom = zoom
-            self.statusBar().showMessage(f"再描画完了: {mode} / zoom {zoom}")
+            html = self.build_map_html(mode, center_lat, center_lon, zoom)
+            TEMP_DIR.mkdir(parents=True, exist_ok=True)
+            TEMP_HTML_PATH.write_text(html, encoding="utf-8")
+            self.web_view.setUrl(QUrl.fromLocalFile(str(TEMP_HTML_PATH.resolve())))
+            self.center_lat, self.center_lon, self.current_zoom = center_lat, center_lon, zoom
+            self.statusBar().showMessage(f"再描画完了: {mode} / zoom={zoom}")
+            print(f"[INFO] 再描画完了: mode={mode}, center=({center_lat:.6f},{center_lon:.6f}), zoom={zoom}")
         except Exception as e:
-            QMessageBox.critical(self, "地図再描画失敗", str(e))
+            print(f"[ERROR] 再描画失敗: {e}")
+            QMessageBox.critical(self, "再描画失敗", str(e))
 
-    def capture_current_view_and_rerender(self) -> None:
+    def rerender_preserve_view(self) -> None:
         if self.df_valid is None:
-            QMessageBox.warning(self, "地図再描画失敗", "CSVを先に読み込んでください。")
+            QMessageBox.warning(self, "再描画失敗", "CSVを先に読み込んでください。")
             return
 
-        js = "window.getMapState ? window.getMapState() : null;"
+        js = "window.__od_heatmap_get_state ? window.__od_heatmap_get_state() : null;"
 
         def callback(result: object) -> None:
-            lat = self.center_lat if self.center_lat is not None else 35.681236
-            lon = self.center_lon if self.center_lon is not None else 139.767125
-            zoom = self.current_zoom
+            lat, lon, zoom = self.center_lat, self.center_lon, self.current_zoom
             if isinstance(result, str) and result:
                 try:
                     state = json.loads(result)
@@ -428,49 +420,51 @@ window.getMapState = function() {{
 
     def save_png(self) -> None:
         if self.df_valid is None:
+            print("[WARN] PNG保存失敗: CSV未読込")
             QMessageBox.warning(self, "PNG保存失敗", "CSVを先に読み込んでください。")
             return
+        if not self.map_loaded:
+            print("[WARN] PNG保存失敗: 地図未描画")
+            QMessageBox.warning(self, "PNG保存失敗", "地図描画完了後に実行してください。")
+            return
 
-        mode_name = self.mode_combo.currentText().lower()
-        default_name = f"{mode_name}_heatmap.png"
-        path, _ = QFileDialog.getSaveFileName(self, "PNG保存", default_name, "PNG Files (*.png)")
+        path, _ = QFileDialog.getSaveFileName(self, "PNG保存", "od_heatmap.png", "PNG Files (*.png)")
         if not path:
             return
-
-        pixmap = self.web_view.grab()
-        if pixmap.isNull():
-            QMessageBox.critical(self, "PNG保存失敗", "画面のキャプチャに失敗しました。")
-            return
-
         if not path.lower().endswith(".png"):
             path += ".png"
-        if pixmap.save(path, "PNG"):
-            self.statusBar().showMessage(f"PNG保存完了: {path}")
-        else:
+
+        pixmap = self.web_view.grab()
+        if pixmap.isNull() or not pixmap.save(path, "PNG"):
+            print("[ERROR] PNG保存失敗")
             QMessageBox.critical(self, "PNG保存失敗", "PNGファイルの保存に失敗しました。")
+            return
+
+        print(f"[INFO] PNG保存成功: {path}")
+        self.statusBar().showMessage(f"PNG保存完了: {path}")
 
     def save_html(self) -> None:
         if self.df_valid is None:
+            print("[WARN] HTML保存失敗: CSV未読込")
             QMessageBox.warning(self, "HTML保存失敗", "CSVを先に読み込んでください。")
             return
+        if not TEMP_HTML_PATH.exists():
+            print("[ERROR] HTML保存失敗: 一時HTMLなし")
+            QMessageBox.critical(self, "HTML保存失敗", "一時HTMLが見つかりません。再描画してから保存してください。")
+            return
 
-        mode_name = self.mode_combo.currentText().lower()
-        default_name = f"{mode_name}_heatmap.html"
-        path, _ = QFileDialog.getSaveFileName(self, "HTML保存", default_name, "HTML Files (*.html)")
+        path, _ = QFileDialog.getSaveFileName(self, "HTML保存", "od_heatmap.html", "HTML Files (*.html)")
         if not path:
             return
-
-        if self.center_lat is None or self.center_lon is None:
-            QMessageBox.critical(self, "HTML保存失敗", "地図中心情報が未初期化です。")
-            return
+        if not path.lower().endswith(".html"):
+            path += ".html"
 
         try:
-            html = self.build_map_html(self.mode_combo.currentText(), self.center_lat, self.center_lon, self.current_zoom)
-            if not path.lower().endswith(".html"):
-                path += ".html"
-            Path(path).write_text(html, encoding="utf-8")
+            shutil.copyfile(TEMP_HTML_PATH, path)
+            print(f"[INFO] HTML保存成功: {path}")
             self.statusBar().showMessage(f"HTML保存完了: {path}")
         except Exception as e:
+            print(f"[ERROR] HTML保存失敗: {e}")
             QMessageBox.critical(self, "HTML保存失敗", str(e))
 
     def reset_defaults(self) -> None:
@@ -479,9 +473,9 @@ window.getMapState = function() {{
         self.min_opacity_spin.setValue(DEFAULTS["min_opacity"])
         self.max_zoom_spin.setValue(DEFAULTS["max_zoom"])
         self.weight_mul_spin.setValue(DEFAULTS["weight_multiplier"])
-        if self.df_valid is not None and self.center_lat is not None and self.center_lon is not None:
-            self.render_map(self.center_lat, self.center_lon, self.current_zoom)
-        self.statusBar().showMessage("表示設定を初期値へ戻しました。")
+        if self.df_valid is not None:
+            self.rerender_preserve_view()
+        self.statusBar().showMessage("初期値へ戻しました。")
 
 
 def main() -> None:
