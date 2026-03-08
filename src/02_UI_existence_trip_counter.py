@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -329,9 +330,10 @@ class MainWindow(QMainWindow):
             return sorted(p for p in self.input_folder.rglob("*.csv") if p.is_file())
         return sorted(p for p in self.input_folder.glob("*.csv") if p.is_file())
 
-    def _scan_dates(self, files: list[Path]) -> list[date]:
+    def _scan_dates(self, files: list[Path], progress: QProgressDialog | None = None) -> list[date]:
         out: set[date] = set()
-        for fp in files:
+        total = len(files)
+        for i, fp in enumerate(files, start=1):
             try:
                 with fp.open("r", encoding="utf-8-sig", errors="ignore", newline="") as f:
                     r = csv.reader(f)
@@ -352,9 +354,20 @@ class MainWindow(QMainWindow):
                                 pass
             except Exception:
                 continue
+            finally:
+                if progress:
+                    progress.setValue(i)
+                    progress.setLabelText(f"CSVを読み込み中... {i:,} / {total:,}")
+                    if i % 100 == 0 or i == total:
+                        QApplication.processEvents()
         return sorted(out)
 
-    def refresh_csv_and_dates(self):
+    def _clear_date_selection(self):
+        self.available_dates = []
+        self.selected_dates = set()
+        self._rebuild_calendar()
+
+    def _refresh_csv_count_only(self) -> bool:
         self.csv_files = self._list_csv()
         self.total_files = len(self.csv_files)
         self.lbl_csv_count.setText(f"対象CSV数: {self.total_files:,}")
@@ -362,15 +375,46 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "CSVが0件です。")
             self.input_folder = None
             self.lbl_folder.setText("未選択")
-            self.available_dates = []
-            self.selected_dates = set()
-            self._rebuild_calendar()
-            return
+            self._clear_date_selection()
+            return False
         self.append_log(f"[INFO] 対象CSV数: {self.total_files}")
-        self.available_dates = self._scan_dates(self.csv_files)
+        return True
+
+    def _load_dates_with_progress(self):
+        progress = QProgressDialog(f"CSVを読み込み中... 0 / {self.total_files:,}", None, 0, self.total_files, self)
+        progress.setWindowTitle("日付読込み中")
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(True)
+        progress.setAutoReset(True)
+        progress.setValue(0)
+        progress.show()
+        QApplication.processEvents()
+        try:
+            self.available_dates = self._scan_dates(self.csv_files, progress=progress)
+        finally:
+            progress.close()
+
         self.selected_dates = set(self.available_dates)
         self._rebuild_calendar()
         self.append_log(f"[INFO] 抽出日数: {len(self.available_dates)}")
+
+    def refresh_csv_and_dates(self, confirm: bool = True):
+        if not self._refresh_csv_count_only():
+            return
+        if confirm:
+            ret = QMessageBox.question(
+                self,
+                "確認",
+                "読み込みを開始しますか？\n読込みは長時間を要する場合があります。\n"
+                f"対象CSV数: {self.total_files:,}件",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Ok,
+            )
+            if ret != QMessageBox.StandardButton.Ok:
+                self._clear_date_selection()
+                self.append_log("[INFO] 日付読込みをキャンセルしました。")
+                return
+        self._load_dates_with_progress()
 
     def _rebuild_calendar(self):
         while self.calendar_layout.count():
