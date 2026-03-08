@@ -386,6 +386,13 @@ class MainWindow(QMainWindow):
             return sorted(p for p in self.input_folder.rglob("*.csv") if p.is_file())
         return sorted(p for p in self.input_folder.glob("*.csv") if p.is_file())
 
+    def _count_csv_only(self) -> int:
+        if not self.input_folder:
+            return 0
+        if self.chk_recursive.isChecked():
+            return sum(1 for p in self.input_folder.rglob("*.csv") if p.is_file())
+        return sum(1 for p in self.input_folder.glob("*.csv") if p.is_file())
+
     def _scan_dates(self, files: list[Path], progress: QProgressDialog | None = None) -> tuple[list[date], list[str]]:
         out_dates: set[date] = set()
         out_meshes: set[str] = set()
@@ -441,8 +448,8 @@ class MainWindow(QMainWindow):
         self._rebuild_calendar()
 
     def _refresh_csv_count_only(self) -> bool:
-        self.csv_files = self._list_csv()
-        self.total_files = len(self.csv_files)
+        self.append_log("CSV件数を確認中...")
+        self.total_files = self._count_csv_only()
         self.lbl_csv_count.setText(f"対象CSV数: {self.total_files:,}")
         if self.total_files == 0:
             QMessageBox.warning(self, "警告", "CSVが0件です。")
@@ -454,6 +461,8 @@ class MainWindow(QMainWindow):
         return True
 
     def _load_dates_with_progress(self):
+        self.csv_files = self._list_csv()
+        self.total_files = len(self.csv_files)
         progress = QProgressDialog(f"CSVを読み込み中... 0 / {self.total_files:,}", None, 0, self.total_files, self)
         progress.setWindowTitle("日付読込み中")
         progress.setMinimumDuration(0)
