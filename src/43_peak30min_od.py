@@ -187,11 +187,11 @@ def compact_dates(dates: list[date]) -> str:
     return "/".join(parts)
 
 
-def _open_csv_dict_reader(path: Path) -> tuple[csv.DictReader, object] | tuple[None, None]:
+def _open_csv_reader(path: Path) -> tuple[csv.reader, object] | tuple[None, None]:
     for enc in ENCODINGS:
         try:
             f = path.open("r", encoding=enc, newline="")
-            return csv.DictReader(f), f
+            return csv.reader(f), f
         except UnicodeDecodeError:
             continue
         except Exception:
@@ -274,16 +274,6 @@ def load_polygons(zoning_csv: Path) -> list[PolygonZone]:
     return polygons
 
 
-def detect_input_columns(headers: Sequence[str]) -> tuple[str, str, str | None]:
-    lon_key = headers[_find_col_index(headers, ["lon", "longitude", "経度", "x"]) or -1] if headers else ""
-    lat_key = headers[_find_col_index(headers, ["lat", "latitude", "緯度", "y"]) or -1] if headers else ""
-    t_idx = _find_col_index(headers, ["time", "時刻", "日時", "datetime", "timestamp"])
-    t_key = headers[t_idx] if t_idx is not None else None
-    if not lon_key or not lat_key or t_key is None:
-        raise RuntimeError("入力CSVの列推定に失敗(lon/lat/time)")
-    return lon_key, lat_key, t_key
-
-
 def process_file(
     file_path: Path,
     slot_index: int,
@@ -292,27 +282,27 @@ def process_file(
     center_lat: float,
     selected_dates: set[date],
 ) -> dict | None:
-    reader, handle = _open_csv_dict_reader(file_path)
+    reader, handle = _open_csv_reader(file_path)
     if not reader or not handle:
         return None
     try:
-        headers = reader.fieldnames or []
-        lon_key, lat_key, t_key = detect_input_columns(headers)
         start_min = slot_index * 30
         end_min = start_min + 30
 
         first = last = None
         c = 0
         for row in reader:
-            ts = (row.get(t_key) or "").strip()
+            if len(row) <= 15:
+                continue
+            ts = (row[6] or "").strip()
             d = parse_time_to_date(ts)
             if d is None or d not in selected_dates:
                 continue
             mm = parse_time_to_minutes(ts)
             if mm is None or not (start_min <= mm < end_min):
                 continue
-            lon = parse_float(row.get(lon_key))
-            lat = parse_float(row.get(lat_key))
+            lon = parse_float(row[14])
+            lat = parse_float(row[15])
             rec = {"lon": lon, "lat": lat, "time": ts}
             if first is None:
                 first = rec
