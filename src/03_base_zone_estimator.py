@@ -489,6 +489,7 @@ def run(args: argparse.Namespace) -> int:
 
     files = iter_csv_files(input_dir, args.recursive)
     total = len(files)
+    log(f"[TOTAL] total={total}")
     log(f"[INFO] 対象CSV数: {total}")
     if total == 0:
         log("[ERROR] 対象CSVが0件です")
@@ -501,6 +502,7 @@ def run(args: argparse.Namespace) -> int:
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 
     out_rows: list[tuple[str, str, str]] = []
+    hit_count = 0
     for i, fp in enumerate(files, 1):
         log(f"[INFO] 現在処理中: {fp.name}")
         try:
@@ -509,7 +511,10 @@ def run(args: argparse.Namespace) -> int:
             log(f"[ERROR] {fp.name}: {e}")
             op_id, base_zone, reason = fp.stem, "判定不可", "読込失敗"
         out_rows.append((op_id, base_zone, reason))
-        log(f"進捗ファイル: {i}/{total}")
+        if reason == "正常判定" and base_zone != "判定不可":
+            hit_count += 1
+            log(f"[HIT] op_id={op_id} zone={base_zone} hit_count={hit_count}")
+        log(f"[PROGRESS] done={i} total={total} file={fp.name}")
 
     with out_csv.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
