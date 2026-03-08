@@ -6,11 +6,13 @@ import sys
 from pathlib import Path
 
 from PyQt6.QtCore import QProcess, Qt
+from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -30,10 +32,12 @@ class StepBox(QFrame):
     def __init__(self, title: str, content: QWidget):
         super().__init__()
         self.setObjectName("stepBox")
+        self.setMinimumHeight(120)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 8, 10, 8)
-        lay.setSpacing(6)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(8)
         lbl = QLabel(title)
+        lbl.setWordWrap(True)
         lbl.setObjectName("stepTitle")
         lay.addWidget(lbl)
         lay.addWidget(content)
@@ -43,7 +47,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_TITLE)
-        self.resize(1200, 760)
+        self.resize(1320, 820)
 
         self.proc: QProcess | None = None
         self.input_folder: Path | None = None
@@ -58,58 +62,111 @@ class MainWindow(QMainWindow):
         cw = QWidget()
         self.setCentralWidget(cw)
         root = QVBoxLayout(cw)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(10)
 
+        head = QFrame()
+        head.setObjectName("hero")
+        head_l = QHBoxLayout(head)
+        head_l.setContentsMargins(16, 14, 16, 14)
+        head_l.setSpacing(12)
+        left = QVBoxLayout()
+        left.setSpacing(6)
         title = QLabel(APP_TITLE)
-        title.setStyleSheet("font-size:20px;font-weight:700;")
-        root.addWidget(title)
+        title.setObjectName("heroTitle")
+        desc = QLabel(
+            "第1スクリーニング後データから、夜間停留位置等を基に運行IDごとの推定拠点ゾーンを判定します。\n"
+            "様式1-2固定列CSVを優先して読み込み、結果を拠点ゾーン対応表として出力します。"
+        )
+        desc.setWordWrap(True)
+        desc.setObjectName("heroDesc")
+        left.addWidget(title)
+        left.addWidget(desc)
+        head_l.addLayout(left, 1)
 
-        # STEP1
+        logo = QLabel()
+        logo.setFixedSize(180, 72)
+        logo.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        pix = QPixmap(str(Path(__file__).with_name("logo.png")))
+        if not pix.isNull():
+            logo.setPixmap(pix.scaled(170, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        head_l.addWidget(logo)
+        root.addWidget(head)
+
+        steps_host = QWidget()
+        steps = QGridLayout(steps_host)
+        steps.setContentsMargins(0, 0, 0, 0)
+        steps.setHorizontalSpacing(10)
+        steps.setVerticalSpacing(10)
+
         s1w = QWidget(); s1 = QVBoxLayout(s1w); s1.setContentsMargins(0, 0, 0, 0)
         r1 = QHBoxLayout()
-        self.btn_pick_folder = QPushButton("第1スクリーニングフォルダを選択")
+        self.btn_pick_folder = QPushButton("選択")
         self.btn_pick_folder.clicked.connect(self.pick_folder)
         self.lbl_folder = QLabel("未選択")
+        self.lbl_folder.setWordWrap(True)
         self.chk_recursive = QCheckBox("サブフォルダも含める")
+        self.chk_recursive.stateChanged.connect(self._recalc_csv_count)
         r1.addWidget(self.btn_pick_folder)
         r1.addWidget(self.lbl_folder, 1)
         r1.addWidget(self.chk_recursive)
         self.lbl_csv_count = QLabel("対象CSV数: 0")
-        s1.addLayout(r1); s1.addWidget(self.lbl_csv_count)
-        root.addWidget(StepBox("STEP1：第1スクリーニングフォルダを選択\n運行ID別CSVが格納されたフォルダを指定してください。", s1w))
+        self.lbl_csv_warn = QLabel("")
+        self.lbl_csv_warn.setObjectName("warn")
+        s1.addLayout(r1); s1.addWidget(self.lbl_csv_count); s1.addWidget(self.lbl_csv_warn)
+        box1 = StepBox("STEP1\n第1スクリーニングフォルダを選択\n運行ID別CSVが格納されたフォルダを指定してください。", s1w)
 
-        # STEP2
         s2w = QWidget(); s2 = QHBoxLayout(s2w); s2.setContentsMargins(0, 0, 0, 0)
-        self.btn_pick_zoning = QPushButton("任意ゾーニングファイルを選択")
+        self.btn_pick_zoning = QPushButton("選択")
         self.btn_pick_zoning.clicked.connect(self.pick_zoning)
         self.lbl_zoning = QLabel("未選択")
+        self.lbl_zoning.setWordWrap(True)
         s2.addWidget(self.btn_pick_zoning)
         s2.addWidget(self.lbl_zoning, 1)
-        root.addWidget(StepBox("STEP2：任意ゾーニングファイルを選択\n推定拠点ゾーンの判定に使用するゾーン定義ファイルを指定してください。", s2w))
+        box2 = StepBox("STEP2\n任意ゾーニングファイルを選択\nzoning_data.csv 形式のゾーン定義ファイルを指定してください。", s2w)
 
-        # STEP3
         s3w = QWidget(); s3 = QVBoxLayout(s3w); s3.setContentsMargins(0, 0, 0, 0)
         self.lbl_output = QLabel("未確定")
+        self.lbl_output.setWordWrap(True)
         s3.addWidget(self.lbl_output)
-        root.addWidget(StepBox("STEP3：出力ファイルを確認\n選択フォルダと同じ階層に「_拠点ゾーン.csv」を出力します。", s3w))
+        box3 = StepBox("STEP3\n出力先を確認\n選択フォルダと同じ階層に『_拠点ゾーン.csv』を出力します。", s3w)
 
-        # STEP4
-        s4w = QWidget(); s4 = QHBoxLayout(s4w); s4.setContentsMargins(0, 0, 0, 0)
+        s4w = QWidget(); s4 = QVBoxLayout(s4w); s4.setContentsMargins(0, 0, 0, 0)
         self.btn_run = QPushButton("推定拠点ゾーン対応表を作成")
         self.btn_run.clicked.connect(self.start_run)
+        self.btn_run.setEnabled(False)
         self.btn_open = QPushButton("出力ファイルを開く")
         self.btn_open.clicked.connect(self.open_output)
         self.btn_open.setEnabled(False)
         s4.addWidget(self.btn_run)
         s4.addWidget(self.btn_open)
-        s4.addStretch(1)
-        root.addWidget(StepBox("STEP4：推定拠点ゾーン対応表を作成\n夜間停留位置等を基に、運行IDごとの推定拠点ゾーンを判定します。", s4w))
+        box4 = StepBox("STEP4\n推定拠点ゾーン対応表を作成\n夜間停留位置等を基に、運行IDごとの推定拠点ゾーンを判定します。", s4w)
 
+        for b in [box1, box2, box3, box4]:
+            b.setMinimumWidth(220)
+        steps.addWidget(box1, 0, 0)
+        steps.addWidget(box2, 0, 1)
+        steps.addWidget(box3, 0, 2)
+        steps.addWidget(box4, 0, 3)
+        steps.setColumnStretch(0, 2)
+        steps.setColumnStretch(1, 2)
+        steps.setColumnStretch(2, 1)
+        steps.setColumnStretch(3, 1)
+        root.addWidget(steps_host)
+
+        info_card = QFrame()
+        info_card.setObjectName("infoCard")
+        info_l = QVBoxLayout(info_card)
+        info_l.setContentsMargins(12, 10, 12, 10)
         self.lbl_progress = QLabel("進捗ファイル: 0/0（0.0%）")
         self.progress = QProgressBar(); self.progress.setRange(0, 100); self.progress.setValue(0)
-        root.addWidget(self.lbl_progress)
-        root.addWidget(self.progress)
+        info_l.addWidget(self.lbl_progress)
+        info_l.addWidget(self.progress)
+        root.addWidget(info_card)
 
         self.log = QPlainTextEdit(); self.log.setReadOnly(True)
+        self.log.setFont(QFont("Consolas", 10))
+        self.log.setMaximumBlockCount(3000)
         root.addWidget(self.log, 1)
 
         self.lbl_notice = QLabel(
@@ -121,13 +178,58 @@ class MainWindow(QMainWindow):
 
         self.setStyleSheet(
             """
-            QFrame#stepBox{border:1px solid #1f8f4f;border-radius:8px;background:#f6fffa;}
-            QLabel#stepTitle{font-weight:700;color:#116d3c;}
+            QWidget { background:#060b09; color:#8ee5ac; }
+            QFrame#hero, QFrame#infoCard, QFrame#stepBox { background:#0b1511; border:1px solid #1f3f2d; border-radius:12px; }
+            QLabel#heroTitle { font-size:22px; font-weight:800; color:#dcffe9; }
+            QLabel#heroDesc { color:#9cd9b5; }
+            QLabel#stepTitle { font-weight:700; color:#7cffc6; }
+            QLabel#warn { color:#ffd866; font-weight:700; }
+            QPushButton {
+                background:#0f2a1c; border:2px solid #00ff99; border-radius:10px;
+                color:#eafff4; font-weight:700; padding:8px 12px;
+            }
+            QPushButton:hover { background:#18412d; }
+            QPushButton:disabled { border-color:#2a6b45; color:#3d6a55; background:#0b1511; }
+            QPlainTextEdit {
+                background:#0a120f; border:1px solid #1f3f2d; border-radius:10px;
+                color:#c6f8d8; padding:8px; line-height:1.35;
+            }
+            QProgressBar {
+                background:#0a120f; border:1px solid #1f3f2d; border-radius:8px; text-align:center;
+            }
+            QProgressBar::chunk { background:#2ddf83; border-radius:8px; }
+            QCheckBox { color:#7cffc6; spacing:8px; }
+            QCheckBox::indicator {
+                width:16px; height:16px; border:2px solid #00ff99; border-radius:4px; background:#0a120f;
+            }
+            QCheckBox::indicator:checked { background:#00ff99; }
             """
         )
 
     def append_log(self, text: str) -> None:
         self.log.appendPlainText(text)
+
+    def _update_run_button_state(self) -> None:
+        running = self.proc is not None and self.proc.state() != QProcess.ProcessState.NotRunning
+        ready = self.input_folder is not None and self.zoning_file is not None and self.total_files > 0
+        self.btn_run.setEnabled((not running) and ready)
+
+    def _recalc_csv_count(self) -> None:
+        if not self.input_folder:
+            self.total_files = 0
+            self.lbl_csv_count.setText("対象CSV数: 0")
+            self.lbl_csv_warn.setText("")
+            self._update_run_button_state()
+            return
+
+        if self.chk_recursive.isChecked():
+            self.total_files = len(list(self.input_folder.rglob("*.csv")))
+        else:
+            self.total_files = len(list(self.input_folder.glob("*.csv")))
+
+        self.lbl_csv_count.setText(f"対象CSV数: {self.total_files:,}")
+        self.lbl_csv_warn.setText("[WARN] 対象CSVが0件です" if self.total_files == 0 else "")
+        self._update_run_button_state()
 
     def pick_folder(self) -> None:
         p = QFileDialog.getExistingDirectory(self, "第1スクリーニングフォルダを選択")
@@ -135,10 +237,7 @@ class MainWindow(QMainWindow):
             return
         self.input_folder = Path(p)
         self.lbl_folder.setText(str(self.input_folder))
-        self.total_files = len(list(self.input_folder.glob("*.csv")))
-        if self.chk_recursive.isChecked():
-            self.total_files = len(list(self.input_folder.rglob("*.csv")))
-        self.lbl_csv_count.setText(f"対象CSV数: {self.total_files:,}")
+        self._recalc_csv_count()
         self._update_output_path()
 
     def pick_zoning(self) -> None:
@@ -147,6 +246,7 @@ class MainWindow(QMainWindow):
             return
         self.zoning_file = Path(p)
         self.lbl_zoning.setText(str(self.zoning_file))
+        self._update_run_button_state()
 
     def _update_output_path(self) -> None:
         if self.input_folder:
@@ -158,6 +258,9 @@ class MainWindow(QMainWindow):
             return
         if not self.input_folder or not self.zoning_file:
             QMessageBox.warning(self, "入力不足", "第1スクリーニングフォルダと任意ゾーニングファイルを選択してください。")
+            return
+        if self.total_files <= 0:
+            QMessageBox.warning(self, "入力不足", "対象CSVが0件です。フォルダ設定を見直してください。")
             return
         self._update_output_path()
 
@@ -175,14 +278,9 @@ class MainWindow(QMainWindow):
             args.append("--recursive")
 
         self.proc = QProcess(self)
-
         root_dir = Path(__file__).resolve().parent.parent
         runtime_py = root_dir / "runtime" / "python" / "python.exe"
-
-        if runtime_py.exists():
-            python_exec = str(runtime_py)
-        else:
-            python_exec = sys.executable
+        python_exec = str(runtime_py) if runtime_py.exists() else sys.executable
 
         self.proc.setProgram(python_exec)
         self.proc.setArguments(args)
@@ -192,10 +290,11 @@ class MainWindow(QMainWindow):
         self.proc.start()
 
         self._set_enabled(False)
+        self.btn_run.setEnabled(False)
         self.append_log("[INFO] 処理開始")
 
     def _set_enabled(self, enabled: bool) -> None:
-        for w in [self.btn_pick_folder, self.btn_pick_zoning, self.chk_recursive, self.btn_run]:
+        for w in [self.btn_pick_folder, self.btn_pick_zoning, self.chk_recursive]:
             w.setEnabled(enabled)
 
     def on_output(self) -> None:
@@ -227,7 +326,9 @@ class MainWindow(QMainWindow):
             self.btn_open.setEnabled(self.output_csv is not None and self.output_csv.exists())
             QMessageBox.information(self, "完了", "出力完了しました。")
         else:
+            self.append_log("[ERROR] 処理が異常終了しました。ログを確認してください。")
             QMessageBox.warning(self, "エラー", "処理中にエラーが発生しました。ログを確認してください。")
+        self._update_run_button_state()
 
     def open_output(self) -> None:
         if self.output_csv and self.output_csv.exists():

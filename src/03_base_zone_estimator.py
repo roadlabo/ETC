@@ -58,6 +58,15 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
+def _warn_limited(counter: dict[str, int], key: str, msg: str, limit: int = 20) -> None:
+    current = counter.get(key, 0)
+    if current < limit:
+        log(msg)
+    elif current == limit:
+        log(f"[WARN] {key}: 以降省略")
+    counter[key] = current + 1
+
+
 def parse_float(v: str | None) -> float | None:
     if v is None:
         return None
@@ -148,7 +157,7 @@ def load_zone_definition(zoning_csv: Path) -> list[PolygonZone]:
         name_idx, poly_idx = _pick_zone_columns(header)
 
     polygons: list[PolygonZone] = []
-    for row in rows[start_idx:]:
+    for row_no, row in enumerate(rows[start_idx:], start=start_idx + 1):
         if not row:
             continue
         zone_name = ""
@@ -171,10 +180,12 @@ def load_zone_definition(zoning_csv: Path) -> list[PolygonZone]:
                 if i + 1 < len(vals):
                     points.append((float(vals[i]), float(vals[i + 1])))
         if not zone_name or len(points) < 3:
+            log(f"[WARN] ゾーン定義スキップ: 行番号{row_no}（頂点不足または名称なし）")
             continue
         lons = [p[0] for p in points]
         lats = [p[1] for p in points]
         polygons.append(PolygonZone(zone_name, points, (min(lons), min(lats), max(lons), max(lats))))
+    log(f"[INFO] 有効ゾーン数: {len(polygons)}")
     return polygons
 
 
@@ -315,41 +326,95 @@ def _detect_input_columns(headers: Sequence[str]) -> tuple[int | None, int | Non
     return lat_i, lon_i, time_i, op_i
 
 
+def _looks_like_header_row(first_row: Sequence[str]) -> bool:
+    normalized = [_normalize(c) for c in first_row]
+    groups = [
+        ["lat", "latitude", "緯度"],
+        ["lon", "lng", "longitude", "経度"],
+        ["gps時刻", "gps_time", "time", "timestamp", "時刻"],
+        ["op_id", "opid", "運行id", "運行ID"],
+    ]
+    hit = 0
+    for candidates in groups:
+        cand_norm = [_normalize(c) for c in candidates]
+        found = any(any(cn in cell for cn in cand_norm) for cell in normalized)
+        if found:
+            hit += 1
+    return hit >= 2
+
+
+def _try_read_style12_rows(rows: Sequence[Sequence[str]]) -> tuple[list[Record], str | None]:
+    op_i, time_i, lon_i, lat_i = 3, 6, 14, 15
+    warn_counter: dict[str, int] = {}
+    records: list[Record] = []
+    op_from_col = None
+    for row_no, row in enumerate(rows, start=1):
+        if max(op_i, time_i, lon_i, lat_i) >= len(row):
+            _warn_limited(warn_counter, "行長不足", f"[WARN] 行長不足のためスキップ: 行番号{row_no}")
+            continue
+        dt = parse_datetime_any(row[time_i])
+        lat = parse_float(row[lat_i])
+        lon = parse_float(row[lon_i])
+        if dt is None or lat is None or lon is None:
+            _warn_limited(warn_counter, "解析失敗", f"[WARN] 日時/緯度/経度の解析失敗でスキップ: 行番号{row_no}")
+            continue
+        op_v = (row[op_i] or "").strip() or None
+        if op_from_col is None and op_v:
+            op_from_col = op_v
+        records.append(Record(dt, lat, lon, op_v))
+    records.sort(key=lambda r: r.ts)
+    return records, op_from_col
+
+
+def _try_read_header_rows(first_row: Sequence[str], rows: Sequence[Sequence[str]]) -> tuple[list[Record], str | None]:
+    lat_i, lon_i, time_i, op_i = _detect_input_columns(first_row)
+    if lat_i is None or lon_i is None or time_i is None:
+        log("[ERROR] 緯度/経度/時刻列を特定できません")
+        raise RuntimeError("緯度/経度/時刻列を特定できません")
+
+    warn_counter: dict[str, int] = {}
+    records: list[Record] = []
+    op_from_col = None
+    for row_no, row in enumerate(rows, start=2):
+        if max(lat_i, lon_i, time_i) >= len(row):
+            _warn_limited(warn_counter, "行長不足", f"[WARN] 行長不足のためスキップ: 行番号{row_no}")
+            continue
+        dt = parse_datetime_any(row[time_i])
+        lat = parse_float(row[lat_i])
+        lon = parse_float(row[lon_i])
+        if dt is None or lat is None or lon is None:
+            _warn_limited(warn_counter, "解析失敗", f"[WARN] 日時/緯度/経度の解析失敗でスキップ: 行番号{row_no}")
+            continue
+        op_v = None
+        if op_i is not None and op_i < len(row):
+            op_v = (row[op_i] or "").strip() or None
+        if op_from_col is None and op_v:
+            op_from_col = op_v
+        records.append(Record(dt, lat, lon, op_v))
+    records.sort(key=lambda r: r.ts)
+    return records, op_from_col
+
+
 def _read_records(csv_path: Path) -> tuple[list[Record], str | None]:
     for enc in ENCODINGS:
         try:
             with csv_path.open("r", encoding=enc, newline="") as f:
-                reader = csv.reader(f)
-                first = next(reader, None)
-                if first is None:
+                rows = list(csv.reader(f))
+                if not rows:
                     return [], None
-                has_header = any(not re.fullmatch(r"[-+]?\d+(\.\d+)?", c.strip()) for c in first)
-                rows = list(reader)
-                if not has_header:
-                    rows = [first] + rows
-                    lat_i, lon_i, time_i, op_i = 15, 14, 6, None
-                else:
-                    lat_i, lon_i, time_i, op_i = _detect_input_columns(first)
-                if lat_i is None or lon_i is None or time_i is None:
-                    raise RuntimeError("緯度/経度/時刻列を特定できません")
-                records: list[Record] = []
-                op_from_col = None
-                for row in rows:
-                    if max(lat_i, lon_i, time_i) >= len(row):
-                        continue
-                    dt = parse_datetime_any(row[time_i])
-                    lat = parse_float(row[lat_i])
-                    lon = parse_float(row[lon_i])
-                    if dt is None or lat is None or lon is None:
-                        continue
-                    op_v = None
-                    if op_i is not None and op_i < len(row):
-                        op_v = (row[op_i] or "").strip() or None
-                    if op_from_col is None and op_v:
-                        op_from_col = op_v
-                    records.append(Record(dt, lat, lon, op_v))
-                records.sort(key=lambda r: r.ts)
-                return records, op_from_col
+
+                log("[INFO] 読込方式: 様式1-2固定列")
+                records, op_from_col = _try_read_style12_rows(rows)
+                if records:
+                    return records, op_from_col
+
+                log("[WARN] 固定列方式で有効レコード0件、ヘッダー方式にフォールバック")
+                first = rows[0]
+                if not _looks_like_header_row(first):
+                    raise RuntimeError("様式1-2固定列/ヘッダー付き方式のいずれでも有効レコードを読めません")
+
+                log("[INFO] 読込方式: ヘッダー付き汎用CSV")
+                return _try_read_header_rows(first, rows[1:])
         except UnicodeDecodeError:
             continue
     raise RuntimeError("CSVの読み込みに失敗しました")
@@ -364,16 +429,22 @@ def _resolve_op_id(records: list[Record], op_col: str | None, file_path: Path) -
     return file_path.stem
 
 
-def estimate_for_file(csv_path: Path, zone_def: Sequence[PolygonZone]) -> tuple[str, str]:
+def estimate_for_file(csv_path: Path, zone_def: Sequence[PolygonZone]) -> tuple[str, str, str]:
     records, op_col = _read_records(csv_path)
     op_id = _resolve_op_id(records, op_col, csv_path)
     if not records:
-        return op_id, "判定不可"
+        log("[WARN] 有効レコード0件")
+        return op_id, "判定不可", "有効レコード0件"
 
     night = extract_night_records(records)
+    if not night:
+        log("[WARN] 夜間レコード0件")
+        return op_id, "判定不可", "夜間レコード0件"
+
     segments = detect_stop_segments(night)
     if not segments:
-        return op_id, "判定不可"
+        log("[WARN] 停留候補0件")
+        return op_id, "判定不可", "停留候補0件"
 
     candidates: list[ZoneCandidate] = []
     for seg in segments:
@@ -390,7 +461,10 @@ def estimate_for_file(csv_path: Path, zone_def: Sequence[PolygonZone]) -> tuple[
         )
 
     base_zone, _best = select_best_base_zone(candidates)
-    return op_id, base_zone
+    if base_zone == "ゾーン外":
+        log("[WARN] 停留候補はあるが全てゾーン外")
+        return op_id, base_zone, "ゾーン外"
+    return op_id, base_zone, "正常判定"
 
 
 def iter_csv_files(folder: Path, recursive: bool) -> list[Path]:
@@ -426,20 +500,20 @@ def run(args: argparse.Namespace) -> int:
         out_csv = input_dir.parent / f"{input_dir.name}_拠点ゾーン.csv"
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 
-    out_rows: list[tuple[str, str]] = []
+    out_rows: list[tuple[str, str, str]] = []
     for i, fp in enumerate(files, 1):
         log(f"[INFO] 現在処理中: {fp.name}")
         try:
-            op_id, base_zone = estimate_for_file(fp, zone_def)
+            op_id, base_zone, reason = estimate_for_file(fp, zone_def)
         except Exception as e:
             log(f"[ERROR] {fp.name}: {e}")
-            op_id, base_zone = fp.stem, "判定不可"
-        out_rows.append((op_id, base_zone))
+            op_id, base_zone, reason = fp.stem, "判定不可", "読込失敗"
+        out_rows.append((op_id, base_zone, reason))
         log(f"進捗ファイル: {i}/{total}")
 
     with out_csv.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["op_id", "base_zone"])
+        w.writerow(["op_id", "base_zone", "判定メモ"])
         w.writerows(out_rows)
 
     log(f"[INFO] 出力CSV: {out_csv}")
