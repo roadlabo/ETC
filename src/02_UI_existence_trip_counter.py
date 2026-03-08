@@ -203,14 +203,28 @@ class RealtimeSlotChart(QWidget):
         axis_font = QFont(p.font())
         axis_font.setPointSize(max(8, axis_font.pointSize() - 1))
         p.setFont(axis_font)
-        for idx in range(0, 49, 4):
+        axis_labels = [
+            (0, "0:00"),
+            (4, "2:00"),
+            (8, "4:00"),
+            (12, "6:00"),
+            (16, "8:00"),
+            (20, "10:00"),
+            (24, "12:00"),
+            (28, "14:00"),
+            (32, "16:00"),
+            (36, "18:00"),
+            (40, "20:00"),
+            (44, "22:00"),
+            (48, "24:00"),
+        ]
+        for idx, txt in axis_labels:
             x = chart.left() + int(idx * chart.width() / 48)
-            txt = f"{idx // 2}:00"
             p.drawLine(x, chart.bottom(), x, chart.bottom() + 4)
             text_w = 50 if idx in (0, 48) else 44
             p.drawText(x - text_w // 2, chart.bottom() + 8, text_w, 18, Qt.AlignmentFlag.AlignCenter, txt)
 
-        p.drawText(r.adjusted(6, 1, -8, -4), Qt.AlignmentFlag.AlignLeft, "縦軸：時間帯別レコード数（日平均）")
+        p.drawText(r.adjusted(6, 1, -8, -4), Qt.AlignmentFlag.AlignLeft, "縦軸: 時間帯別レコード数（日平均）")
         p.drawText(r.adjusted(10, r.height() - 24, -10, -4), Qt.AlignmentFlag.AlignCenter, "時間帯（30分スロット）")
 
         info_rect = r.adjusted(int(r.width() * 0.42), 4, -8, -6)
