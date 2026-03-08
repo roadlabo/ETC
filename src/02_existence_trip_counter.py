@@ -28,21 +28,6 @@ def log_error(msg: str) -> None:
     print(f"[ERROR] {msg}", flush=True)
 
 
-def parse_meshes(text: str) -> list[str]:
-    meshes = [m.strip() for m in text.split("+") if m.strip()]
-    if not meshes:
-        raise ValueError("meshes is empty")
-    uniq: list[str] = []
-    seen: set[str] = set()
-    for m in meshes:
-        if not re.fullmatch(r"\d+", m):
-            raise ValueError(f"invalid mesh: {m}")
-        if m not in seen:
-            seen.add(m)
-            uniq.append(m)
-    return uniq
-
-
 def parse_dates(text: str) -> set[date]:
     token = (text or "").strip()
     if not token:
@@ -75,7 +60,7 @@ def iter_csv_files(folder: Path, recursive: bool) -> list[Path]:
     return sorted(p for p in folder.glob("*.csv") if p.is_file())
 
 
-def _guess_column_map(header: list[str]) -> tuple[int | None, int | None]:
+def _guess_datetime_idx(header: list[str]) -> int | None:
     hmap = {c.strip().lower(): i for i, c in enumerate(header)}
 
     def pick(cands: Iterable[str]) -> int | None:
@@ -84,9 +69,7 @@ def _guess_column_map(header: list[str]) -> tuple[int | None, int | None]:
                 return hmap[c]
         return None
 
-    dt_idx = pick(["gps時刻", "gps", "gps_time", "gpsdatetime", "datetime", "time", "timestamp", "date"]) 
-    mesh_idx = pick(["2次メッシュコード", "mesh2", "mesh_code", "second_mesh", "2nd_mesh"])
-    return dt_idx, mesh_idx
+    return pick(["gps時刻", "gps", "gps_time", "gpsdatetime", "datetime", "time", "timestamp", "date"])
 
 
 def _parse_row_datetime(row: list[str], idx: int | None) -> datetime | None:
@@ -107,15 +90,6 @@ def _parse_row_datetime(row: list[str], idx: int | None) -> datetime | None:
     return None
 
 
-def _parse_mesh_code(row: list[str], mesh_idx: int | None) -> str | None:
-    if mesh_idx is None or mesh_idx >= len(row):
-        return None
-    mesh_token = row[mesh_idx].strip()
-    if mesh_token and re.fullmatch(r"\d+", mesh_token):
-        return mesh_token
-    return None
-
-
 def slot_label(slot_index: int) -> str:
     start_m = slot_index * 30
     end_m = start_m + 29
@@ -124,54 +98,44 @@ def slot_label(slot_index: int) -> str:
     return f"{sh:02d}:{sm:02d}-{eh:02d}:{em:02d}"
 
 
-def process_file(path: Path, target_dates: set[date], mesh_set: set[str]) -> tuple[set[int], dict[int, int]]:
-    hit_slots: set[int] = set()
-    record_counts: defaultdict[int, int] = defaultdict(int)
+def process_file(path: Path, target_dates: set[date]) -> dict[int, int]:
+    slot_counts: defaultdict[int, int] = defaultdict(int)
     with path.open("r", encoding="utf-8-sig", errors="ignore", newline="") as f:
         reader = csv.reader(f)
         first = next(reader, None)
         if first is None:
-            return hit_slots, dict(record_counts)
+            return dict(slot_counts)
 
         has_header = any(not re.fullmatch(r"[-+]?\d+(\.\d+)?", c.strip()) for c in first)
         if has_header:
-            dt_idx, mesh_idx = _guess_column_map(first)
+            dt_idx = _guess_datetime_idx(first)
         else:
-            dt_idx, mesh_idx = 6, 24
+            dt_idx = 6
             row = first
             dt = _parse_row_datetime(row, dt_idx)
             if dt and dt.date() in target_dates:
-                mesh_code = _parse_mesh_code(row, mesh_idx)
-                if mesh_code in mesh_set:
-                    slot = (dt.hour * 60 + dt.minute) // 30
-                    hit_slots.add(slot)
-                    record_counts[slot] += 1
+                slot = (dt.hour * 60 + dt.minute) // 30
+                slot_counts[slot] += 1
 
         for row in reader:
             dt = _parse_row_datetime(row, dt_idx if has_header else 6)
             if dt is None or dt.date() not in target_dates:
                 continue
-            mesh_code = _parse_mesh_code(row, mesh_idx if has_header else 24)
-            if mesh_code not in mesh_set:
-                continue
             slot = (dt.hour * 60 + dt.minute) // 30
-            hit_slots.add(slot)
-            record_counts[slot] += 1
-    return hit_slots, dict(record_counts)
+            slot_counts[slot] += 1
+    return dict(slot_counts)
 
 
 def write_output_csv(
     output: Path,
-    trip_counts: list[int],
-    record_counts: list[int],
-    meshes_expr: str,
+    slot_counts: list[int],
     dates_expr: str,
 ) -> None:
     with output.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["time_slot", "存在トリップ数", "該当レコード数", "メッシュ番号", "対象日"])
+        w.writerow(["time_slot", "対象日該当レコード数", "対象日"])
         for i in range(48):
-            w.writerow([slot_label(i), trip_counts[i], record_counts[i], meshes_expr, dates_expr])
+            w.writerow([slot_label(i), slot_counts[i], dates_expr])
 
 
 def run(args: argparse.Namespace) -> int:
@@ -184,38 +148,29 @@ def run(args: argparse.Namespace) -> int:
     if not target_dates:
         log_error("dates empty")
         return 2
-    meshes = parse_meshes(args.meshes)
-    mesh_set = set(meshes)
-
     files = iter_csv_files(input_dir, args.recursive)
     total = len(files)
     log_info(f"対象CSV数: {total}")
     log_info(f"対象日数: {len(target_dates)}")
-    log_info(f"対象メッシュ: {'+'.join(meshes)}")
-    log_info("2次メッシュ判定: CSVの25列目を使用（座標再計算なし）")
+    log_info("集計条件: 対象日一致のみ（メッシュ条件なし）")
+    log_info("集計方法: 全CSVの全行を走査し、対象日の日時を30分スロットへ累積")
+    log_info("SLOTCOUNT は対象日該当レコード数を表す")
     if total <= 0:
         log_error("対象CSVが0件")
         return 2
 
-    log_info("集計定義: 存在トリップ数=1CSVが同一30分帯に存在すれば1件 / 該当レコード数=対象条件に合う行数を加算")
-
-    trip_counts = [0] * 48
-    record_counts = [0] * 48
+    slot_counts = [0] * 48
     done = 0
     err = 0
     last_emit_t = 0.0
 
     for fp in files:
         try:
-            hit_slots, record_counts_by_file = process_file(fp, target_dates, mesh_set)
-            for s in hit_slots:
-                if 0 <= s < 48:
-                    trip_counts[s] += 1
-                    print(f"SLOTCOUNT:{s}:{trip_counts[s]}", flush=True)
-            for s, c in record_counts_by_file.items():
+            file_slot_counts = process_file(fp, target_dates)
+            for s, c in file_slot_counts.items():
                 if 0 <= s < 48 and c > 0:
-                    record_counts[s] += c
-                    print(f"SLOTRECORD:{s}:{record_counts[s]}", flush=True)
+                    slot_counts[s] += c
+                    print(f"SLOTCOUNT:{s}:{slot_counts[s]}", flush=True)
         except Exception as e:
             err += 1
             log_error(f"{fp.name}: {e}")
@@ -228,7 +183,7 @@ def run(args: argparse.Namespace) -> int:
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
-    write_output_csv(out, trip_counts, record_counts, "+".join(meshes), args.dates_compact or args.dates)
+    write_output_csv(out, slot_counts, args.dates_compact or args.dates)
 
     log_info(f"エラー数: {err}")
     log_info(f"出力CSV: {out}")

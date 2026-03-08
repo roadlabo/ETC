@@ -205,18 +205,18 @@ class RealtimeSlotChart(QWidget):
             p.drawLine(x, chart.bottom(), x, chart.bottom() + 4)
             p.drawText(x - 24, chart.bottom() + 8, 48, 18, Qt.AlignmentFlag.AlignCenter, txt)
 
-        p.drawText(r.adjusted(8, 4, -8, -4), Qt.AlignmentFlag.AlignLeft, "縦軸: 存在トリップ数")
+        p.drawText(r.adjusted(8, 4, -8, -4), Qt.AlignmentFlag.AlignLeft, "縦軸: 対象日該当レコード数")
         p.drawText(r.adjusted(10, r.height() - 24, -10, -4), Qt.AlignmentFlag.AlignCenter, "時間帯（30分スロット）")
 
         info_rect = r.adjusted(int(r.width() * 0.42), 4, -8, -6)
-        am_text = "午前ピーク: --:-- / 0"
+        am_text = "午前ピーク（対象日該当レコード数）: --:-- / 0"
         if am_peak_i is not None:
             hh, mm = divmod(am_peak_i * 30, 60)
-            am_text = f"午前ピーク: {hh:02d}:{mm:02d}-{hh:02d}:{mm + 29:02d} / {self.slot_counts[am_peak_i]:,}"
-        pm_text = "午後ピーク: --:-- / 0"
+            am_text = f"午前ピーク（対象日該当レコード数）: {hh:02d}:{mm:02d}-{hh:02d}:{mm + 29:02d} / {self.slot_counts[am_peak_i]:,}"
+        pm_text = "午後ピーク（対象日該当レコード数）: --:-- / 0"
         if pm_peak_i is not None:
             hh, mm = divmod(pm_peak_i * 30, 60)
-            pm_text = f"午後ピーク: {hh:02d}:{mm:02d}-{hh:02d}:{mm + 29:02d} / {self.slot_counts[pm_peak_i]:,}"
+            pm_text = f"午後ピーク（対象日該当レコード数）: {hh:02d}:{mm:02d}-{hh:02d}:{mm + 29:02d} / {self.slot_counts[pm_peak_i]:,}"
         p.setPen(QPen(QColor("#b8ffd6")))
         p.drawText(info_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight, f"{am_text}\n{pm_text}")
 
@@ -425,7 +425,7 @@ class MainWindow(QMainWindow):
                 if progress:
                     progress.setValue(i)
                     progress.setLabelText(f"CSVを読み込み中... {i:,} / {total:,}")
-                    if i % 100 == 0 or i == total:
+                    if i % 10 == 0 or i == total:
                         QApplication.processEvents()
         return sorted(out_dates), sorted(out_meshes)
 
@@ -457,10 +457,18 @@ class MainWindow(QMainWindow):
         progress.setAutoReset(True)
         progress.setValue(0)
         progress.show()
+        self.run_state_text = "LOADING"
+        self.lbl_status.setText("状態: LOADING")
+        self.sweep.set_running(True)
+        self.anim_timer.start(60)
         QApplication.processEvents()
         try:
             self.available_dates, self.available_meshes = self._scan_dates(self.csv_files, progress=progress)
         finally:
+            self.anim_timer.stop()
+            self.sweep.set_running(False)
+            self.run_state_text = "IDLE"
+            self.lbl_status.setText("状態: IDLE")
             progress.close()
 
         self.selected_dates = set(self.available_dates)
@@ -615,9 +623,6 @@ class MainWindow(QMainWindow):
         if not self.input_folder or self.total_files <= 0:
             QMessageBox.warning(self, "警告", "フォルダ未選択またはCSV 0件です。")
             return
-        if not self.available_meshes:
-            QMessageBox.warning(self, "警告", "対象メッシュが見つかりません。")
-            return
         if not self.selected_dates:
             QMessageBox.warning(self, "警告", "対象日を1日以上選択してください。")
             return
@@ -669,7 +674,8 @@ class MainWindow(QMainWindow):
         self.anim_timer.start(60)
         self._set_inputs_enabled(False)
         self.append_log("集計開始")
-        self.append_log(f"対象メッシュ: {', '.join(self.available_meshes)}")
+        self.append_log("集計条件: 対象日一致のみ（メッシュ条件なし）")
+        self.append_log("集計方法: 全CSV・全行の日時を確認し、対象日なら30分スロットへ累積")
         self.append_log(f"対象日数: {len(self.selected_dates)}日")
         self.append_log(f"サブフォルダ: {'はい' if self.chk_recursive.isChecked() else 'いいえ'}")
         self.proc.start()
@@ -844,7 +850,7 @@ class MainWindow(QMainWindow):
             f"抽出日数: {len(self.available_dates):,}\n"
             f"選択中日数: {len(self.selected_dates):,}\n"
             f"対象メッシュ数: {mesh_n:,}\n"
-            f"対象2次メッシュ:\n{meshes_text}\n"
+            f"対象2次メッシュ（参考・集計には未使用）:\n{meshes_text}\n"
             f"進捗ファイル: {self.done_files:,}/{self.total_files:,}\n"
             f"エラー数: {self.error_count:,}\n"
             f"現在状態: {state_text}\n"
