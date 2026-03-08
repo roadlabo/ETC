@@ -4,12 +4,11 @@ import csv
 import os
 import re
 import sys
-import tempfile
 import time
 from pathlib import Path
 import logging
 
-from PyQt6.QtCore import QProcess, QTimer, Qt, QUrl
+from PyQt6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt
 from PyQt6.QtGui import QPainter, QPen, QColor, QPolygonF
 from PyQt6.QtWidgets import (
     QApplication,
@@ -25,15 +24,9 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
-    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
-
-try:
-    from PyQt6.QtWebEngineWidgets import QWebEngineView
-except Exception:  # pragma: no cover
-    QWebEngineView = None
 
 APP_TITLE = "03_運行ID別 推定拠点ゾーン対応表 作成"
 RE_PROGRESS = re.compile(r"\[PROGRESS\]\s+done=(\d+)\s+total=(\d+)(?:\s+file=(.+))?")
@@ -121,18 +114,20 @@ def parse_zone_shapes(path: Path) -> dict[str, list[tuple[float, float]]]:
             return {}
     if not rows:
         return {}
-    header = rows[0]
-    has_header = any(not re.fullmatch(r"[-+]?\d+(\.\d+)?", c.strip()) for c in header[1:])
-    body = rows[1:] if has_header else rows
     zone_map: dict[str, list[tuple[float, float]]] = {}
-    for row in body:
-        if not row:
+    for row in rows:
+        if not row or len(row) < 7:
             continue
-        name = row[0].strip()
+        name = (row[0] or "").replace("\ufeff", "").strip()
         if not name:
             continue
-        nums = [float(x) for x in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", ",".join(row[1:]))]
-        points = [(nums[i], nums[i + 1]) for i in range(0, len(nums) - 1, 2)]
+        vals: list[float] = []
+        for cell in row[1:]:
+            try:
+                vals.append(float(str(cell).strip()))
+            except Exception:
+                continue
+        points = [(vals[i], vals[i + 1]) for i in range(0, len(vals) - 1, 2)]
         if len(points) >= 3:
             zone_map[name] = points
     return zone_map
@@ -195,8 +190,10 @@ class ZoneMapWidget(QWidget):
         min_lat, max_lat = min(lats), max(lats)
         w = max(max_lon - min_lon, 1e-9)
         h = max(max_lat - min_lat, 1e-9)
-        scale = min(self.width() * 0.8 / w, self.height() * 0.8 / h)
-        scale = max(scale, 1.0)
+        margin = 0.1
+        draw_w = max(self.width() * (1.0 - margin * 2.0), 1.0)
+        draw_h = max(self.height() * (1.0 - margin * 2.0), 1.0)
+        scale = min(draw_w / w, draw_h / h)
         cx = (min_lon + max_lon) / 2.0
         cy = (min_lat + max_lat) / 2.0
         poly = QPolygonF()
@@ -204,11 +201,19 @@ class ZoneMapWidget(QWidget):
             x = self.width() / 2 + (lon - cx) * scale
             y = self.height() / 2 - (lat - cy) * scale
             poly.append(__import__("PyQt6.QtCore").QtCore.QPointF(x, y))
-        p.setPen(QPen(QColor("#00a3a3"), 3))
-        p.setBrush(QColor(0, 170, 170, 60))
+        p.setPen(QPen(QColor("#00a3a3"), 4))
+        p.setBrush(QColor(0, 170, 170, 80))
         p.drawPolygon(poly)
+        if self.zone_name in AUX_ZONE_NAMES:
+            p.setPen(QPen(QColor(30, 30, 30, 130), 1))
+            p.setBrush(QColor(0, 0, 0, 30))
+            p.drawPolygon(poly)
         p.setPen(QPen(QColor("#333333"), 1))
-        p.drawText(16, 28, self.zone_name)
+        font = p.font()
+        font.setPointSize(16)
+        font.setBold(True)
+        p.setFont(font)
+        p.drawText(self.rect().adjusted(0, 8, 0, 0), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter, self.zone_name)
 
 
 class ZoneCard(QPushButton):
@@ -262,10 +267,8 @@ class MainWindow(QMainWindow):
         self._stdout_buffer = ""
         self._last_hit_milestone = 0
         self._last_progress_milestone = 0
-        self._map_warned = False
-        self._map_html_path = Path(tempfile.gettempdir()) / "zone_estimator_map.html"
+        self.is_running = False
         self.selected_zone_name = ""
-        self._web_map_enabled = QWebEngineView is not None
         self._debug_logger = logging.getLogger("zone_estimator_ui")
 
         self._build_ui()
@@ -335,15 +338,10 @@ class MainWindow(QMainWindow):
         center_frame = QFrame(); center_frame.setObjectName("card")
         cf = QVBoxLayout(center_frame); cf.setContentsMargins(8, 8, 8, 8)
         cf.addWidget(QLabel("地図表示エリア", objectName="panelTitle"))
-        self.map_holder = QWidget(); self.map_stack = QStackedLayout(self.map_holder)
+        self.map_holder = QWidget(); map_layout = QVBoxLayout(self.map_holder)
+        map_layout.setContentsMargins(0, 0, 0, 0)
         self.map_widget = ZoneMapWidget()
-        self.map_stack.addWidget(self.map_widget)
-        self.web_map = None
-        if QWebEngineView is not None:
-            self.web_map = QWebEngineView()
-            self.web_map.loadFinished.connect(self._on_web_map_loaded)
-            self.map_stack.addWidget(self.web_map)
-            self.map_stack.setCurrentWidget(self.web_map)
+        map_layout.addWidget(self.map_widget)
         cf.addWidget(self.map_holder, 1)
 
         right_frame = QFrame(); right_frame.setObjectName("telemetry")
@@ -445,10 +443,12 @@ class MainWindow(QMainWindow):
         self._update_run_state()
 
     def _update_run_state(self) -> None:
-        running = self.proc is not None and self.proc.state() != QProcess.ProcessState.NotRunning
+        running = self.is_running
         self.btn_run.setEnabled((not running) and self.input_folder is not None and self.zoning_file is not None and self.total_files > 0)
         self.set_step_controls_enabled(not running)
         self.set_zone_cards_enabled(True)
+        if not running:
+            self.btn_open.setEnabled(self.output_csv is not None and self.output_csv.exists())
 
     def set_step_controls_enabled(self, enabled: bool) -> None:
         for w in [
@@ -562,7 +562,7 @@ class MainWindow(QMainWindow):
         if len(points) < 3:
             msg = "ゾーン定義が見つかりません"
             self.map_widget.set_zone(zone_name, [], msg)
-            self.map_stack.setCurrentWidget(self.map_widget)
+            self.map_widget.update()
             return
 
         valid_points: list[tuple[float, float]] = []
@@ -573,50 +573,11 @@ class MainWindow(QMainWindow):
 
         if len(valid_points) < 3:
             self.map_widget.set_zone(zone_name, [], "ゾーンポリゴンを表示できません")
-            self.map_stack.setCurrentWidget(self.map_widget)
+            self.map_widget.update()
             return
 
-        # 常に簡易描画を即時更新して無反応に見えないようにする
         self.map_widget.set_zone(zone_name, valid_points)
-        self.map_stack.setCurrentWidget(self.map_widget)
         self.map_widget.update()
-
-        if self._web_map_enabled:
-            self._render_web_map(zone_name, valid_points)
-
-    def _render_web_map(self, zone_name: str, points: list[tuple[float, float]]) -> None:
-        if self.web_map is None or not points:
-            return
-        coords = ",\n".join(f"[{lat},{lon}]" for lon, lat in points)
-        lat_center = sum(p[1] for p in points) / len(points)
-        lon_center = sum(p[0] for p in points) / len(points)
-        html = f"""<!doctype html><html><head><meta charset='utf-8'>
-<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/><script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
-<style>html,body,#map{{height:100%;margin:0}} .ttl{{position:absolute;z-index:1000;left:8px;top:8px;background:#fff;padding:4px 8px;border-radius:4px;}}</style></head>
-<body><div class='ttl'>{zone_name}</div><div id='map'></div><script>
-const map=L.map('map').setView([{lat_center},{lon_center}],13);
-L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:19,attribution:'&copy; OSM'}}).addTo(map);
-const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.28}}).addTo(map); map.fitBounds(poly.getBounds(),{{padding:[20,20]}});
-</script></body></html>"""
-        try:
-            self._map_html_path.write_text(html, encoding="utf-8")
-            self._debug_logger.debug("[DEBUG] map mode: web")
-            self.map_stack.setCurrentWidget(self.web_map)
-            self.web_map.load(QUrl.fromLocalFile(str(self._map_html_path)))
-        except Exception:
-            self._switch_to_simple_map()
-
-    def _on_web_map_loaded(self, ok: bool) -> None:
-        if not ok:
-            self._switch_to_simple_map()
-
-    def _switch_to_simple_map(self) -> None:
-        self._debug_logger.debug("[DEBUG] map mode fallback: simple")
-        self._web_map_enabled = False
-        self.map_stack.setCurrentWidget(self.map_widget)
-        if not self._map_warned:
-            self._map_warned = True
-            self.append_uiwarn("ベースマップ取得に失敗したため簡易地図表示に切替")
 
     def increment_zone_hit_count(self, zone_name: str) -> None:
         resolved_name = zone_name
@@ -631,7 +592,9 @@ const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.2
             resolved_name = self.zone_shape_aliases.get(self._normalize_zone_key(zone_name), zone_name)
         self.zone_hit_counts[resolved_name] = count
         if resolved_name in self.zone_cards:
-            self.zone_cards[resolved_name].set_count(count)
+            card = self.zone_cards[resolved_name]
+            card.set_count(count)
+            card.update()
 
     def pick_zoning(self) -> None:
         p, _ = QFileDialog.getOpenFileName(self, "任意ゾーニングファイルを選択", "", "CSV (*.csv)")
@@ -646,7 +609,6 @@ const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.2
             self.on_zone_card_clicked(next(iter(self.zone_shapes.keys())))
         else:
             self.map_widget.set_zone("", [], "ゾーンポリゴンを表示できません")
-            self.map_stack.setCurrentWidget(self.map_widget)
         self._update_run_state()
 
     def _refresh_progress(self) -> None:
@@ -672,6 +634,7 @@ const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.2
         self._refresh_progress()
         self.log.clear(); self._last_log = ""
         self.run_started_at = time.time()
+        self.is_running = True
         self.lbl_status.setText("状態: RUNNING")
         self.radar.set_running(True)
         self.btn_open.setEnabled(False)
@@ -686,8 +649,12 @@ const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.2
             args.append("--recursive")
 
         self.proc = QProcess(self)
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("PYTHONIOENCODING", "utf-8")
+        env.insert("PYTHONUTF8", "1")
+        self.proc.setProcessEnvironment(env)
         self.proc.setProgram(sys.executable)
-        self.proc.setArguments(args)
+        self.proc.setArguments(["-X", "utf8"] + args)
         self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.proc.readyReadStandardOutput.connect(self.on_output)
         self.proc.finished.connect(self.on_finished)
@@ -734,7 +701,8 @@ const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.2
     def on_output(self) -> None:
         if not self.proc:
             return
-        data = bytes(self.proc.readAllStandardOutput()).decode("utf-8", errors="ignore")
+        raw = bytes(self.proc.readAllStandardOutput())
+        data = raw.decode("utf-8", errors="replace")
         rows = (self._stdout_buffer + data).split("\n")
         self._stdout_buffer = rows.pop() if rows else ""
         for raw in rows:
@@ -749,7 +717,7 @@ const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.2
 
     def _tick(self) -> None:
         self.radar.tick()
-        running = self.proc is not None and self.proc.state() != QProcess.ProcessState.NotRunning
+        running = self.is_running
         if running and self.run_started_at:
             elapsed = int(time.time() - self.run_started_at)
             self.lbl_elapsed.setText(f"経過 {format_hhmmss(elapsed)}")
@@ -760,6 +728,7 @@ const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.2
                 self.lbl_remaining.setText("残り --:--:--")
 
     def on_finished(self, code: int, _status) -> None:
+        self.is_running = False
         if self._stdout_buffer:
             line = _normalize_log_line(self._stdout_buffer)
             self._process_log_line(line)

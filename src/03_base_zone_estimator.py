@@ -18,6 +18,12 @@ MORNING_END_HOUR = 10
 NIGHT_CROSS_MAX_DIST_M = 300.0
 AUX_ZONE_NAMES = ("北方面", "南方面", "東方面", "西方面")
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+    sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)
+except Exception:
+    pass
+
 
 @dataclass
 class PolygonZone:
@@ -101,22 +107,6 @@ def _find_col_index(headers: Sequence[str], candidates: Sequence[str]) -> int | 
     return None
 
 
-def _pick_zone_columns(headers: Sequence[str]) -> tuple[int | None, int | None]:
-    name_idx = _find_col_index(headers, ["zone_name", "zone", "name", "ゾーン名", "名称"])
-    poly_idx = _find_col_index(headers, ["polygon", "points", "coords", "座標", "polygon_wkt", "wkt"])
-    return name_idx, poly_idx
-
-
-def _parse_polygon_text(text: str) -> list[tuple[float, float]]:
-    nums = [parse_float(x) for x in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text or "")]
-    vals = [x for x in nums if x is not None]
-    points: list[tuple[float, float]] = []
-    for i in range(0, len(vals), 2):
-        if i + 1 < len(vals):
-            points.append((float(vals[i]), float(vals[i + 1])))
-    return points
-
-
 def load_zone_definition(zoning_csv: Path) -> list[PolygonZone]:
     rows: list[list[str]] = []
     for enc in ENCODINGS:
@@ -129,36 +119,17 @@ def load_zone_definition(zoning_csv: Path) -> list[PolygonZone]:
     if not rows:
         return []
 
-    header = rows[0]
-    has_header = any(not re.fullmatch(r"[-+]?\d+(\.\d+)?", c.strip()) for c in header[1:])
-    start_idx = 1 if has_header else 0
-    name_idx = poly_idx = None
-    if has_header:
-        name_idx, poly_idx = _pick_zone_columns(header)
-
     polygons: list[PolygonZone] = []
-    for row in rows[start_idx:]:
-        if not row:
+    for row in rows:
+        if not row or len(row) < 7:
             continue
-        zone_name = ""
-        points: list[tuple[float, float]] = []
-        if has_header and name_idx is not None and poly_idx is not None and max(name_idx, poly_idx) < len(row):
-            zone_name = (row[name_idx] or "").strip()
-            points = _parse_polygon_text(row[poly_idx] or "")
-        elif has_header and name_idx is not None and name_idx < len(row):
-            zone_name = (row[name_idx] or "").strip()
-            vals = [parse_float(x) for x in row if x is not None]
-            seq = [x for x in vals if x is not None]
-            for i in range(0, len(seq), 2):
-                if i + 1 < len(seq):
-                    points.append((float(seq[i]), float(seq[i + 1])))
-        else:
-            zone_name = (row[0] or "").strip()
-            vals = [parse_float(x) for x in row[1:]]
-            seq = [x for x in vals if x is not None]
-            for i in range(0, len(seq), 2):
-                if i + 1 < len(seq):
-                    points.append((float(seq[i]), float(seq[i + 1])))
+        zone_name = (row[0] or "").replace("\ufeff", "").strip()
+        vals: list[float] = []
+        for cell in row[1:]:
+            v = parse_float(cell)
+            if v is not None:
+                vals.append(float(v))
+        points = [(vals[i], vals[i + 1]) for i in range(0, len(vals) - 1, 2)]
         if not zone_name or len(points) < 3:
             continue
         lons = [p[0] for p in points]
