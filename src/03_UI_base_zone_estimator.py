@@ -4,11 +4,12 @@ import csv
 import os
 import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import QProcess, QTimer, Qt
-from PyQt6.QtGui import QFont, QPainter, QPen, QColor, QPolygonF
+from PyQt6.QtCore import QProcess, QTimer, Qt, QUrl
+from PyQt6.QtGui import QPainter, QPen, QColor, QPolygonF
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -23,15 +24,23 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
 
+try:
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+except Exception:  # pragma: no cover
+    QWebEngineView = None
+
 APP_TITLE = "03_運行ID別 推定拠点ゾーン対応表 作成"
-RE_PROGRESS = re.compile(r"\[PROGRESS\]\s+done=(\d+)\s+total=(\d+)\s+file=(.+)")
+RE_PROGRESS = re.compile(r"\[PROGRESS\]\s+done=(\d+)\s+total=(\d+)(?:\s+file=(.+))?")
 RE_TOTAL = re.compile(r"\[TOTAL\]\s+total=(\d+)")
 RE_HIT = re.compile(r"\[HIT\]\s+op_id=(\S+)\s+zone=(.+?)\s+hit_count=(\d+)")
+RE_HIT_AUX = re.compile(r"\[HIT_AUX\]\s+op_id=(\S+)\s+zone=(.+?)\s+aux_count=(\d+)")
 RE_ZONE_COUNT = re.compile(r"\[INFO\]\s+有効ゾーン数:\s*(\d+)")
+AUX_ZONE_NAMES = ("北方面", "南方面", "東方面", "西方面")
 
 
 def _normalize_log_line(text: str) -> str:
@@ -44,6 +53,58 @@ def format_hhmmss(sec: int) -> str:
     h, rem = divmod(sec, 3600)
     m, s = divmod(rem, 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def should_count_as_input_csv(filename: str) -> bool:
+    n = (filename or "").strip()
+    lower = n.lower()
+    if not lower.endswith(".csv"):
+        return False
+    if n.startswith(".") or n.startswith("~$"):
+        return False
+    if lower == "zoning_data.csv" or n.endswith("_拠点ゾーン.csv"):
+        return False
+    return True
+
+
+def fast_count_csv_files(folder: str, include_subfolders: bool) -> int:
+    base = Path(folder)
+    if not base.is_dir():
+        return 0
+    count = 0
+    stack = [str(base)]
+    while stack:
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                for ent in it:
+                    if ent.is_file() and should_count_as_input_csv(ent.name):
+                        count += 1
+                    elif include_subfolders and ent.is_dir(follow_symlinks=False) and not ent.name.startswith("."):
+                        stack.append(ent.path)
+        except Exception:
+            continue
+    return count
+
+
+def build_processing_file_list(folder: str, include_subfolders: bool) -> list[Path]:
+    base = Path(folder)
+    if not base.is_dir():
+        return []
+    files: list[Path] = []
+    stack = [str(base)]
+    while stack:
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                for ent in it:
+                    if ent.is_file() and should_count_as_input_csv(ent.name):
+                        files.append(Path(ent.path))
+                    elif include_subfolders and ent.is_dir(follow_symlinks=False) and not ent.name.startswith("."):
+                        stack.append(ent.path)
+        except Exception:
+            continue
+    return sorted(files)
 
 
 def parse_zone_shapes(path: Path) -> dict[str, list[tuple[float, float]]]:
@@ -131,9 +192,7 @@ class ZoneMapWidget(QWidget):
         min_lat, max_lat = min(lats), max(lats)
         w = max(max_lon - min_lon, 1e-9)
         h = max(max_lat - min_lat, 1e-9)
-        rw = self.width() * 0.8
-        rh = self.height() * 0.75
-        scale = min(rw / w, rh / h)
+        scale = min(self.width() * 0.8 / w, self.height() * 0.75 / h)
         cx = (min_lon + max_lon) / 2.0
         cy = (min_lat + max_lat) / 2.0
         poly = QPolygonF()
@@ -192,6 +251,10 @@ class MainWindow(QMainWindow):
         self._counted_ops: set[str] = set()
         self._last_log = ""
         self._stdout_buffer = ""
+        self._last_hit_milestone = 0
+        self._last_progress_milestone = 0
+        self._map_warned = False
+        self._map_html_path = Path(tempfile.gettempdir()) / "zone_estimator_map.html"
 
         self._build_ui()
         self.timer = QTimer(self)
@@ -260,8 +323,16 @@ class MainWindow(QMainWindow):
         center_frame = QFrame(); center_frame.setObjectName("card")
         cf = QVBoxLayout(center_frame); cf.setContentsMargins(8, 8, 8, 8)
         cf.addWidget(QLabel("地図表示エリア", objectName="panelTitle"))
+        self.map_holder = QWidget(); self.map_stack = QStackedLayout(self.map_holder)
         self.map_widget = ZoneMapWidget()
-        cf.addWidget(self.map_widget, 1)
+        self.map_stack.addWidget(self.map_widget)
+        self.web_map = None
+        if QWebEngineView is not None:
+            self.web_map = QWebEngineView()
+            self.web_map.loadFinished.connect(self._on_web_map_loaded)
+            self.map_stack.addWidget(self.web_map)
+            self.map_stack.setCurrentWidget(self.web_map)
+        cf.addWidget(self.map_holder, 1)
 
         right_frame = QFrame(); right_frame.setObjectName("telemetry")
         rf = QVBoxLayout(right_frame); rf.setContentsMargins(10, 10, 10, 10); rf.setSpacing(6)
@@ -276,6 +347,28 @@ class MainWindow(QMainWindow):
         for w in [self.lbl_zone_count, self.lbl_status, self.lbl_current, self.lbl_progress, self.lbl_hit, self.lbl_elapsed, self.lbl_remaining]:
             rf.addWidget(w)
         self.radar = RadarWidget(); rf.addWidget(self.radar)
+
+        logic = QFrame(); logic.setObjectName("logicCard")
+        ll = QVBoxLayout(logic); ll.setContentsMargins(8, 8, 8, 8); ll.setSpacing(4)
+        ll.addWidget(QLabel("JUDGMENT LOGIC", objectName="panelTitle"))
+        logic_text = (
+            "【判定コンセプト】\n"
+            "このソフトは、運行IDごとの軌跡から「拠点らしい場所」を推定します。\n"
+            "重視するのは、夜にトリップが終わり、翌朝に同じ場所から再び動き始める「夜をまたぐ位置」です。\n\n"
+            "【判定手順】\n"
+            "① 日ごとの最終点と翌日の最初の点を取り出します。\n"
+            "② 夜側（20:00以降）と朝側（5:00～10:00）の組で、距離が近いものを夜越し地点候補とします。\n"
+            "③ その代表点をゾーンに当てはめ、同じゾーンが複数回出れば、そのゾーンを拠点と判定します。\n"
+            "④ 夜越し地点が見つからない場合は、CSV内で最も深夜3:00に近い点を使ってゾーン判定します。\n"
+            "⑤ それでもゾーンに入らない場合は判定不可とします。\n\n"
+            "【補助分類】\n"
+            "通常ゾーンに入らない場合は、全体位置関係から東西南北の補助分類を行います。"
+        )
+        lbl_logic = QLabel(logic_text)
+        lbl_logic.setWordWrap(True)
+        lbl_logic.setStyleSheet("font-size:11px;color:#baf7de;")
+        ll.addWidget(lbl_logic)
+        rf.addWidget(logic)
         rf.addStretch(1)
 
         middle.addWidget(left_frame)
@@ -296,7 +389,7 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             """
             QWidget { background:#060b09; color:#98f3c8; }
-            QFrame#card, QFrame#telemetry, QFrame#step { background:#0d1714; border:1px solid #1f4a38; border-radius:10px; }
+            QFrame#card, QFrame#telemetry, QFrame#step, QFrame#logicCard { background:#0d1714; border:1px solid #1f4a38; border-radius:10px; }
             QFrame#telemetry { border:1px solid #35ffd5; }
             QLabel#title { font-size:22px; font-weight:800; color:#e9fff4; }
             QLabel#panelTitle { font-size:14px; font-weight:800; color:#73ffe1; }
@@ -317,11 +410,17 @@ class MainWindow(QMainWindow):
         self._last_log = line
         self.log.setPlainText(line)
 
+    def append_uiinfo(self, text: str) -> None:
+        self.append_log_line(f"[UIINFO] {text}")
+
+    def append_uiwarn(self, text: str) -> None:
+        self.append_log_line(f"[UIWARN] {text}")
+
+    def append_uierror(self, text: str) -> None:
+        self.append_log_line(f"[UIERROR] {text}")
+
     def recount_target_csvs(self) -> int:
-        if not self.input_folder:
-            return 0
-        gen = self.input_folder.rglob("*.csv") if self.chk_recursive.isChecked() else self.input_folder.glob("*.csv")
-        return sum(1 for p in gen if p.is_file() and not p.name.endswith("_拠点ゾーン.csv") and p.name != "zoning_data.csv")
+        return 0 if not self.input_folder else fast_count_csv_files(str(self.input_folder), self.chk_recursive.isChecked())
 
     def _recalc_csv_count(self) -> None:
         self.total_files = self.recount_target_csvs()
@@ -343,7 +442,11 @@ class MainWindow(QMainWindow):
             return
         self.input_folder = Path(p)
         self.lbl_folder.setText(str(self.input_folder))
-        self._update_output_path(); self._recalc_csv_count()
+        self._update_output_path()
+        self.total_files = self.recount_target_csvs()
+        self.append_uiinfo(f"対象CSV数: {self.total_files:,}")
+        self._refresh_progress()
+        self._update_run_state()
 
     def build_zone_cards(self) -> None:
         while self.card_grid.count():
@@ -351,9 +454,10 @@ class MainWindow(QMainWindow):
             w = item.widget()
             if w:
                 w.deleteLater()
+        ordered = list(self.zone_shapes.keys()) + list(AUX_ZONE_NAMES)
         self.zone_cards.clear()
-        self.zone_hit_counts = {name: 0 for name in self.zone_shapes.keys()}
-        for idx, zone_name in enumerate(self.zone_shapes.keys()):
+        self.zone_hit_counts = {name: 0 for name in ordered}
+        for idx, zone_name in enumerate(ordered):
             card = ZoneCard(zone_name)
             card.clicked.connect(lambda _=False, n=zone_name: self.select_zone_card(n))
             self.zone_cards[zone_name] = card
@@ -365,8 +469,59 @@ class MainWindow(QMainWindow):
             c.setChecked(n == zone_name)
         self.render_zone_on_map(zone_name)
 
+    def _aux_zone_shape(self, zone_name: str) -> list[tuple[float, float]]:
+        points = [pt for poly in self.zone_shapes.values() for pt in poly]
+        if not points:
+            return []
+        lons = [p[0] for p in points]
+        lats = [p[1] for p in points]
+        min_lon, max_lon = min(lons), max(lons)
+        min_lat, max_lat = min(lats), max(lats)
+        mid_lon = (min_lon + max_lon) / 2.0
+        mid_lat = (min_lat + max_lat) / 2.0
+        if zone_name == "北方面":
+            return [(min_lon, mid_lat), (max_lon, mid_lat), (max_lon, max_lat), (min_lon, max_lat)]
+        if zone_name == "南方面":
+            return [(min_lon, min_lat), (max_lon, min_lat), (max_lon, mid_lat), (min_lon, mid_lat)]
+        if zone_name == "東方面":
+            return [(mid_lon, min_lat), (max_lon, min_lat), (max_lon, max_lat), (mid_lon, max_lat)]
+        return [(min_lon, min_lat), (mid_lon, min_lat), (mid_lon, max_lat), (min_lon, max_lat)]
+
     def render_zone_on_map(self, zone_name: str) -> None:
-        self.map_widget.set_zone(zone_name, self.zone_shapes.get(zone_name, []))
+        points = self._aux_zone_shape(zone_name) if zone_name in AUX_ZONE_NAMES else self.zone_shapes.get(zone_name, [])
+        self.map_widget.set_zone(zone_name, points)
+        self._render_web_map(zone_name, points)
+
+    def _render_web_map(self, zone_name: str, points: list[tuple[float, float]]) -> None:
+        if self.web_map is None or not points:
+            return
+        coords = ",\n".join(f"[{lat},{lon}]" for lon, lat in points)
+        lat_center = sum(p[1] for p in points) / len(points)
+        lon_center = sum(p[0] for p in points) / len(points)
+        html = f"""<!doctype html><html><head><meta charset='utf-8'>
+<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/><script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
+<style>html,body,#map{{height:100%;margin:0}} .ttl{{position:absolute;z-index:1000;left:8px;top:8px;background:#fff;padding:4px 8px;border-radius:4px;}}</style></head>
+<body><div class='ttl'>{zone_name}</div><div id='map'></div><script>
+const map=L.map('map').setView([{lat_center},{lon_center}],13);
+L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:19,attribution:'&copy; OSM'}}).addTo(map);
+const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.28}}).addTo(map); map.fitBounds(poly.getBounds(),{{padding:[20,20]}});
+</script></body></html>"""
+        try:
+            self._map_html_path.write_text(html, encoding="utf-8")
+            self.map_stack.setCurrentWidget(self.web_map)
+            self.web_map.load(QUrl.fromLocalFile(str(self._map_html_path)))
+        except Exception:
+            self._switch_to_simple_map()
+
+    def _on_web_map_loaded(self, ok: bool) -> None:
+        if not ok:
+            self._switch_to_simple_map()
+
+    def _switch_to_simple_map(self) -> None:
+        self.map_stack.setCurrentWidget(self.map_widget)
+        if not self._map_warned:
+            self._map_warned = True
+            self.append_uiwarn("ベースマップ取得に失敗したため簡易地図表示に切替")
 
     def update_zone_card(self, zone_name: str, count: int) -> None:
         self.zone_hit_counts[zone_name] = count
@@ -394,13 +549,15 @@ class MainWindow(QMainWindow):
         if not self.input_folder or not self.zoning_file:
             return
         self._update_output_path()
-        self.total_files = self.recount_target_csvs()
+        self.total_files = len(build_processing_file_list(str(self.input_folder), self.chk_recursive.isChecked()))
         if self.total_files <= 0:
             QMessageBox.warning(self, "入力不足", "対象CSVがありません。")
             return
         self.done_files = 0
         self.hit_count = 0
         self._counted_ops.clear()
+        self._last_hit_milestone = 0
+        self._last_progress_milestone = 0
         for n in self.zone_hit_counts:
             self.update_zone_card(n, 0)
         self._refresh_progress()
@@ -425,19 +582,36 @@ class MainWindow(QMainWindow):
         self.proc.finished.connect(self.on_finished)
         self.proc.start()
         self._update_run_state()
-        self.append_log_line("[INFO] 開始")
+        self.append_uiinfo(f"解析開始 / 対象CSV数={self.total_files:,} / ゾーン数={len(self.zone_shapes):,}")
 
     def _process_log_line(self, line: str) -> None:
         if m := RE_TOTAL.search(line):
             self.total_files = int(m.group(1))
             self._refresh_progress()
         if m := RE_PROGRESS.search(line):
-            self.done_files = int(m.group(1)); self.total_files = int(m.group(2)); self.current_file = _normalize_log_line(m.group(3))
+            self.done_files = int(m.group(1)); self.total_files = int(m.group(2))
+            if m.group(3):
+                self.current_file = _normalize_log_line(m.group(3))
             self.lbl_current.setText(f"現在: {self.current_file}")
             self._refresh_progress()
+            if self.total_files > 0:
+                milestone = (int((self.done_files / self.total_files) * 100) // 10) * 10
+                if milestone >= 10 and milestone > self._last_progress_milestone:
+                    self._last_progress_milestone = milestone
+                    self.append_uiinfo(f"進捗 {milestone}%")
         if m := RE_HIT.search(line):
-            op_id = m.group(1)
-            zone = _normalize_log_line(m.group(2))
+            op_id, zone = m.group(1), _normalize_log_line(m.group(2))
+            if op_id not in self._counted_ops:
+                self._counted_ops.add(op_id)
+                self.hit_count += 1
+                self.update_zone_card(zone, self.zone_hit_counts.get(zone, 0) + 1)
+            self.lbl_hit.setText(f"正常HIT: {self.hit_count:,}")
+            milestone = (self.hit_count // 100) * 100
+            if milestone >= 100 and milestone > self._last_hit_milestone:
+                self._last_hit_milestone = milestone
+                self.append_uiinfo(f"HIT累積={milestone:,}")
+        if m := RE_HIT_AUX.search(line):
+            op_id, zone = m.group(1), _normalize_log_line(m.group(2))
             if op_id not in self._counted_ops:
                 self._counted_ops.add(op_id)
                 self.hit_count += 1
@@ -456,8 +630,10 @@ class MainWindow(QMainWindow):
             line = _normalize_log_line(raw)
             if not line:
                 continue
-            if any(line.startswith(tag) for tag in ("[INFO]", "[TOTAL]", "[HIT]", "[PROGRESS]", "[WARN]", "[ERROR]")):
+            if line.startswith("[UIINFO]") or line.startswith("[UIWARN]") or line.startswith("[UIERROR]"):
                 self.append_log_line(line)
+            elif line.startswith("[ERROR]"):
+                self.append_uierror(line[7:].strip())
             self._process_log_line(line)
 
     def _tick(self) -> None:
@@ -476,7 +652,6 @@ class MainWindow(QMainWindow):
         if self._stdout_buffer:
             line = _normalize_log_line(self._stdout_buffer)
             self._process_log_line(line)
-            self.append_log_line(line)
         self._stdout_buffer = ""
         self.lbl_status.setText("状態: DONE" if code == 0 else "状態: ERROR")
         self.radar.set_running(False)
@@ -484,6 +659,10 @@ class MainWindow(QMainWindow):
         self._refresh_progress()
         self.btn_open.setEnabled(code == 0 and self.output_csv is not None and self.output_csv.exists())
         self._update_run_state()
+        if code == 0:
+            self.append_uiinfo(f"解析完了 / 正常HIT={self.hit_count:,}")
+        else:
+            self.append_uierror(f"解析失敗 / code={code}")
 
     def open_output(self) -> None:
         if self.output_csv and self.output_csv.exists():
