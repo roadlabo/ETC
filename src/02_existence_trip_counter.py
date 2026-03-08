@@ -14,6 +14,11 @@ from typing import Iterable
 TIME_FMT = "%H:%M-%H:%M"
 PROGRESS_EMIT_SEC = 0.8
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 def log_info(msg: str) -> None:
     print(f"[INFO] {msg}", flush=True)
@@ -209,7 +214,6 @@ def run(args: argparse.Namespace) -> int:
     counts = [0] * 48
     done = 0
     err = 0
-    peak_slot = 0
     last_emit_t = 0.0
 
     for fp in files:
@@ -219,8 +223,6 @@ def run(args: argparse.Namespace) -> int:
                 if 0 <= s < 48:
                     counts[s] += 1
                     print(f"SLOTCOUNT:{s}:{counts[s]}", flush=True)
-                    if counts[s] >= counts[peak_slot]:
-                        peak_slot = s
         except Exception as e:
             err += 1
             log_error(f"{fp.name}: {e}")
@@ -229,7 +231,6 @@ def run(args: argparse.Namespace) -> int:
         now = time.time()
         if now - last_emit_t >= PROGRESS_EMIT_SEC or done == total:
             print(f"進捗ファイル: {done}/{total}", flush=True)
-            log_info(f"現在ピーク: {slot_label(peak_slot)} {counts[peak_slot]}")
             last_emit_t = now
 
     out = Path(args.output)
