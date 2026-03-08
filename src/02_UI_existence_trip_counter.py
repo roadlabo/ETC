@@ -381,6 +381,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self.logo = None
         self.setWindowTitle(APP_TITLE)
         self.resize(1700, 980)
         self.showMaximized()
@@ -527,9 +528,18 @@ class MainWindow(QMainWindow):
 
         logo_path = Path(__file__).resolve().parent / "assets" / "logos" / UI_LOGO_FILENAME
         if logo_path.exists():
-            self.logo = QLabel(self); self.logo.setPixmap(QPixmap(str(logo_path)).scaled(240, 120, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)); self.logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        else:
-            self.logo = None
+            self.logo = QLabel(self)
+            self.logo.setPixmap(
+                QPixmap(str(logo_path)).scaled(
+                    240,
+                    120,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+            self.logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            self.logo.move(30, 26)
+            self.logo.show()
         self._apply_styles()
         self._rebuild_calendar()
 
@@ -546,7 +556,7 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        if self.logo:
+        if self.logo is not None:
             self.logo.move(self.width() - self.logo.width() - 18, self.height() - self.logo.height() - 18)
 
     def now_text(self):
@@ -980,8 +990,15 @@ class MainWindow(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
-    w = MainWindow(); w.show()
-    return app.exec()
+    try:
+        w = MainWindow(); w.show()
+        return app.exec()
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        QMessageBox.critical(None, "起動エラー", f"起動中にエラーが発生しました。\n\n{e}")
+        return 1
 
 
 if __name__ == "__main__":
