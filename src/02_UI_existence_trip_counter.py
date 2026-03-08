@@ -650,17 +650,45 @@ class MainWindow(QMainWindow):
         return sorted(found_dates), sorted(mesh_set)
 
     def refresh_csv_and_dates(self, confirm: bool = True):
+        if self.input_folder is None:
+            return
+        self.append_log("[LOAD] CSV件数確認開始")
+        self._set_app_state("LOADING_COUNT")
+        count_progress = QProgressDialog("対象CSV件数を確認しています…", None, 0, 0, self)
+        count_progress.setWindowTitle("CSV件数確認中")
+        count_progress.setMinimumDuration(0)
+        count_progress.setCancelButton(None)
+        count_progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        count_progress.show()
+        QApplication.processEvents()
+
         self.csv_files = self._list_csv(); self.total_files = len(self.csv_files)
+        count_progress.close()
+        self._set_app_state("IDLE")
+        self.append_log(f"[LOAD] 対象CSV数: {self.total_files}")
+
         if self.total_files == 0:
-            self.available_dates = []; self.available_meshes = []; self.selected_dates = set(); self._rebuild_calendar(); return
+            self.available_dates = []; self.available_meshes = []; self.selected_dates = set(); self._rebuild_calendar(); self._set_app_state("IDLE"); return
         if confirm:
-            res = QMessageBox.question(self, "確認", f"CSV {self.total_files:,} 件を読み込みます。続行しますか？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if res != QMessageBox.StandardButton.Yes:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("確認")
+            msg.setIcon(QMessageBox.Icon.Question)
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+            msg.setText(
+                f"対象CSV数: {self.total_files:,}件\n\n"
+                "これから対象日付を読み取るため、全CSVを走査します。\n"
+                "大量ファイルのため時間を要する場合があります。\n"
+                "開始しますか？"
+            )
+            if msg.exec() != QMessageBox.StandardButton.Ok:
+                self._set_app_state("IDLE")
+                self.append_log("[LOAD] 日付走査をキャンセルしました")
                 return
         self._load_dates_with_progress()
 
     def _load_dates_with_progress(self):
-        self._set_app_state("LOADING")
+        self.append_log("[LOAD] 日付走査開始")
+        self._set_app_state("LOADING_DATES")
         pr = QProgressDialog("CSVを読み込み中... 0 / 0", "", 0, self.total_files, self)
         pr.setWindowTitle("日付読込み中")
         pr.setCancelButton(None)
@@ -762,7 +790,7 @@ class MainWindow(QMainWindow):
 
     def _set_app_state(self, state: str):
         self.app_state = state
-        self._set_radar_active(state in {"LOADING", "RUNNING", "OD_RUNNING"})
+        self._set_radar_active(state in {"LOADING", "LOADING_COUNT", "LOADING_DATES", "RUNNING", "OD_RUNNING"})
 
     def _set_inputs_enabled(self, enabled: bool):
         widgets = [self.btn_pick, self.chk_recursive, self.btn_run, self.btn_run_od, self.btn_zone, self.cmb_slot, self.btn_pick_center, self.btn_center_default, self.btn_all]
