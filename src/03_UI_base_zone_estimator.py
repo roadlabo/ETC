@@ -448,13 +448,12 @@ class MainWindow(QMainWindow):
         rf.addWidget(QLabel("CYBER TELEMETRY", objectName="cyTitle"))
         self.lbl_zone_count = QLabel("ゾーン数: 0")
         self.lbl_status = QLabel("状態: IDLE")
-        self.lbl_current = QLabel("現在: -"); self.lbl_current.setWordWrap(True)
         self.lbl_progress = QLabel("進捗ファイル: 0/0 (0.0%)")
         self.lbl_hit = QLabel("正常HIT: 0")
         self.lbl_map_mode = QLabel("地図表示: SIMPLE")
         self.lbl_elapsed = QLabel("経過 00:00:00", objectName="big")
         self.lbl_remaining = QLabel("残り --:--:--", objectName="big")
-        for w in [self.lbl_zone_count, self.lbl_status, self.lbl_current, self.lbl_progress, self.lbl_hit, self.lbl_map_mode, self.lbl_elapsed, self.lbl_remaining]:
+        for w in [self.lbl_zone_count, self.lbl_status, self.lbl_progress, self.lbl_hit, self.lbl_map_mode, self.lbl_elapsed, self.lbl_remaining]:
             rf.addWidget(w)
         self.radar = RadarWidget(); rf.addWidget(self.radar)
 
@@ -974,7 +973,6 @@ map.fitBounds(group.getBounds(), {{ padding: [20, 20] }});
             self.done_files = int(m.group(1)); self.total_files = int(m.group(2))
             if m.group(3):
                 self.current_file = _normalize_log_line(m.group(3))
-            self.lbl_current.setText(f"現在: {self.current_file}")
             self._refresh_progress()
             if self.total_files > 0:
                 milestone = (int((self.done_files / self.total_files) * 100) // 10) * 10
