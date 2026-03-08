@@ -157,7 +157,7 @@ class RealtimeSlotChart(QWidget):
         self.slot_counts = [0] * 48
         self._dirty = False
         self._last_paint_t = 0.0
-        self.setMinimumHeight(180)
+        self.setMinimumHeight(170)
 
     def set_slot(self, i: int, count: int):
         if 0 <= i < 48 and self.slot_counts[i] != count:
@@ -285,7 +285,7 @@ class MainWindow(QMainWindow):
         body.addLayout(left, 5)
 
         # STEP 1
-        step1_frame = QFrame(); step1_frame.setObjectName("stepBox")
+        step1_frame = QFrame(); step1_frame.setObjectName("stepBox"); step1_frame.setMaximumHeight(60)
         step1_layout = QHBoxLayout(step1_frame); step1_layout.setContentsMargins(10, 8, 10, 8); step1_layout.setSpacing(8)
         step1_title = QLabel("STEP 1：第1スクリーニングフォルダの選択"); step1_title.setObjectName("stepTitle")
         self.btn_pick = QPushButton("第1スクリーニングフォルダ選択"); self.btn_pick.clicked.connect(self.pick_folder)
@@ -312,17 +312,17 @@ class MainWindow(QMainWindow):
         self.calendar_outer_layout.setContentsMargins(0, 8, 0, 10)
         self.calendar_outer_layout.setSpacing(0)
         self.calendar_months_wrap = QWidget()
-        self.calendar_months_layout = QHBoxLayout(self.calendar_months_wrap)
+        self.calendar_months_layout = QGridLayout(self.calendar_months_wrap)
         self.calendar_months_layout.setContentsMargins(0, 0, 0, 0)
         self.calendar_months_layout.setSpacing(20)
         self.calendar_outer_layout.addWidget(self.calendar_months_wrap)
         self.scr = QScrollArea(); self.scr.setWidgetResizable(True); self.scr.setWidget(self.calendar_container)
-        self.scr.setMinimumHeight(460)
+        self.scr.setMinimumHeight(520)
         s3.addWidget(self.scr, 1)
         left.addWidget(StepBox("STEP 2：対象日の選択（カレンダー）", s3w), 7)
 
         # STEP 3
-        step3_frame = QFrame(); step3_frame.setObjectName("stepBox")
+        step3_frame = QFrame(); step3_frame.setObjectName("stepBox"); step3_frame.setMaximumHeight(60)
         step3_layout = QHBoxLayout(step3_frame); step3_layout.setContentsMargins(10, 8, 10, 8); step3_layout.setSpacing(8)
         step3_title = QLabel("STEP 3：実行"); step3_title.setObjectName("stepTitle")
         self.btn_run = QPushButton("集計スタート"); self.btn_run.clicked.connect(self.start_run)
@@ -337,7 +337,7 @@ class MainWindow(QMainWindow):
 
         self.chart = RealtimeSlotChart(); left.addWidget(self.chart, 2)
 
-        self.log = QPlainTextEdit(); self.log.setReadOnly(True); self.log.setMaximumBlockCount(2000); self.log.setMinimumHeight(60); self.log.setMaximumHeight(90)
+        self.log = QPlainTextEdit(); self.log.setReadOnly(True); self.log.setMaximumBlockCount(2000); self.log.setMinimumHeight(60); self.log.setMaximumHeight(70)
         left.addWidget(self.log, 1)
 
         right = QVBoxLayout(); body.addLayout(right, 2)
@@ -516,7 +516,7 @@ class MainWindow(QMainWindow):
                 w.deleteLater()
         self.day_cells.clear()
         if not self.available_dates:
-            self.calendar_months_layout.addWidget(QLabel("日付データなし"))
+            self.calendar_months_layout.addWidget(QLabel("日付データなし"), 0, 0)
             self.lbl_date_stats.setText("選択中: 0日 / 全0日")
             return
 
@@ -524,10 +524,15 @@ class MainWindow(QMainWindow):
         for d in self.available_dates:
             by_month[(d.year, d.month)].append(d)
 
-        month_w = 350
-        for ym in sorted(by_month.keys()):
+        min_month_w = 280
+        max_month_w = 320
+        cols = 3
+        for i, ym in enumerate(sorted(by_month.keys())):
             y, m = ym
             box = QFrame()
+            box.setMinimumWidth(min_month_w)
+            box.setMaximumWidth(max_month_w)
+            box.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
             lv = QVBoxLayout(box)
             lv.setContentsMargins(10, 10, 10, 12)
             lv.setSpacing(8)
@@ -552,20 +557,12 @@ class MainWindow(QMainWindow):
                 col += 1
                 if col >= 7:
                     col = 0; row += 1
-            box.setMinimumWidth(month_w)
-            self.calendar_months_layout.addWidget(box)
+            row = i // cols
+            col = i % cols
+            self.calendar_months_layout.addWidget(box, row, col)
 
-        self.calendar_months_layout.addStretch(1)
-        mcount = len(by_month)
-        if mcount == 1:
-            self.calendar_container.setMinimumWidth(month_w + 40)
-            self.scr.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        elif mcount == 2:
-            self.calendar_container.setMinimumWidth(month_w * 2 + 90)
-            self.scr.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        else:
-            self.calendar_container.setMinimumWidth(month_w * mcount + 40 + (mcount - 1) * 20)
-            self.scr.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.calendar_months_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.scr.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         self._update_day_styles()
 
