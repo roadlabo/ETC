@@ -538,13 +538,16 @@ class MainWindow(QMainWindow):
         left.addWidget(step4_box, 1)
 
         self.log = QPlainTextEdit(); self.log.setReadOnly(True); self.log.setMaximumBlockCount(3000); self.log.setMinimumHeight(70)
+        self.log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.log.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self._last_log_line = ""
         left.addWidget(self.log, 1)
 
         left.setStretch(0, 0)
-        left.setStretch(1, 8)
+        left.setStretch(1, 6)
         left.setStretch(2, 0)
         left.setStretch(3, 0)
-        left.setStretch(4, 1)
+        left.setStretch(4, 2)
 
         right = QVBoxLayout(); body.addLayout(right, 2)
         panel = QFrame(); pv = QVBoxLayout(panel)
@@ -596,16 +599,86 @@ class MainWindow(QMainWindow):
 
     def _adjust_layout_for_window(self):
         h = max(700, self.height())
-        self.scr.setMinimumHeight(max(280, int(h * 0.34)))
-        self.chart.setMinimumHeight(max(120, int(h * 0.15)))
-        self.sweep.setMinimumHeight(max(130, int(h * 0.16)))
-        self.log.setMinimumHeight(max(60, int(h * 0.09)))
+        self.scr.setMinimumHeight(max(220, int(h * 0.24)))
+        self.chart.setMinimumHeight(max(110, int(h * 0.13)))
+        self.sweep.setMinimumHeight(max(115, int(h * 0.14)))
+        self.log.setMinimumHeight(max(80, int(h * 0.11)))
 
     def now_text(self):
         return datetime.now().strftime("%H:%M:%S")
 
+    def _normalize_log_line(self, text: str) -> str:
+        if text is None:
+            return ""
+        s = str(text)
+        s = s.replace("\r\n", " ").replace("\n", " ").replace("\r", " ").replace("\t", " ")
+        return re.sub(r"\s+", " ", s).strip()
+
+    def _should_show_in_log(self, line: str) -> bool:
+        if not line:
+            return False
+        if line.startswith("進捗ファイル:"):
+            return False
+        if "[PROGRESS]" in line:
+            return False
+        return True
+
     def append_log(self, text: str):
-        self.log.appendPlainText(f"[{self.now_text()}] {text}")
+        line = self._normalize_log_line(text)
+        if not line or not self._should_show_in_log(line):
+            return
+        stamped = f"[{self.now_text()}] {line}"
+        if stamped == self._last_log_line:
+            return
+        self._last_log_line = stamped
+        self.log.appendPlainText(stamped)
+
+    def _refresh_progress_text(self):
+        count_pct = (self.done_files_count / self.total_files * 100) if self.total_files else 0
+        od_pct = (self.done_files_od / self.total_files * 100) if self.total_files else 0
+        self.lbl_progress.setText(
+            f"集計進捗: {self.done_files_count:,}/{self.total_files:,}（{count_pct:.1f}%）\n"
+            f"OD進捗: {self.done_files_od:,}/{self.total_files:,}（{od_pct:.1f}%）"
+        )
+
+    def _refresh_status_text(self):
+        self.lbl_status.setText(f"集計状態: {self.count_state_text}\nOD状態: {self.od_state_text}")
+
+    def _refresh_telemetry_text(self):
+        meshes_text = ", ".join(self.available_meshes) if self.available_meshes else "-"
+        self.lbl_telemetry.setText(
+            f"CYBER TELEMETRY\n"
+            f"対象CSV数: {self.total_files:,}\n"
+            f"抽出日数: {len(self.available_dates):,}\n"
+            f"選択中日数: {len(self.selected_dates):,}\n"
+            f"対象メッシュ数: {len(self.available_meshes):,}\n"
+            f"対象2次メッシュ（参考・集計には未使用）:\n{meshes_text}\n"
+            f"集計進捗ファイル: {self.done_files_count:,}/{self.total_files:,}\n"
+            f"集計エラー数: {self.error_count:,}\n"
+            f"選択30分帯: {self.cmb_slot.currentText()}\n"
+            f"ゾーニングCSV名: {(self.zoning_file.name if self.zoning_file else '-')}\n"
+            f"ゾーン数: {self.zone_count:,}\n"
+            f"中心点名: {self.center_name}\n"
+            f"center lon: {self.center_lon:.6f}\n"
+            f"center lat: {self.center_lat:.6f}\n"
+            f"OD総抽出トリップ数: {self.od_total_trips:,}\n"
+            f"同一ゾーンOD比率: {self.same_zone_ratio:.1f}%\n"
+            f"東方面件数: {self.dir_counts['EAST']:,}\n"
+            f"西方面件数: {self.dir_counts['WEST']:,}\n"
+            f"北方面件数: {self.dir_counts['NORTH']:,}\n"
+            f"南方面件数: {self.dir_counts['SOUTH']:,}\n"
+            f"ODエラー数: {self.od_error_count:,}"
+        )
+
+    def _apply_progress_update(self, done: int, total: int, *, is_od: bool):
+        if total > 0:
+            self.total_files = total
+        if is_od:
+            self.done_files_od = done
+        else:
+            self.done_files_count = done
+        self._refresh_progress_text()
+        self._refresh_telemetry_text()
 
     def _list_csv(self) -> list[Path]:
         if not self.input_folder:
@@ -662,6 +735,7 @@ class MainWindow(QMainWindow):
             return
         self.append_log("[LOAD] CSV件数確認開始")
         self._set_app_state("LOADING_COUNT")
+        self._refresh_status_text()
         count_progress = QProgressDialog("対象CSV件数を確認しています…", None, 0, 0, self)
         count_progress.setWindowTitle("CSV件数確認中")
         count_progress.setMinimumDuration(0)
@@ -673,6 +747,8 @@ class MainWindow(QMainWindow):
         self.csv_files = self._list_csv(); self.total_files = len(self.csv_files)
         count_progress.close()
         self._set_app_state("IDLE")
+        self._refresh_progress_text()
+        self._refresh_telemetry_text()
         self.append_log(f"[LOAD] 対象CSV数: {self.total_files}")
 
         if self.total_files == 0:
@@ -697,6 +773,7 @@ class MainWindow(QMainWindow):
     def _load_dates_with_progress(self):
         self.append_log("[LOAD] 日付走査開始")
         self._set_app_state("LOADING_DATES")
+        self._refresh_status_text()
         pr = QProgressDialog("CSVを読み込み中... 0 / 0", "", 0, self.total_files, self)
         pr.setWindowTitle("日付読込み中")
         pr.setCancelButton(None)
@@ -718,6 +795,7 @@ class MainWindow(QMainWindow):
         self.scr.ensureVisible(0, 0)
         self.calendar_container.adjustSize()
         self._set_app_state("IDLE")
+        self._refresh_telemetry_text()
 
     def _rebuild_calendar(self):
         while self.calendar_months_layout.count():
@@ -841,6 +919,7 @@ class MainWindow(QMainWindow):
 
         self.last_output_csv = out; self.done_files_count = 0; self.error_count = 0; self.slot_counts = [0] * 48; self.chart.clear()
         self.count_started_at = time.time(); self.is_count_running = True; self.count_state_text = "RUNNING"; self._set_app_state("RUNNING"); self._set_inputs_enabled(False)
+        self._refresh_progress_text(); self._refresh_status_text(); self._refresh_telemetry_text()
         self.append_log("[COUNT] 集計開始")
         self.proc_count.start()
 
@@ -867,21 +946,23 @@ class MainWindow(QMainWindow):
                 continue
             fd = RE_FILE_DONE.search(t)
             if fd:
-                self.done_files_count = int(fd.group(1).replace(",", "")); self.total_files = max(1, int(fd.group(2).replace(",", "")));
+                self._apply_progress_update(int(fd.group(1).replace(",", "")), max(1, int(fd.group(2).replace(",", ""))), is_od=False)
                 continue
             if "[ERROR]" in t: self.error_count += 1
             if t.startswith("現在ピーク:"): continue
+            self._refresh_telemetry_text()
             self.append_log(f"[COUNT] {t.replace('[INFO] ', '')}")
 
     def _on_count_stderr(self):
         if not self.proc_count: return
         text = bytes(self.proc_count.readAllStandardError()).decode("utf-8", errors="ignore")
         for line in text.splitlines():
-            if line.strip(): self.append_log(f"[COUNT][STDERR] {line.strip()}")
+            if line.strip(): self.append_log(f"[COUNT][STDERR] {line}")
 
     def _on_count_finished(self, code: int, _status):
         ok = code == 0
         self.is_count_running = False; self.count_state_text = "COMPLETED" if ok else "ERROR"; self._set_app_state("COMPLETED" if ok else "ERROR"); self._set_inputs_enabled(True)
+        self._refresh_status_text(); self._refresh_telemetry_text()
         self.btn_open_csv.setEnabled(ok and self.last_output_csv and self.last_output_csv.exists()); self.btn_open_folder.setEnabled(ok and self.last_output_csv is not None)
         if ok:
             self._select_recommended_slot()
@@ -893,6 +974,7 @@ class MainWindow(QMainWindow):
         if not p: return
         self.zoning_file = Path(p); self.lbl_zone.setText(self.zoning_file.name)
         self.zone_count = self._count_zones(self.zoning_file)
+        self._refresh_telemetry_text()
 
     def _count_zones(self, path: Path) -> int:
         for enc in ("utf-8-sig", "utf-8", "cp932"):
@@ -917,6 +999,7 @@ class MainWindow(QMainWindow):
 
     def _update_center_labels(self):
         self.lbl_center_name.setText(f"{self.center_name} ({self.center_lon:.6f}, {self.center_lat:.6f})")
+        self._refresh_telemetry_text()
 
     def _validate_od(self) -> bool:
         if self.is_count_running:
@@ -958,6 +1041,7 @@ class MainWindow(QMainWindow):
         self.done_files_od = 0; self.od_error_count = 0; self.same_zone_ratio = 0.0; self.same_zone_count = 0; self.od_total_trips = 0
         self.dir_counts = {"EAST": 0, "WEST": 0, "NORTH": 0, "SOUTH": 0}; self.od_counts = {}
         self.od_started_at = time.time(); self.is_od_running = True; self.od_state_text = "RUNNING"; self._set_app_state("OD_RUNNING"); self._set_inputs_enabled(False)
+        self._refresh_progress_text(); self._refresh_status_text(); self._refresh_telemetry_text()
         self.append_log(f"[OD] 指定30分帯: {self.cmb_slot.currentText()}")
         self.proc_od.start()
 
@@ -975,15 +1059,18 @@ class MainWindow(QMainWindow):
             m = RE_SAME.search(t)
             if m: self.same_zone_ratio = float(m.group(1))
             fd = RE_FILE_DONE.search(t)
-            if fd: self.done_files_od = int(fd.group(1).replace(",", ""))
+            if fd:
+                self._apply_progress_update(int(fd.group(1).replace(",", "")), max(1, int(fd.group(2).replace(",", ""))), is_od=True)
+                continue
             if "[ERROR]" in t: self.od_error_count += 1
+            self._refresh_telemetry_text()
             self.append_log(f"[OD] {t}")
 
     def _on_od_stderr(self):
         if not self.proc_od: return
         text = bytes(self.proc_od.readAllStandardError()).decode("utf-8", errors="ignore")
         for line in text.splitlines():
-            if line.strip(): self.append_log(f"[OD][STDERR] {line.strip()}")
+            if line.strip(): self.append_log(f"[OD][STDERR] {line}")
 
     def _parse_summary(self):
         if not self.last_output_summary or not self.last_output_summary.exists(): return
@@ -1002,11 +1089,13 @@ class MainWindow(QMainWindow):
     def _on_od_finished(self, code: int, _status):
         ok = code == 0
         self.is_od_running = False; self.od_state_text = "COMPLETED" if ok else "ERROR"; self._set_app_state("COMPLETED" if ok else "ERROR"); self._set_inputs_enabled(True)
+        self._refresh_status_text(); self._refresh_telemetry_text()
         self.btn_open_matrix.setEnabled(ok and self.last_output_matrix and self.last_output_matrix.exists())
         self.btn_open_detail.setEnabled(ok and self.last_output_detail and self.last_output_detail.exists())
         self.btn_open_od_folder.setEnabled(ok and self.last_output_matrix is not None)
         if ok:
             self._parse_summary()
+            self._refresh_telemetry_text()
             self.append_log(f"[OD] 完了 指定30分帯={self.cmb_slot.currentText()} 対象日数={len(self.selected_dates)} ゾーン数={self.zone_count} center={self.center_name}({self.center_lon:.6f},{self.center_lat:.6f}) 総抽出トリップ数={self.od_total_trips} 同一ゾーンOD比率={self.same_zone_ratio:.1f}% エラー数={self.od_error_count}")
             self.append_log(f"[OD] 出力CSV: {self.last_output_matrix}")
             self.append_log(f"[OD] 出力CSV: {self.last_output_detail}")
@@ -1032,40 +1121,6 @@ class MainWindow(QMainWindow):
         if not self.is_count_running and not self.is_od_running and self.count_state_text == "IDLE" and self.od_state_text == "IDLE":
             eta = "--:--:--"
         self.lbl_eta.setText(f"残り {eta}")
-        count_pct = (self.done_files_count / self.total_files * 100) if self.total_files else 0
-        od_pct = (self.done_files_od / self.total_files * 100) if self.total_files else 0
-        self.lbl_progress.setText(
-            f"集計進捗: {self.done_files_count:,}/{self.total_files:,}（{count_pct:.1f}%）\n"
-            f"OD進捗: {self.done_files_od:,}/{self.total_files:,}（{od_pct:.1f}%）"
-        )
-        self.lbl_status.setText(f"集計状態: {self.count_state_text}\nOD状態: {self.od_state_text}")
-        meshes_text = ", ".join(self.available_meshes) if self.available_meshes else "-"
-        self.lbl_telemetry.setText(
-            f"CYBER TELEMETRY\n"
-            f"対象CSV数: {self.total_files:,}\n"
-            f"抽出日数: {len(self.available_dates):,}\n"
-            f"選択中日数: {len(self.selected_dates):,}\n"
-            f"対象メッシュ数: {len(self.available_meshes):,}\n"
-            f"対象2次メッシュ（参考・集計には未使用）:\n{meshes_text}\n"
-            f"集計進捗ファイル: {self.done_files_count:,}/{self.total_files:,}\n"
-            f"集計エラー数: {self.error_count:,}\n"
-            f"集計機能状態: {self.count_state_text}\n"
-            f"OD機能状態: {self.od_state_text}\n"
-            f"選択30分帯: {self.cmb_slot.currentText()}\n"
-            f"ゾーニングCSV名: {(self.zoning_file.name if self.zoning_file else '-')}\n"
-            f"ゾーン数: {self.zone_count:,}\n"
-            f"中心点名: {self.center_name}\n"
-            f"center lon: {self.center_lon:.6f}\n"
-            f"center lat: {self.center_lat:.6f}\n"
-            f"OD進捗ファイル: {self.done_files_od:,}/{self.total_files:,}\n"
-            f"OD総抽出トリップ数: {self.od_total_trips:,}\n"
-            f"同一ゾーンOD比率: {self.same_zone_ratio:.1f}%\n"
-            f"東方面件数: {self.dir_counts['EAST']:,}\n"
-            f"西方面件数: {self.dir_counts['WEST']:,}\n"
-            f"北方面件数: {self.dir_counts['NORTH']:,}\n"
-            f"南方面件数: {self.dir_counts['SOUTH']:,}\n"
-            f"ODエラー数: {self.od_error_count:,}"
-        )
 
     def _open(self, p: Path | None):
         if not p or not p.exists(): return
