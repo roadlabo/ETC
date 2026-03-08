@@ -69,30 +69,13 @@ def parse_dates(text: str) -> set[date]:
     return out
 
 
-def second_mesh_code(lat: float, lon: float) -> str:
-    """Calculate Japanese 2nd-level mesh code from lat/lon.
-
-    1st mesh: lat*1.5 and lon-100 (1 degree)
-    2nd mesh subdivides 1st mesh into 8 (lat) x 8 (lon):
-      lat cell = 5 minutes, lon cell = 7.5 minutes.
-    """
-
-    p = int(lat * 60.0 / 40.0)
-    a = int(lon) - 100
-    lat_rem_min = lat * 60.0 - (p * 40.0)
-    lon_rem_min = (lon - int(lon)) * 60.0
-    q = int(lat_rem_min / 5.0)
-    b = int(lon_rem_min / 7.5)
-    return f"{p:02d}{a:02d}{q}{b}"
-
-
 def iter_csv_files(folder: Path, recursive: bool) -> list[Path]:
     if recursive:
         return sorted(p for p in folder.rglob("*.csv") if p.is_file())
     return sorted(p for p in folder.glob("*.csv") if p.is_file())
 
 
-def _guess_column_map(header: list[str]) -> tuple[int | None, int | None, int | None, int | None]:
+def _guess_column_map(header: list[str]) -> tuple[int | None, int | None]:
     hmap = {c.strip().lower(): i for i, c in enumerate(header)}
 
     def pick(cands: Iterable[str]) -> int | None:
@@ -102,10 +85,8 @@ def _guess_column_map(header: list[str]) -> tuple[int | None, int | None, int | 
         return None
 
     dt_idx = pick(["gps時刻", "gps", "gps_time", "gpsdatetime", "datetime", "time", "timestamp", "date"]) 
-    lat_idx = pick(["緯度", "lat", "latitude"])
-    lon_idx = pick(["経度", "lon", "lng", "longitude"])
     mesh_idx = pick(["2次メッシュコード", "mesh2", "mesh_code", "second_mesh", "2nd_mesh"])
-    return dt_idx, lat_idx, lon_idx, mesh_idx
+    return dt_idx, mesh_idx
 
 
 def _parse_row_datetime(row: list[str], idx: int | None) -> datetime | None:
@@ -126,38 +107,13 @@ def _parse_row_datetime(row: list[str], idx: int | None) -> datetime | None:
     return None
 
 
-def _parse_float(row: list[str], idx: int | None, fallback: int | None = None) -> float | None:
-    for i in (idx, fallback):
-        if i is None or i >= len(row):
-            continue
-        t = row[i].strip()
-        if not t:
-            continue
-        try:
-            return float(t)
-        except ValueError:
-            continue
-    return None
-
-
-def _parse_mesh_code(
-    row: list[str],
-    mesh_idx: int | None,
-    lat_idx: int | None,
-    lon_idx: int | None,
-    fallback_lat_idx: int | None = None,
-    fallback_lon_idx: int | None = None,
-) -> str | None:
-    if mesh_idx is not None and mesh_idx < len(row):
-        mesh_token = row[mesh_idx].strip()
-        if mesh_token and re.fullmatch(r"\d+", mesh_token):
-            return mesh_token
-
-    lat = _parse_float(row, lat_idx, fallback_lat_idx)
-    lon = _parse_float(row, lon_idx, fallback_lon_idx)
-    if lat is None or lon is None:
+def _parse_mesh_code(row: list[str], mesh_idx: int | None) -> str | None:
+    if mesh_idx is None or mesh_idx >= len(row):
         return None
-    return second_mesh_code(lat, lon)
+    mesh_token = row[mesh_idx].strip()
+    if mesh_token and re.fullmatch(r"\d+", mesh_token):
+        return mesh_token
+    return None
 
 
 def slot_label(slot_index: int) -> str:
@@ -179,13 +135,13 @@ def process_file(path: Path, target_dates: set[date], mesh_set: set[str]) -> tup
 
         has_header = any(not re.fullmatch(r"[-+]?\d+(\.\d+)?", c.strip()) for c in first)
         if has_header:
-            dt_idx, lat_idx, lon_idx, mesh_idx = _guess_column_map(first)
+            dt_idx, mesh_idx = _guess_column_map(first)
         else:
-            dt_idx, lat_idx, lon_idx, mesh_idx = 6, 15, 14, 24
+            dt_idx, mesh_idx = 6, 24
             row = first
             dt = _parse_row_datetime(row, dt_idx)
             if dt and dt.date() in target_dates:
-                mesh_code = _parse_mesh_code(row, mesh_idx, lat_idx, lon_idx, 15, 14)
+                mesh_code = _parse_mesh_code(row, mesh_idx)
                 if mesh_code in mesh_set:
                     slot = (dt.hour * 60 + dt.minute) // 30
                     hit_slots.add(slot)
@@ -195,14 +151,7 @@ def process_file(path: Path, target_dates: set[date], mesh_set: set[str]) -> tup
             dt = _parse_row_datetime(row, dt_idx if has_header else 6)
             if dt is None or dt.date() not in target_dates:
                 continue
-            mesh_code = _parse_mesh_code(
-                row,
-                mesh_idx if has_header else 24,
-                lat_idx if has_header else 15,
-                lon_idx if has_header else 14,
-                15,
-                14,
-            )
+            mesh_code = _parse_mesh_code(row, mesh_idx if has_header else 24)
             if mesh_code not in mesh_set:
                 continue
             slot = (dt.hour * 60 + dt.minute) // 30
@@ -243,6 +192,7 @@ def run(args: argparse.Namespace) -> int:
     log_info(f"対象CSV数: {total}")
     log_info(f"対象日数: {len(target_dates)}")
     log_info(f"対象メッシュ: {'+'.join(meshes)}")
+    log_info("2次メッシュ判定: CSVの25列目を使用（座標再計算なし）")
     if total <= 0:
         log_error("対象CSVが0件")
         return 2
