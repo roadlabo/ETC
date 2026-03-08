@@ -218,14 +218,14 @@ class ZoneCard(QPushButton):
         self.count = 0
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(100)
+        self.setFixedHeight(68)
         self.lbl_title = QLabel(self.zone_name)
         self.lbl_title.setObjectName("zoneTitle")
         self.lbl_count = QLabel()
         self.lbl_count.setObjectName("zoneText")
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 6, 8, 6)
-        lay.setSpacing(2)
+        lay.setContentsMargins(8, 4, 8, 4)
+        lay.setSpacing(1)
         lay.addWidget(self.lbl_title)
         lay.addWidget(self.lbl_count)
         self.refresh()
@@ -456,10 +456,12 @@ class MainWindow(QMainWindow):
             self.chk_recursive,
             self.btn_pick_zoning,
             self.btn_run,
+            self.btn_open,
         ]:
             w.setEnabled(enabled)
         if enabled:
             self.btn_run.setEnabled(self.input_folder is not None and self.zoning_file is not None and self.total_files > 0)
+            self.btn_open.setEnabled(self.output_csv is not None and self.output_csv.exists())
 
     def set_zone_cards_enabled(self, enabled: bool) -> None:
         for c in self.zone_cards.values():
@@ -502,10 +504,14 @@ class MainWindow(QMainWindow):
 
     def highlight_selected_card(self, zone_name: str) -> None:
         for n, c in self.zone_cards.items():
-            c.setChecked(n == zone_name)
-            c.setProperty("selected", "true" if n == zone_name else "false")
+            selected = n == zone_name
+            c.setChecked(selected)
+            c.setProperty("selected", "true" if selected else "false")
+            c.lbl_title.setProperty("selected", "true" if selected else "false")
             c.style().unpolish(c)
             c.style().polish(c)
+            c.lbl_title.style().unpolish(c.lbl_title)
+            c.lbl_title.style().polish(c.lbl_title)
 
     def on_zone_card_clicked(self, zone_name: str) -> None:
         self._debug_logger.debug("[DEBUG] card clicked: %s", zone_name)
@@ -553,16 +559,30 @@ class MainWindow(QMainWindow):
     def render_zone_on_map(self, zone_name: str) -> None:
         points = self._resolve_zone_points(zone_name)
         self._debug_logger.debug("[DEBUG] polygon points: %d", len(points))
-        if not points:
+        if len(points) < 3:
             msg = "ゾーン定義が見つかりません"
             self.map_widget.set_zone(zone_name, [], msg)
             self.map_stack.setCurrentWidget(self.map_widget)
             return
-        self.map_widget.set_zone(zone_name, points)
-        if self._web_map_enabled:
-            self._render_web_map(zone_name, points)
-        else:
+
+        valid_points: list[tuple[float, float]] = []
+        for lon, lat in points:
+            if not (isinstance(lon, (int, float)) and isinstance(lat, (int, float))):
+                continue
+            valid_points.append((float(lon), float(lat)))
+
+        if len(valid_points) < 3:
+            self.map_widget.set_zone(zone_name, [], "ゾーンポリゴンを表示できません")
             self.map_stack.setCurrentWidget(self.map_widget)
+            return
+
+        # 常に簡易描画を即時更新して無反応に見えないようにする
+        self.map_widget.set_zone(zone_name, valid_points)
+        self.map_stack.setCurrentWidget(self.map_widget)
+        self.map_widget.update()
+
+        if self._web_map_enabled:
+            self._render_web_map(zone_name, valid_points)
 
     def _render_web_map(self, zone_name: str, points: list[tuple[float, float]]) -> None:
         if self.web_map is None or not points:
