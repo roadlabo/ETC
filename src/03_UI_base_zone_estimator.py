@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import csv
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
-from PyQt6.QtCore import QProcess, Qt
+from PyQt6.QtCore import QProcess, QTimer, Qt
 from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -25,7 +27,31 @@ from PyQt6.QtWidgets import (
 )
 
 APP_TITLE = "03_運行ID別 推定拠点ゾーン対応表 作成"
-RE_FILE_DONE = re.compile(r"進捗ファイル:\s*([0-9,]+)\s*/\s*([0-9,]+)")
+START_FULLSCREEN = True
+RE_PROGRESS = re.compile(r"\[PROGRESS\]\s+done=(\d+)\s+total=(\d+)\s+file=(.+)")
+RE_TOTAL = re.compile(r"\[TOTAL\]\s+total=(\d+)")
+RE_HIT = re.compile(r"\[HIT\]\s+op_id=(\S+)\s+zone=(.+?)\s+hit_count=(\d+)")
+RE_ZONE_COUNT = re.compile(r"\[INFO\]\s+有効ゾーン数:\s*(\d+)")
+
+
+def _normalize_log_line(text: str) -> str:
+    if text is None:
+        return ""
+    s = str(text)
+    s = s.replace("\r\n", " ").replace("\n", " ").replace("\r", " ").replace("\t", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def format_seconds_hybrid(sec: int) -> str:
+    sec = max(0, int(sec))
+    h, rem = divmod(sec, 3600)
+    m, s = divmod(rem, 60)
+    if h > 0:
+        return f"{h}時間{m}分{s}秒"
+    if m > 0:
+        return f"{m}分{s}秒"
+    return f"{s}秒"
 
 
 class StepBox(QFrame):
@@ -47,7 +73,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_TITLE)
-        self.resize(1320, 820)
+        self.resize(1600, 900)
 
         self.proc: QProcess | None = None
         self.input_folder: Path | None = None
@@ -55,8 +81,22 @@ class MainWindow(QMainWindow):
         self.output_csv: Path | None = None
         self.total_files = 0
         self.done_files = 0
+        self.hit_count = 0
+        self.latest_hit_zone = "-"
+        self.zone_count = "（読込後に表示）"
+        self.current_file = "-"
+        self.is_running = False
+        self.run_started_at: float | None = None
+        self.spinner_frames = ["◐", "◓", "◑", "◒"]
+        self.spinner_index = 0
+        self._last_log_line = ""
+        self._stdout_buffer = ""
+        self._hit_highlight_ticks = 0
 
         self._build_ui()
+        self.ui_timer = QTimer(self)
+        self.ui_timer.timeout.connect(self.update_runtime_status)
+        self.ui_timer.start(500)
 
     def _build_ui(self) -> None:
         cw = QWidget()
@@ -93,6 +133,15 @@ class MainWindow(QMainWindow):
         head_l.addWidget(logo)
         root.addWidget(head)
 
+        body = QHBoxLayout()
+        body.setSpacing(10)
+        root.addLayout(body, 1)
+
+        left_panel = QWidget()
+        left_lay = QVBoxLayout(left_panel)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(10)
+
         steps_host = QWidget()
         steps = QGridLayout(steps_host)
         steps.setContentsMargins(0, 0, 0, 0)
@@ -113,16 +162,38 @@ class MainWindow(QMainWindow):
         self.lbl_csv_count = QLabel("対象CSV数: 0")
         self.lbl_csv_warn = QLabel("")
         self.lbl_csv_warn.setObjectName("warn")
-        s1.addLayout(r1); s1.addWidget(self.lbl_csv_count); s1.addWidget(self.lbl_csv_warn)
+        s1.addLayout(r1)
+        s1.addWidget(self.lbl_csv_count)
+        s1.addWidget(self.lbl_csv_warn)
         box1 = StepBox("STEP1\n第1スクリーニングフォルダを選択\n運行ID別CSVが格納されたフォルダを指定してください。", s1w)
 
-        s2w = QWidget(); s2 = QHBoxLayout(s2w); s2.setContentsMargins(0, 0, 0, 0)
+        s2w = QWidget(); s2 = QVBoxLayout(s2w); s2.setContentsMargins(0, 0, 0, 0); s2.setSpacing(8)
+        r2 = QHBoxLayout()
         self.btn_pick_zoning = QPushButton("選択")
         self.btn_pick_zoning.clicked.connect(self.pick_zoning)
         self.lbl_zoning = QLabel("未選択")
         self.lbl_zoning.setWordWrap(True)
-        s2.addWidget(self.btn_pick_zoning)
-        s2.addWidget(self.lbl_zoning, 1)
+        r2.addWidget(self.btn_pick_zoning)
+        r2.addWidget(self.lbl_zoning, 1)
+        s2.addLayout(r2)
+
+        self.zone_card = QFrame()
+        self.zone_card.setObjectName("zoneCard")
+        zone_l = QVBoxLayout(self.zone_card)
+        zone_l.setContentsMargins(10, 8, 10, 8)
+        self.lbl_zone_card_title = QLabel("ゾーニング情報")
+        self.lbl_zone_card_title.setObjectName("zoneCardTitle")
+        self.lbl_zone_count = QLabel(f"ゾーン数: {self.zone_count}")
+        self.lbl_hit_count = QLabel("現在HITした運行ID数: 0")
+        self.lbl_hit_count.setObjectName("hitCount")
+        self.lbl_latest_zone = QLabel("最新HITゾーン: -")
+        self.lbl_zoning_name = QLabel("ゾーニングファイル: 未選択")
+        self.lbl_zoning_name.setWordWrap(True)
+        for w in [self.lbl_zone_count, self.lbl_hit_count, self.lbl_latest_zone, self.lbl_zoning_name]:
+            zone_l.addWidget(w)
+        zone_l.insertWidget(0, self.lbl_zone_card_title)
+        s2.addWidget(self.zone_card)
+
         box2 = StepBox("STEP2\n任意ゾーニングファイルを選択\nzoning_data.csv 形式のゾーン定義ファイルを指定してください。", s2w)
 
         s3w = QWidget(); s3 = QVBoxLayout(s3w); s3.setContentsMargins(0, 0, 0, 0)
@@ -148,11 +219,10 @@ class MainWindow(QMainWindow):
         steps.addWidget(box2, 0, 1)
         steps.addWidget(box3, 0, 2)
         steps.addWidget(box4, 0, 3)
-        steps.setColumnStretch(0, 2)
-        steps.setColumnStretch(1, 2)
-        steps.setColumnStretch(2, 1)
-        steps.setColumnStretch(3, 1)
-        root.addWidget(steps_host)
+        for i in range(4):
+            steps.setColumnStretch(i, 1)
+
+        left_lay.addWidget(steps_host)
 
         info_card = QFrame()
         info_card.setObjectName("infoCard")
@@ -162,28 +232,60 @@ class MainWindow(QMainWindow):
         self.progress = QProgressBar(); self.progress.setRange(0, 100); self.progress.setValue(0)
         info_l.addWidget(self.lbl_progress)
         info_l.addWidget(self.progress)
-        root.addWidget(info_card)
+        left_lay.addWidget(info_card)
 
-        self.log = QPlainTextEdit(); self.log.setReadOnly(True)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
         self.log.setFont(QFont("Consolas", 10))
         self.log.setMaximumBlockCount(3000)
-        root.addWidget(self.log, 1)
+        self.log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        left_lay.addWidget(self.log, 1)
 
         self.lbl_notice = QLabel(
             "この機能はあくまで推定拠点であり、実際の居住地・事業所所在地を直接示すものではありません。\n"
             "GPS誤差や夜間運用形態等により判定には限界があります。分析結果は補助的情報として慎重に利用してください。"
         )
         self.lbl_notice.setWordWrap(True)
-        root.addWidget(self.lbl_notice)
+        left_lay.addWidget(self.lbl_notice)
+
+        right_panel = QFrame()
+        right_panel.setObjectName("statusCard")
+        right_panel.setMinimumWidth(260)
+        right_l = QVBoxLayout(right_panel)
+        right_l.setContentsMargins(12, 12, 12, 12)
+        right_l.setSpacing(8)
+        lbl_status_title = QLabel("実行ステータス")
+        lbl_status_title.setObjectName("zoneCardTitle")
+        right_l.addWidget(lbl_status_title)
+
+        self.lbl_elapsed = QLabel("経過時間: 0秒")
+        self.lbl_remaining = QLabel("残り時間: --")
+        self.lbl_total = QLabel("対象CSV数: 0")
+        self.lbl_done = QLabel("処理済CSV数: 0")
+        self.lbl_spinner = QLabel("待機")
+        self.lbl_spinner.setObjectName("spinner")
+        self.lbl_current = QLabel("現在処理中: -")
+        self.lbl_current.setWordWrap(True)
+
+        for w in [self.lbl_elapsed, self.lbl_remaining, self.lbl_total, self.lbl_done, self.lbl_spinner, self.lbl_current]:
+            right_l.addWidget(w)
+        right_l.addStretch(1)
+
+        body.addWidget(left_panel, 5)
+        body.addWidget(right_panel, 1)
 
         self.setStyleSheet(
             """
             QWidget { background:#060b09; color:#8ee5ac; }
-            QFrame#hero, QFrame#infoCard, QFrame#stepBox { background:#0b1511; border:1px solid #1f3f2d; border-radius:12px; }
+            QFrame#hero, QFrame#infoCard, QFrame#stepBox, QFrame#statusCard { background:#0b1511; border:1px solid #1f3f2d; border-radius:12px; }
+            QFrame#zoneCard { background:#06130f; border:1px solid #2ed9b5; border-radius:10px; }
             QLabel#heroTitle { font-size:22px; font-weight:800; color:#dcffe9; }
             QLabel#heroDesc { color:#9cd9b5; }
             QLabel#stepTitle { font-weight:700; color:#7cffc6; }
             QLabel#warn { color:#ffd866; font-weight:700; }
+            QLabel#zoneCardTitle { font-size:14px; font-weight:800; color:#6dffe3; }
+            QLabel#hitCount { font-size:15px; font-weight:800; color:#c3ff6b; }
+            QLabel#spinner { font-size:18px; font-weight:900; color:#6dffe3; }
             QPushButton {
                 background:#0f2a1c; border:2px solid #00ff99; border-radius:10px;
                 color:#eafff4; font-weight:700; padding:8px 12px;
@@ -192,7 +294,7 @@ class MainWindow(QMainWindow):
             QPushButton:disabled { border-color:#2a6b45; color:#3d6a55; background:#0b1511; }
             QPlainTextEdit {
                 background:#0a120f; border:1px solid #1f3f2d; border-radius:10px;
-                color:#c6f8d8; padding:8px; line-height:1.35;
+                color:#c6f8d8; padding:4px; line-height:1.15;
             }
             QProgressBar {
                 background:#0a120f; border:1px solid #1f3f2d; border-radius:8px; text-align:center;
@@ -207,7 +309,38 @@ class MainWindow(QMainWindow):
         )
 
     def append_log(self, text: str) -> None:
-        self.log.appendPlainText(text)
+        line = _normalize_log_line(text)
+        if not line or line == self._last_log_line:
+            return
+        self._last_log_line = line
+        self.log.appendPlainText(line)
+
+    def _count_zones_in_file(self, path: Path) -> int:
+        try:
+            with path.open("r", encoding="utf-8-sig", newline="") as f:
+                rows = list(csv.reader(f))
+        except Exception:
+            return 0
+        if not rows:
+            return 0
+        body = rows[1:] if rows and any(x for x in rows[0]) else rows
+        return len([r for r in body if any(str(c).strip() for c in r)])
+
+    def recount_target_csvs(self) -> int:
+        if not self.input_folder:
+            return 0
+        gen = self.input_folder.rglob("*.csv") if self.chk_recursive.isChecked() else self.input_folder.glob("*.csv")
+        excluded_names = {"zoning_data.csv"}
+        count = 0
+        for p in gen:
+            if not p.is_file():
+                continue
+            if p.name in excluded_names or p.name.endswith("_拠点ゾーン.csv"):
+                continue
+            if self.output_csv and p == self.output_csv:
+                continue
+            count += 1
+        return count
 
     def _update_run_button_state(self) -> None:
         running = self.proc is not None and self.proc.state() != QProcess.ProcessState.NotRunning
@@ -215,21 +348,26 @@ class MainWindow(QMainWindow):
         self.btn_run.setEnabled((not running) and ready)
 
     def _recalc_csv_count(self) -> None:
-        if not self.input_folder:
-            self.total_files = 0
-            self.lbl_csv_count.setText("対象CSV数: 0")
-            self.lbl_csv_warn.setText("")
-            self._update_run_button_state()
-            return
-
-        if self.chk_recursive.isChecked():
-            self.total_files = len(list(self.input_folder.rglob("*.csv")))
-        else:
-            self.total_files = len(list(self.input_folder.glob("*.csv")))
-
+        self.total_files = self.recount_target_csvs()
         self.lbl_csv_count.setText(f"対象CSV数: {self.total_files:,}")
+        self.lbl_total.setText(f"対象CSV数: {self.total_files:,}")
         self.lbl_csv_warn.setText("[WARN] 対象CSVが0件です" if self.total_files == 0 else "")
         self._update_run_button_state()
+
+    def _update_progress_ui(self) -> None:
+        total = max(self.total_files, 0)
+        done = max(min(self.done_files, total if total > 0 else self.done_files), 0)
+        pct = (done * 100.0 / total) if total > 0 else 0.0
+        self.progress.setValue(int(pct))
+        self.lbl_progress.setText(f"進捗ファイル: {done:,}/{total:,}（{pct:.1f}%）")
+        self.lbl_total.setText(f"対象CSV数: {total:,}")
+        self.lbl_done.setText(f"処理済CSV数: {done:,}")
+
+    def _reset_zoning_card(self) -> None:
+        self.hit_count = 0
+        self.latest_hit_zone = "-"
+        self.lbl_hit_count.setText("現在HITした運行ID数: 0")
+        self.lbl_latest_zone.setText("最新HITゾーン: -")
 
     def pick_folder(self) -> None:
         p = QFileDialog.getExistingDirectory(self, "第1スクリーニングフォルダを選択")
@@ -237,8 +375,8 @@ class MainWindow(QMainWindow):
             return
         self.input_folder = Path(p)
         self.lbl_folder.setText(str(self.input_folder))
-        self._recalc_csv_count()
         self._update_output_path()
+        self._recalc_csv_count()
 
     def pick_zoning(self) -> None:
         p, _ = QFileDialog.getOpenFileName(self, "任意ゾーニングファイルを選択", "", "CSV (*.csv);;All Files (*)")
@@ -246,6 +384,10 @@ class MainWindow(QMainWindow):
             return
         self.zoning_file = Path(p)
         self.lbl_zoning.setText(str(self.zoning_file))
+        self.lbl_zoning_name.setText(f"ゾーニングファイル: {self.zoning_file.name}")
+        c = self._count_zones_in_file(self.zoning_file)
+        self.zone_count = f"{c:,}" if c > 0 else "（読込後に表示）"
+        self.lbl_zone_count.setText(f"ゾーン数: {self.zone_count}")
         self._update_run_button_state()
 
     def _update_output_path(self) -> None:
@@ -259,14 +401,26 @@ class MainWindow(QMainWindow):
         if not self.input_folder or not self.zoning_file:
             QMessageBox.warning(self, "入力不足", "第1スクリーニングフォルダと任意ゾーニングファイルを選択してください。")
             return
-        if self.total_files <= 0:
-            QMessageBox.warning(self, "入力不足", "対象CSVが0件です。フォルダ設定を見直してください。")
-            return
+
         self._update_output_path()
+        self.total_files = self.recount_target_csvs()
+        if self.total_files <= 0:
+            self.lbl_progress.setText("進捗ファイル: 0/0（0.0%） 対象CSVがありません")
+            QMessageBox.warning(self, "入力不足", "対象CSVがありません。フォルダ設定を見直してください。")
+            return
 
         self.done_files = 0
-        self.progress.setValue(0)
-        self.lbl_progress.setText("進捗ファイル: 0/0（0.0%）")
+        self.current_file = "-"
+        self.run_started_at = time.time()
+        self.is_running = True
+        self.spinner_index = 0
+        self._stdout_buffer = ""
+        self._last_log_line = ""
+        self._reset_zoning_card()
+        self._update_progress_ui()
+        self.lbl_remaining.setText("残り時間: 算出中...")
+        self.lbl_elapsed.setText("経過時間: 0秒")
+        self.lbl_current.setText("現在処理中: -")
         self.log.clear()
         self.btn_open.setEnabled(False)
 
@@ -297,35 +451,96 @@ class MainWindow(QMainWindow):
         for w in [self.btn_pick_folder, self.btn_pick_zoning, self.chk_recursive]:
             w.setEnabled(enabled)
 
+    def _process_log_line(self, line: str) -> None:
+        mt = RE_TOTAL.search(line)
+        if mt:
+            self.total_files = int(mt.group(1))
+            self._update_progress_ui()
+
+        mp = RE_PROGRESS.search(line)
+        if mp:
+            self.done_files = int(mp.group(1))
+            self.total_files = int(mp.group(2))
+            self.current_file = _normalize_log_line(mp.group(3))
+            self.lbl_current.setText(f"現在処理中: {self.current_file}")
+            self._update_progress_ui()
+
+        mh = RE_HIT.search(line)
+        if mh:
+            self.hit_count = int(mh.group(3))
+            self.latest_hit_zone = _normalize_log_line(mh.group(2))
+            self.lbl_hit_count.setText(f"現在HITした運行ID数: {self.hit_count:,}")
+            self.lbl_latest_zone.setText(f"最新HITゾーン: {self.latest_hit_zone}")
+            self._hit_highlight_ticks = 4
+
+        mz = RE_ZONE_COUNT.search(line)
+        if mz:
+            self.zone_count = f"{int(mz.group(1)):,}"
+            self.lbl_zone_count.setText(f"ゾーン数: {self.zone_count}")
+
+        if line.startswith("[INFO] 現在処理中:"):
+            self.current_file = line.split(":", 1)[-1].strip()
+            self.lbl_current.setText(f"現在処理中: {self.current_file}")
+
     def on_output(self) -> None:
         if not self.proc:
             return
         data = bytes(self.proc.readAllStandardOutput()).decode("utf-8", errors="ignore")
-        for raw in data.splitlines():
-            line = raw.strip()
+        combined = self._stdout_buffer + data
+        rows = combined.split("\n")
+        self._stdout_buffer = rows.pop() if rows else ""
+        for raw in rows:
+            line = _normalize_log_line(raw)
             if not line:
                 continue
-            m = RE_FILE_DONE.search(line)
-            if m:
-                done = int(m.group(1).replace(",", ""))
-                total = int(m.group(2).replace(",", ""))
-                self.done_files = done
-                self.total_files = total
-                pct = (done / total * 100.0) if total else 0.0
-                self.lbl_progress.setText(f"進捗ファイル: {done}/{total}（{pct:.1f}%）")
-                self.progress.setValue(int(pct))
+            self._process_log_line(line)
             self.append_log(line)
 
+    def update_runtime_status(self) -> None:
+        if self.is_running:
+            self.spinner_index = (self.spinner_index + 1) % len(self.spinner_frames)
+            self.lbl_spinner.setText(f"稼働中 {self.spinner_frames[self.spinner_index]}")
+            if self.run_started_at:
+                elapsed = int(time.time() - self.run_started_at)
+                self.lbl_elapsed.setText(f"経過時間: {format_seconds_hybrid(elapsed)}")
+                if self.done_files > 0 and self.total_files > 0:
+                    avg_sec_per_file = elapsed / self.done_files
+                    remaining_files = max(self.total_files - self.done_files, 0)
+                    eta_sec = int(avg_sec_per_file * remaining_files)
+                    self.lbl_remaining.setText(f"残り時間: {format_seconds_hybrid(eta_sec)}")
+                else:
+                    self.lbl_remaining.setText("残り時間: 算出中...")
+        else:
+            self.lbl_spinner.setText("停止 ●")
+
+        if self._hit_highlight_ticks > 0:
+            self.lbl_hit_count.setStyleSheet("color:#e8ff75;")
+            self._hit_highlight_ticks -= 1
+        else:
+            self.lbl_hit_count.setStyleSheet("")
+
     def on_finished(self, code: int, _status) -> None:
+        if self._stdout_buffer:
+            line = _normalize_log_line(self._stdout_buffer)
+            if line:
+                self._process_log_line(line)
+                self.append_log(line)
+            self._stdout_buffer = ""
+
         self._set_enabled(True)
+        self.is_running = False
         ok = code == 0
         if ok:
+            self.done_files = max(self.done_files, self.total_files)
+            self._update_progress_ui()
+            self.lbl_remaining.setText("残り時間: 完了")
             self.append_log("[INFO] 出力完了")
             if self.output_csv:
                 self.append_log(f"[INFO] 出力ファイル: {self.output_csv}")
             self.btn_open.setEnabled(self.output_csv is not None and self.output_csv.exists())
             QMessageBox.information(self, "完了", "出力完了しました。")
         else:
+            self.lbl_remaining.setText("残り時間: --")
             self.append_log("[ERROR] 処理が異常終了しました。ログを確認してください。")
             QMessageBox.warning(self, "エラー", "処理中にエラーが発生しました。ログを確認してください。")
         self._update_run_button_state()
@@ -338,7 +553,10 @@ class MainWindow(QMainWindow):
 def main() -> int:
     app = QApplication(sys.argv)
     w = MainWindow()
-    w.show()
+    if START_FULLSCREEN:
+        w.showFullScreen()
+    else:
+        w.show()
     return app.exec()
 
 
