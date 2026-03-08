@@ -342,71 +342,65 @@ def slot_label(slot_index: int) -> str:
     return f"{sh:02d}:{sm:02d}-{eh:02d}:{em:02d}"
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--input", required=True)
-    ap.add_argument("--zoning", required=True)
-    ap.add_argument("--slot-index", type=int, required=True)
-    ap.add_argument("--recursive", action="store_true")
-    ap.add_argument("--output-matrix", required=True)
-    ap.add_argument("--output-detail", required=True)
-    ap.add_argument("--output-summary", default="")
-    ap.add_argument("--center-lon", type=float, default=DEFAULT_CENTER_LON)
-    ap.add_argument("--center-lat", type=float, default=DEFAULT_CENTER_LAT)
-    ap.add_argument("--center-name", default=DEFAULT_CENTER_NAME)
-    ap.add_argument("--dates", required=True, help="JSON array of YYYY-MM-DD")
-    ap.add_argument("--dates-compact", default="")
-    ap.add_argument("--keep-out-of-zone", action="store_true", help="互換オプション(現在は方向別ゾーン優先)")
-    args = ap.parse_args()
+def run_peak30min_od(
+    input_dir: Path,
+    zoning_csv: Path,
+    slot_index: int,
+    output_matrix: Path,
+    output_detail: Path,
+    output_summary: Path,
+    center_lon: float,
+    center_lat: float,
+    center_name: str,
+    selected_dates: set[date],
+    recursive: bool = False,
+    progress_callback=None,
+    log_callback=None,
+    dates_compact: str = "",
+) -> int:
+    logger = log_callback or log
 
-    input_dir = Path(args.input)
-    zoning_csv = Path(args.zoning)
-    out_matrix = Path(args.output_matrix)
-    out_detail = Path(args.output_detail)
-    out_summary = Path(args.output_summary) if args.output_summary else out_matrix.with_name(out_matrix.stem.replace("_matrix", "_summary") + out_matrix.suffix)
+    def emit_progress(done: int, total: int) -> None:
+        if progress_callback:
+            try:
+                progress_callback(done, total)
+            except Exception:
+                pass
 
     if not input_dir.exists() or not input_dir.is_dir():
-        log(f"[ERROR] 入力フォルダ不正: {input_dir}")
+        logger(f"[ERROR] 入力フォルダ不正: {input_dir}")
         return 2
     if not zoning_csv.exists():
-        log(f"[ERROR] ゾーニングCSVがありません: {zoning_csv}")
+        logger(f"[ERROR] ゾーニングCSVがありません: {zoning_csv}")
         return 2
-    if not (0 <= args.slot_index <= 47):
-        log("[ERROR] --slot-index は 0..47")
+    if not (0 <= slot_index <= 47):
+        logger("[ERROR] --slot-index は 0..47")
         return 2
-    if not (-180 <= args.center_lon <= 180 and -90 <= args.center_lat <= 90):
-        log("[ERROR] center座標が不正")
-        return 2
-    try:
-        date_tokens = json.loads(args.dates)
-        if not isinstance(date_tokens, list):
-            raise ValueError
-        selected_dates = {datetime.strptime(str(x), "%Y-%m-%d").date() for x in date_tokens}
-    except Exception:
-        log("[ERROR] --dates の形式が不正です。JSON配列(YYYY-MM-DD)を指定してください")
+    if not (-180 <= center_lon <= 180 and -90 <= center_lat <= 90):
+        logger("[ERROR] center座標が不正")
         return 2
     if not selected_dates:
-        log("[ERROR] 対象日が0件です")
+        logger("[ERROR] 対象日が0件です")
         return 2
 
-    csv_files = _iter_csv_files(input_dir, args.recursive)
+    csv_files = _iter_csv_files(input_dir, recursive)
     if not csv_files:
-        log("[ERROR] 入力CSV 0件")
+        logger("[ERROR] 入力CSV 0件")
         return 2
 
     polygons = load_polygons(zoning_csv)
     if not polygons:
-        log("[ERROR] ゾーニングCSVから有効ポリゴンを読み込めません")
+        logger("[ERROR] ゾーニングCSVから有効ポリゴンを読み込めません")
         return 2
 
     total = len(csv_files)
-    slot = slot_label(args.slot_index)
-    log(f"[INFO] 開始: {now_text()}")
-    log(f"[INFO] 対象CSV数: {total}")
-    log(f"[INFO] 指定30分帯: {slot}")
-    log(f"[INFO] 対象日数: {len(selected_dates)}")
-    log(f"[INFO] ゾーン数: {len(polygons)}")
-    log(f"[INFO] 方向判定中心点: {args.center_name} lon={args.center_lon} lat={args.center_lat}")
+    slot = slot_label(slot_index)
+    logger(f"[INFO] 開始: {now_text()}")
+    logger(f"[INFO] 対象CSV数: {total}")
+    logger(f"[INFO] 指定30分帯: {slot}")
+    logger(f"[INFO] 対象日数: {len(selected_dates)}")
+    logger(f"[INFO] ゾーン数: {len(polygons)}")
+    logger(f"[INFO] 方向判定中心点: {center_name} lon={center_lon} lat={center_lat}")
 
     matrix: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     detail_rows: list[dict[str, object]] = []
@@ -419,13 +413,15 @@ def main() -> int:
 
     for i, fp in enumerate(csv_files, 1):
         try:
-            rec = process_file(fp, args.slot_index, polygons, args.center_lon, args.center_lat, selected_dates)
+            rec = process_file(fp, slot_index, polygons, center_lon, center_lat, selected_dates)
         except Exception as e:
-            log(f"[ERROR] {fp.name}: {e}")
-            log(f"進捗ファイル: {i}/{total}")
+            logger(f"[ERROR] {fp.name}: {e}")
+            logger(f"進捗ファイル: {i}/{total}")
+            emit_progress(i, total)
             continue
         if rec is None:
-            log(f"進捗ファイル: {i}/{total}")
+            logger(f"進捗ファイル: {i}/{total}")
+            emit_progress(i, total)
             continue
 
         o_zone = rec["o_zone"]
@@ -450,29 +446,24 @@ def main() -> int:
         matrix[o_zone][d_zone] += 1
         od_counts[(o_zone, d_zone)] += 1
 
-        detail_rows.append(
-            {
-                "opid": fp.stem,
-                "slot": slot,
-                **rec,
-            }
-        )
+        detail_rows.append({"opid": fp.stem, "slot": slot, **rec})
 
-        log(f"ODCOUNT:{o_zone}:{d_zone}:{od_counts[(o_zone, d_zone)]}")
+        logger(f"ODCOUNT:{o_zone}:{d_zone}:{od_counts[(o_zone, d_zone)]}")
         for key in ("EAST", "WEST", "NORTH", "SOUTH"):
-            log(f"DIRCOUNT:{key}:{direction_count[key]}")
-        log(f"進捗ファイル: {i}/{total}")
+            logger(f"DIRCOUNT:{key}:{direction_count[key]}")
+        logger(f"進捗ファイル: {i}/{total}")
+        emit_progress(i, total)
 
-    out_matrix.parent.mkdir(parents=True, exist_ok=True)
+    output_matrix.parent.mkdir(parents=True, exist_ok=True)
 
     zones_sorted = sorted(used_zones)
-    with out_matrix.open("w", encoding="utf-8-sig", newline="") as f:
+    with output_matrix.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
         w.writerow(["o_zone\\d_zone", *zones_sorted])
         for oz in zones_sorted:
             w.writerow([oz] + [matrix[oz].get(dz, 0) for dz in zones_sorted])
 
-    with out_detail.open("w", encoding="utf-8-sig", newline="") as f:
+    with output_detail.open("w", encoding="utf-8-sig", newline="") as f:
         fields = [
             "opid", "slot", "o_time", "d_time", "o_lat", "o_lon", "d_lat", "d_lon",
             "o_zone", "d_zone", "point_count_in_slot",
@@ -485,12 +476,12 @@ def main() -> int:
     total_trips = len(detail_rows)
     same_ratio = (same_zone / total_trips * 100.0) if total_trips else 0.0
 
-    with out_summary.open("w", encoding="utf-8-sig", newline="") as f:
+    with output_summary.open("w", encoding="utf-8-sig", newline="") as f:
         fields = [
             "slot", "total_trips_in_slot", "same_zone_od_count", "same_zone_od_ratio",
             "east_zone_count", "west_zone_count", "north_zone_count", "south_zone_count", "missing_count",
-                "center_lon", "center_lat", "center_name",
-                "selected_day_count", "selected_dates_compact",
+            "center_lon", "center_lat", "center_name",
+            "selected_day_count", "selected_dates_compact",
         ]
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
@@ -505,25 +496,72 @@ def main() -> int:
                 "north_zone_count": direction_count["NORTH"],
                 "south_zone_count": direction_count["SOUTH"],
                 "missing_count": missing_count,
-                "center_lon": args.center_lon,
-                "center_lat": args.center_lat,
-                "center_name": args.center_name,
+                "center_lon": center_lon,
+                "center_lat": center_lat,
+                "center_name": center_name,
                 "selected_day_count": len(selected_dates),
-                "selected_dates_compact": args.dates_compact or compact_dates(sorted(selected_dates)),
+                "selected_dates_compact": dates_compact or compact_dates(sorted(selected_dates)),
             }
         )
 
-    log(f"[INFO] SAME_ZONE_RATIO: {same_ratio:.1f}")
-    log("[INFO] 方向別ゾーン件数:")
-    log(f"[INFO]   東方面ゾーン: {direction_count['EAST']}")
-    log(f"[INFO]   西方面ゾーン: {direction_count['WEST']}")
-    log(f"[INFO]   北方面ゾーン: {direction_count['NORTH']}")
-    log(f"[INFO]   南方面ゾーン: {direction_count['SOUTH']}")
-    log(f"[INFO] 出力CSV: {out_matrix}")
-    log(f"[INFO] 出力CSV: {out_detail}")
-    log(f"[INFO] 出力CSV: {out_summary}")
-    log(f"[INFO] 完了: {now_text()}")
+    logger(f"[INFO] SAME_ZONE_RATIO: {same_ratio:.1f}")
+    logger("[INFO] 方向別ゾーン件数:")
+    logger(f"[INFO]   東方面ゾーン: {direction_count['EAST']}")
+    logger(f"[INFO]   西方面ゾーン: {direction_count['WEST']}")
+    logger(f"[INFO]   北方面ゾーン: {direction_count['NORTH']}")
+    logger(f"[INFO]   南方面ゾーン: {direction_count['SOUTH']}")
+    logger(f"[INFO] 出力CSV: {output_matrix}")
+    logger(f"[INFO] 出力CSV: {output_detail}")
+    logger(f"[INFO] 出力CSV: {output_summary}")
+    logger(f"[INFO] 完了: {now_text()}")
     return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--input", required=True)
+    ap.add_argument("--zoning", required=True)
+    ap.add_argument("--slot-index", type=int, required=True)
+    ap.add_argument("--recursive", action="store_true")
+    ap.add_argument("--output-matrix", required=True)
+    ap.add_argument("--output-detail", required=True)
+    ap.add_argument("--output-summary", default="")
+    ap.add_argument("--center-lon", type=float, default=DEFAULT_CENTER_LON)
+    ap.add_argument("--center-lat", type=float, default=DEFAULT_CENTER_LAT)
+    ap.add_argument("--center-name", default=DEFAULT_CENTER_NAME)
+    ap.add_argument("--dates", required=True, help="JSON array of YYYY-MM-DD")
+    ap.add_argument("--dates-compact", default="")
+    ap.add_argument("--keep-out-of-zone", action="store_true", help="互換オプション(現在は方向別ゾーン優先)")
+    args = ap.parse_args()
+
+    input_dir = Path(args.input)
+    zoning_csv = Path(args.zoning)
+    out_matrix = Path(args.output_matrix)
+    out_detail = Path(args.output_detail)
+    out_summary = Path(args.output_summary) if args.output_summary else out_matrix.with_name(out_matrix.stem.replace("_matrix", "_summary") + out_matrix.suffix)
+
+    try:
+        date_tokens = json.loads(args.dates)
+        if not isinstance(date_tokens, list):
+            raise ValueError
+        selected_dates = {datetime.strptime(str(x), "%Y-%m-%d").date() for x in date_tokens}
+    except Exception:
+        log("[ERROR] --dates の形式が不正です。JSON配列(YYYY-MM-DD)を指定してください")
+        return 2
+    return run_peak30min_od(
+        input_dir=input_dir,
+        zoning_csv=zoning_csv,
+        slot_index=args.slot_index,
+        output_matrix=out_matrix,
+        output_detail=out_detail,
+        output_summary=out_summary,
+        center_lon=args.center_lon,
+        center_lat=args.center_lat,
+        center_name=args.center_name,
+        selected_dates=selected_dates,
+        recursive=args.recursive,
+        dates_compact=args.dates_compact,
+    )
 
 
 if __name__ == "__main__":
