@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+import logging
 
 from PyQt6.QtCore import QProcess, QTimer, Qt, QUrl
 from PyQt6.QtGui import QPainter, QPen, QColor, QPolygonF
@@ -172,11 +173,13 @@ class ZoneMapWidget(QWidget):
         super().__init__()
         self.zone_name = ""
         self.points: list[tuple[float, float]] = []
+        self.message = "ゾーンカードをクリックするとここに表示"
         self.setMinimumHeight(360)
 
-    def set_zone(self, zone_name: str, points: list[tuple[float, float]]) -> None:
+    def set_zone(self, zone_name: str, points: list[tuple[float, float]], message: str = "") -> None:
         self.zone_name = zone_name
         self.points = points
+        self.message = message
         self.update()
 
     def paintEvent(self, _event) -> None:
@@ -184,7 +187,7 @@ class ZoneMapWidget(QWidget):
         p.fillRect(self.rect(), QColor("#ffffff"))
         if not self.points:
             p.setPen(QPen(QColor("#999999"), 1))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "ゾーンカードをクリックするとここに表示")
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.message)
             return
         lons = [pt[0] for pt in self.points]
         lats = [pt[1] for pt in self.points]
@@ -192,7 +195,8 @@ class ZoneMapWidget(QWidget):
         min_lat, max_lat = min(lats), max(lats)
         w = max(max_lon - min_lon, 1e-9)
         h = max(max_lat - min_lat, 1e-9)
-        scale = min(self.width() * 0.8 / w, self.height() * 0.75 / h)
+        scale = min(self.width() * 0.8 / w, self.height() * 0.8 / h)
+        scale = max(scale, 1.0)
         cx = (min_lon + max_lon) / 2.0
         cy = (min_lat + max_lat) / 2.0
         poly = QPolygonF()
@@ -214,12 +218,16 @@ class ZoneCard(QPushButton):
         self.count = 0
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(90)
-        self.lbl = QLabel()
-        self.lbl.setObjectName("zoneText")
+        self.setFixedHeight(100)
+        self.lbl_title = QLabel(self.zone_name)
+        self.lbl_title.setObjectName("zoneTitle")
+        self.lbl_count = QLabel()
+        self.lbl_count.setObjectName("zoneText")
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 10, 10, 10)
-        lay.addWidget(self.lbl)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(2)
+        lay.addWidget(self.lbl_title)
+        lay.addWidget(self.lbl_count)
         self.refresh()
 
     def set_count(self, value: int) -> None:
@@ -227,7 +235,7 @@ class ZoneCard(QPushButton):
         self.refresh()
 
     def refresh(self) -> None:
-        self.lbl.setText(f"{self.zone_name}\nHIT運行ID数: {self.count:,}")
+        self.lbl_count.setText(f"HIT運行ID数: {self.count:,}")
 
 
 class MainWindow(QMainWindow):
@@ -246,6 +254,7 @@ class MainWindow(QMainWindow):
         self.current_file = "-"
         self.run_started_at: float | None = None
         self.zone_shapes: dict[str, list[tuple[float, float]]] = {}
+        self.zone_shape_aliases: dict[str, str] = {}
         self.zone_cards: dict[str, ZoneCard] = {}
         self.zone_hit_counts: dict[str, int] = {}
         self._counted_ops: set[str] = set()
@@ -255,6 +264,9 @@ class MainWindow(QMainWindow):
         self._last_progress_milestone = 0
         self._map_warned = False
         self._map_html_path = Path(tempfile.gettempdir()) / "zone_estimator_map.html"
+        self.selected_zone_name = ""
+        self._web_map_enabled = QWebEngineView is not None
+        self._debug_logger = logging.getLogger("zone_estimator_ui")
 
         self._build_ui()
         self.timer = QTimer(self)
@@ -398,7 +410,12 @@ class MainWindow(QMainWindow):
             QPushButton { background:#123325; border:1px solid #00ff99; border-radius:8px; padding:6px 10px; color:#edfff6; }
             QPushButton:checked { background:#1f5f47; border:2px solid #72ffe2; }
             QPushButton:hover { background:#20543c; }
+            QPushButton#zoneCard { text-align:left; }
+            QPushButton#zoneCard[selected="true"] { background:#2f6b58; border:2px solid #95ffe9; }
+            QPushButton#zoneCard[selected="false"] { background:#123325; border:1px solid #00ff99; }
             QLabel#zoneText { font-size:15px; font-weight:700; color:#d8fff2; }
+            QLabel#zoneTitle { font-size:16px; font-weight:900; color:#e8fff6; }
+            QPushButton#zoneCard[selected="true"] QLabel#zoneTitle { color:#fff58a; }
             QPlainTextEdit { background:#0a120f; border:1px solid #1f4a38; }
             """
         )
@@ -430,6 +447,23 @@ class MainWindow(QMainWindow):
     def _update_run_state(self) -> None:
         running = self.proc is not None and self.proc.state() != QProcess.ProcessState.NotRunning
         self.btn_run.setEnabled((not running) and self.input_folder is not None and self.zoning_file is not None and self.total_files > 0)
+        self.set_step_controls_enabled(not running)
+        self.set_zone_cards_enabled(True)
+
+    def set_step_controls_enabled(self, enabled: bool) -> None:
+        for w in [
+            self.btn_pick_folder,
+            self.chk_recursive,
+            self.btn_pick_zoning,
+            self.btn_run,
+        ]:
+            w.setEnabled(enabled)
+        if enabled:
+            self.btn_run.setEnabled(self.input_folder is not None and self.zoning_file is not None and self.total_files > 0)
+
+    def set_zone_cards_enabled(self, enabled: bool) -> None:
+        for c in self.zone_cards.values():
+            c.setEnabled(enabled)
 
     def _update_output_path(self) -> None:
         if self.input_folder:
@@ -459,15 +493,44 @@ class MainWindow(QMainWindow):
         self.zone_hit_counts = {name: 0 for name in ordered}
         for idx, zone_name in enumerate(ordered):
             card = ZoneCard(zone_name)
-            card.clicked.connect(lambda _=False, n=zone_name: self.select_zone_card(n))
+            card.setObjectName("zoneCard")
+            card.clicked.connect(lambda _=False, n=zone_name: self.on_zone_card_clicked(n))
             self.zone_cards[zone_name] = card
             self.card_grid.addWidget(card, idx // 3, idx % 3)
+        self.highlight_selected_card(self.selected_zone_name)
         self.lbl_zone_count.setText(f"ゾーン数: {len(self.zone_shapes):,}")
 
-    def select_zone_card(self, zone_name: str) -> None:
+    def highlight_selected_card(self, zone_name: str) -> None:
         for n, c in self.zone_cards.items():
             c.setChecked(n == zone_name)
+            c.setProperty("selected", "true" if n == zone_name else "false")
+            c.style().unpolish(c)
+            c.style().polish(c)
+
+    def on_zone_card_clicked(self, zone_name: str) -> None:
+        self._debug_logger.debug("[DEBUG] card clicked: %s", zone_name)
+        self.selected_zone_name = zone_name
+        self.highlight_selected_card(zone_name)
         self.render_zone_on_map(zone_name)
+
+    def _build_zone_aliases(self) -> None:
+        self.zone_shape_aliases = {}
+        for name in self.zone_shapes:
+            key = self._normalize_zone_key(name)
+            if key:
+                self.zone_shape_aliases[key] = name
+
+    @staticmethod
+    def _normalize_zone_key(name: str) -> str:
+        return re.sub(r"\s+", "", (name or "").strip())
+
+    def _resolve_zone_points(self, zone_name: str) -> list[tuple[float, float]]:
+        if zone_name in AUX_ZONE_NAMES:
+            return self._aux_zone_shape(zone_name)
+        if zone_name in self.zone_shapes:
+            return self.zone_shapes[zone_name]
+        alias_name = self.zone_shape_aliases.get(self._normalize_zone_key(zone_name), "")
+        return self.zone_shapes.get(alias_name, []) if alias_name else []
 
     def _aux_zone_shape(self, zone_name: str) -> list[tuple[float, float]]:
         points = [pt for poly in self.zone_shapes.values() for pt in poly]
@@ -488,9 +551,18 @@ class MainWindow(QMainWindow):
         return [(min_lon, min_lat), (mid_lon, min_lat), (mid_lon, max_lat), (min_lon, max_lat)]
 
     def render_zone_on_map(self, zone_name: str) -> None:
-        points = self._aux_zone_shape(zone_name) if zone_name in AUX_ZONE_NAMES else self.zone_shapes.get(zone_name, [])
+        points = self._resolve_zone_points(zone_name)
+        self._debug_logger.debug("[DEBUG] polygon points: %d", len(points))
+        if not points:
+            msg = "ゾーン定義が見つかりません"
+            self.map_widget.set_zone(zone_name, [], msg)
+            self.map_stack.setCurrentWidget(self.map_widget)
+            return
         self.map_widget.set_zone(zone_name, points)
-        self._render_web_map(zone_name, points)
+        if self._web_map_enabled:
+            self._render_web_map(zone_name, points)
+        else:
+            self.map_stack.setCurrentWidget(self.map_widget)
 
     def _render_web_map(self, zone_name: str, points: list[tuple[float, float]]) -> None:
         if self.web_map is None or not points:
@@ -508,6 +580,7 @@ const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.2
 </script></body></html>"""
         try:
             self._map_html_path.write_text(html, encoding="utf-8")
+            self._debug_logger.debug("[DEBUG] map mode: web")
             self.map_stack.setCurrentWidget(self.web_map)
             self.web_map.load(QUrl.fromLocalFile(str(self._map_html_path)))
         except Exception:
@@ -518,15 +591,27 @@ const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.2
             self._switch_to_simple_map()
 
     def _switch_to_simple_map(self) -> None:
+        self._debug_logger.debug("[DEBUG] map mode fallback: simple")
+        self._web_map_enabled = False
         self.map_stack.setCurrentWidget(self.map_widget)
         if not self._map_warned:
             self._map_warned = True
             self.append_uiwarn("ベースマップ取得に失敗したため簡易地図表示に切替")
 
+    def increment_zone_hit_count(self, zone_name: str) -> None:
+        resolved_name = zone_name
+        if resolved_name not in self.zone_cards:
+            resolved_name = self.zone_shape_aliases.get(self._normalize_zone_key(zone_name), zone_name)
+        next_count = self.zone_hit_counts.get(resolved_name, 0) + 1
+        self.update_zone_card(resolved_name, next_count)
+
     def update_zone_card(self, zone_name: str, count: int) -> None:
-        self.zone_hit_counts[zone_name] = count
-        if zone_name in self.zone_cards:
-            self.zone_cards[zone_name].set_count(count)
+        resolved_name = zone_name
+        if resolved_name not in self.zone_cards:
+            resolved_name = self.zone_shape_aliases.get(self._normalize_zone_key(zone_name), zone_name)
+        self.zone_hit_counts[resolved_name] = count
+        if resolved_name in self.zone_cards:
+            self.zone_cards[resolved_name].set_count(count)
 
     def pick_zoning(self) -> None:
         p, _ = QFileDialog.getOpenFileName(self, "任意ゾーニングファイルを選択", "", "CSV (*.csv)")
@@ -535,9 +620,13 @@ const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.2
         self.zoning_file = Path(p)
         self.lbl_zoning.setText(str(self.zoning_file))
         self.zone_shapes = parse_zone_shapes(self.zoning_file)
+        self._build_zone_aliases()
         self.build_zone_cards()
         if self.zone_shapes:
-            self.select_zone_card(next(iter(self.zone_shapes.keys())))
+            self.on_zone_card_clicked(next(iter(self.zone_shapes.keys())))
+        else:
+            self.map_widget.set_zone("", [], "ゾーンポリゴンを表示できません")
+            self.map_stack.setCurrentWidget(self.map_widget)
         self._update_run_state()
 
     def _refresh_progress(self) -> None:
@@ -566,6 +655,8 @@ const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.2
         self.lbl_status.setText("状態: RUNNING")
         self.radar.set_running(True)
         self.btn_open.setEnabled(False)
+        self.set_step_controls_enabled(False)
+        self.set_zone_cards_enabled(True)
 
         script = Path(__file__).with_name("03_base_zone_estimator.py")
         args = [str(script), "--input", str(self.input_folder), "--zoning", str(self.zoning_file)]
@@ -604,7 +695,7 @@ const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.2
             if op_id not in self._counted_ops:
                 self._counted_ops.add(op_id)
                 self.hit_count += 1
-                self.update_zone_card(zone, self.zone_hit_counts.get(zone, 0) + 1)
+                self.increment_zone_hit_count(zone)
             self.lbl_hit.setText(f"正常HIT: {self.hit_count:,}")
             milestone = (self.hit_count // 100) * 100
             if milestone >= 100 and milestone > self._last_hit_milestone:
@@ -615,7 +706,7 @@ const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.2
             if op_id not in self._counted_ops:
                 self._counted_ops.add(op_id)
                 self.hit_count += 1
-                self.update_zone_card(zone, self.zone_hit_counts.get(zone, 0) + 1)
+                self.increment_zone_hit_count(zone)
             self.lbl_hit.setText(f"正常HIT: {self.hit_count:,}")
         if m := RE_ZONE_COUNT.search(line):
             self.lbl_zone_count.setText(f"ゾーン数: {int(m.group(1)):,}")
@@ -658,6 +749,8 @@ const pts=[{coords}]; const poly=L.polygon(pts,{{color:'#00a3a3',fillOpacity:0.2
         self.done_files = max(self.done_files, self.total_files if code == 0 else self.done_files)
         self._refresh_progress()
         self.btn_open.setEnabled(code == 0 and self.output_csv is not None and self.output_csv.exists())
+        self.set_step_controls_enabled(True)
+        self.set_zone_cards_enabled(True)
         self._update_run_state()
         if code == 0:
             self.append_uiinfo(f"解析完了 / 正常HIT={self.hit_count:,}")
