@@ -5,17 +5,17 @@ import csv
 import math
 import re
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from typing import Sequence
 
 ENCODINGS = ("utf-8-sig", "utf-8", "cp932")
-NIGHT_START_HOUR = 22
-NIGHT_END_HOUR = 5
-DIST_THRESHOLD_M = 100.0
-MIN_STOP_MINUTES = 30.0
+NIGHT_START_HOUR = 20
+MORNING_START_HOUR = 5
+MORNING_END_HOUR = 10
+NIGHT_CROSS_MAX_DIST_M = 300.0
 
 
 @dataclass
@@ -34,37 +34,16 @@ class Record:
 
 
 @dataclass
-class StopSegment:
-    start_idx: int
-    end_idx: int
-    start_time: datetime
-    end_time: datetime
-    stop_minutes: float
+class NightCrossCandidate:
+    zone: str
     rep_lat: float
     rep_lon: float
-
-
-@dataclass
-class ZoneCandidate:
-    zone: str | None
-    stop_minutes: float
-    rep_lat: float
-    rep_lon: float
-    basis_count: int
-    dawn_score: float
+    last_ts: datetime
+    next_ts: datetime
 
 
 def log(msg: str) -> None:
     print(msg, flush=True)
-
-
-def _warn_limited(counter: dict[str, int], key: str, msg: str, limit: int = 20) -> None:
-    current = counter.get(key, 0)
-    if current < limit:
-        log(msg)
-    elif current == limit:
-        log(f"[WARN] {key}: 以降省略")
-    counter[key] = current + 1
 
 
 def parse_float(v: str | None) -> float | None:
@@ -157,7 +136,7 @@ def load_zone_definition(zoning_csv: Path) -> list[PolygonZone]:
         name_idx, poly_idx = _pick_zone_columns(header)
 
     polygons: list[PolygonZone] = []
-    for row_no, row in enumerate(rows[start_idx:], start=start_idx + 1):
+    for row in rows[start_idx:]:
         if not row:
             continue
         zone_name = ""
@@ -167,20 +146,19 @@ def load_zone_definition(zoning_csv: Path) -> list[PolygonZone]:
             points = _parse_polygon_text(row[poly_idx] or "")
         elif has_header and name_idx is not None and name_idx < len(row):
             zone_name = (row[name_idx] or "").strip()
-            seq = [parse_float(x) for x in row if x is not None]
-            vals = [x for x in seq if x is not None]
-            for i in range(0, len(vals), 2):
-                if i + 1 < len(vals):
-                    points.append((float(vals[i]), float(vals[i + 1])))
+            vals = [parse_float(x) for x in row if x is not None]
+            seq = [x for x in vals if x is not None]
+            for i in range(0, len(seq), 2):
+                if i + 1 < len(seq):
+                    points.append((float(seq[i]), float(seq[i + 1])))
         else:
             zone_name = (row[0] or "").strip()
-            seq = [parse_float(x) for x in row[1:]]
-            vals = [x for x in seq if x is not None]
-            for i in range(0, len(vals), 2):
-                if i + 1 < len(vals):
-                    points.append((float(vals[i]), float(vals[i + 1])))
+            vals = [parse_float(x) for x in row[1:]]
+            seq = [x for x in vals if x is not None]
+            for i in range(0, len(seq), 2):
+                if i + 1 < len(seq):
+                    points.append((float(seq[i]), float(seq[i + 1])))
         if not zone_name or len(points) < 3:
-            log(f"[WARN] ゾーン定義スキップ: 行番号{row_no}（頂点不足または名称なし）")
             continue
         lons = [p[0] for p in points]
         lats = [p[1] for p in points]
@@ -202,7 +180,7 @@ def point_in_polygon(lon: float, lat: float, points: Sequence[tuple[float, float
     return inside
 
 
-def assign_zone(lat: float | None, lon: float | None, zone_def: Sequence[PolygonZone]) -> str | None:
+def assign_point_to_zone(lat: float | None, lon: float | None, zone_def: Sequence[PolygonZone]) -> str | None:
     if lat is None or lon is None:
         return None
     for poly in zone_def:
@@ -224,98 +202,83 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * r * math.asin(min(1.0, math.sqrt(a)))
 
 
-def _night_minute(ts: datetime) -> int:
-    minute = ts.hour * 60 + ts.minute
-    if minute < NIGHT_END_HOUR * 60:
-        return minute + 24 * 60
-    return minute
+def extract_day_boundaries(records: list[Record]) -> list[tuple[Record, Record]]:
+    by_day: dict[datetime.date, list[Record]] = defaultdict(list)
+    for rec in records:
+        by_day[rec.ts.date()].append(rec)
+    days = sorted(by_day.keys())
+    pairs: list[tuple[Record, Record]] = []
+    for d in days:
+        next_d = d.fromordinal(d.toordinal() + 1)
+        if next_d not in by_day:
+            continue
+        pairs.append((by_day[d][-1], by_day[next_d][0]))
+    return pairs
 
 
-def extract_night_records(records: list[Record], start_hour: int = NIGHT_START_HOUR, end_hour: int = NIGHT_END_HOUR) -> list[Record]:
-    out: list[Record] = []
-    for r in records:
-        h = r.ts.hour
-        if h >= start_hour or h < end_hour:
-            out.append(r)
-    return out
+def find_night_cross_candidates(
+    records: list[Record],
+    zones: Sequence[PolygonZone],
+    night_start: int = NIGHT_START_HOUR,
+    morning_start: int = MORNING_START_HOUR,
+    morning_end: int = MORNING_END_HOUR,
+    max_dist_m: float = NIGHT_CROSS_MAX_DIST_M,
+) -> list[NightCrossCandidate]:
+    candidates: list[NightCrossCandidate] = []
+    for last_of_day, first_of_next_day in extract_day_boundaries(records):
+        cond_a = (
+            last_of_day.ts.hour >= night_start
+            and morning_start <= first_of_next_day.ts.hour < morning_end
+        )
+        if not cond_a:
+            continue
+        dist = _haversine_m(last_of_day.lat, last_of_day.lon, first_of_next_day.lat, first_of_next_day.lon)
+        if dist > max_dist_m:
+            continue
+        rep_lat = (last_of_day.lat + first_of_next_day.lat) / 2.0
+        rep_lon = (last_of_day.lon + first_of_next_day.lon) / 2.0
+        zone = assign_point_to_zone(rep_lat, rep_lon, zones)
+        if not zone:
+            continue
+        candidates.append(
+            NightCrossCandidate(
+                zone=zone,
+                rep_lat=rep_lat,
+                rep_lon=rep_lon,
+                last_ts=last_of_day.ts,
+                next_ts=first_of_next_day.ts,
+            )
+        )
+    return candidates
 
 
-def detect_stop_segments(records: list[Record], dist_threshold_m: float = DIST_THRESHOLD_M, min_stop_minutes: float = MIN_STOP_MINUTES) -> list[StopSegment]:
-    segments: list[StopSegment] = []
-    if len(records) < 2:
-        return segments
+def nearest_to_3am_record(records: list[Record]) -> Record | None:
+    if not records:
+        return None
 
-    start_idx: int | None = None
-    for i in range(1, len(records)):
-        prev = records[i - 1]
-        cur = records[i]
-        dist = _haversine_m(prev.lat, prev.lon, cur.lat, cur.lon)
-        if dist <= dist_threshold_m:
-            if start_idx is None:
-                start_idx = i - 1
-        else:
-            if start_idx is not None:
-                seg = _build_segment(records, start_idx, i - 1)
-                if seg.stop_minutes >= min_stop_minutes:
-                    segments.append(seg)
-                start_idx = None
-    if start_idx is not None:
-        seg = _build_segment(records, start_idx, len(records) - 1)
-        if seg.stop_minutes >= min_stop_minutes:
-            segments.append(seg)
-    return segments
+    def score(r: Record) -> float:
+        base = datetime.combine(r.ts.date(), time(hour=3, minute=0, second=0))
+        return abs((r.ts - base).total_seconds())
+
+    return min(records, key=score)
 
 
-def _build_segment(records: list[Record], start_idx: int, end_idx: int) -> StopSegment:
-    seg_rows = records[start_idx : end_idx + 1]
-    st = seg_rows[0].ts
-    ed = seg_rows[-1].ts
-    stop_minutes = max(0.0, (ed - st).total_seconds() / 60.0)
-    rep_lat = sum(r.lat for r in seg_rows) / len(seg_rows)
-    rep_lon = sum(r.lon for r in seg_rows) / len(seg_rows)
-    return StopSegment(start_idx, end_idx, st, ed, stop_minutes, rep_lat, rep_lon)
+def estimate_base_zone_with_fallback(records: list[Record], zones: Sequence[PolygonZone]) -> tuple[str, str]:
+    night_cross = find_night_cross_candidates(records, zones)
+    if night_cross:
+        votes = Counter(c.zone for c in night_cross)
+        top_zone, top_votes = votes.most_common(1)[0]
+        if len(night_cross) >= 2 and top_votes >= 2:
+            return top_zone, f"夜越し地点{top_votes}回一致"
+        return top_zone, "夜越し地点1回"
 
-
-def representative_point(segment: StopSegment) -> tuple[float, float]:
-    return segment.rep_lat, segment.rep_lon
-
-
-def judge_zone_from_stop(segment: StopSegment, records: list[Record], zone_def: Sequence[PolygonZone]) -> str | None:
-    rep_lat, rep_lon = representative_point(segment)
-    rep_zone = assign_zone(rep_lat, rep_lon, zone_def)
-    if rep_zone:
-        return rep_zone
-
-    prev_zone = None
-    next_zone = None
-    if segment.start_idx - 1 >= 0:
-        prev = records[segment.start_idx - 1]
-        prev_zone = assign_zone(prev.lat, prev.lon, zone_def)
-    if segment.end_idx + 1 < len(records):
-        nxt = records[segment.end_idx + 1]
-        next_zone = assign_zone(nxt.lat, nxt.lon, zone_def)
-
-    if prev_zone and next_zone and prev_zone == next_zone:
-        return prev_zone
-    if prev_zone:
-        return prev_zone
-    if next_zone:
-        return next_zone
-    return None
-
-
-def select_best_base_zone(candidates: list[ZoneCandidate]) -> tuple[str, ZoneCandidate | None]:
-    if not candidates:
-        return "判定不可", None
-
-    valid = [c for c in candidates if c.zone]
-    if not valid:
-        best = max(candidates, key=lambda c: (c.stop_minutes, c.dawn_score))
-        return "ゾーン外", best
-
-    zone_freq = Counter(str(c.zone) for c in valid)
-    best = max(valid, key=lambda c: (c.stop_minutes, zone_freq[str(c.zone)], c.dawn_score))
-    return str(best.zone), best
+    near_3 = nearest_to_3am_record(records)
+    if near_3 is None:
+        return "判定不可", "有効レコード0件"
+    fallback_zone = assign_point_to_zone(near_3.lat, near_3.lon, zones)
+    if fallback_zone:
+        return fallback_zone, "深夜3時近傍点で判定"
+    return "判定不可", "夜越し地点なし・深夜3時近傍もゾーン外"
 
 
 def _detect_input_columns(headers: Sequence[str]) -> tuple[int | None, int | None, int | None, int | None]:
@@ -345,18 +308,15 @@ def _looks_like_header_row(first_row: Sequence[str]) -> bool:
 
 def _try_read_style12_rows(rows: Sequence[Sequence[str]]) -> tuple[list[Record], str | None]:
     op_i, time_i, lon_i, lat_i = 3, 6, 14, 15
-    warn_counter: dict[str, int] = {}
     records: list[Record] = []
     op_from_col = None
-    for row_no, row in enumerate(rows, start=1):
+    for row in rows:
         if max(op_i, time_i, lon_i, lat_i) >= len(row):
-            _warn_limited(warn_counter, "行長不足", f"[WARN] 行長不足のためスキップ: 行番号{row_no}")
             continue
         dt = parse_datetime_any(row[time_i])
         lat = parse_float(row[lat_i])
         lon = parse_float(row[lon_i])
         if dt is None or lat is None or lon is None:
-            _warn_limited(warn_counter, "解析失敗", f"[WARN] 日時/緯度/経度の解析失敗でスキップ: 行番号{row_no}")
             continue
         op_v = (row[op_i] or "").strip() or None
         if op_from_col is None and op_v:
@@ -369,21 +329,17 @@ def _try_read_style12_rows(rows: Sequence[Sequence[str]]) -> tuple[list[Record],
 def _try_read_header_rows(first_row: Sequence[str], rows: Sequence[Sequence[str]]) -> tuple[list[Record], str | None]:
     lat_i, lon_i, time_i, op_i = _detect_input_columns(first_row)
     if lat_i is None or lon_i is None or time_i is None:
-        log("[ERROR] 緯度/経度/時刻列を特定できません")
         raise RuntimeError("緯度/経度/時刻列を特定できません")
 
-    warn_counter: dict[str, int] = {}
     records: list[Record] = []
     op_from_col = None
-    for row_no, row in enumerate(rows, start=2):
+    for row in rows:
         if max(lat_i, lon_i, time_i) >= len(row):
-            _warn_limited(warn_counter, "行長不足", f"[WARN] 行長不足のためスキップ: 行番号{row_no}")
             continue
         dt = parse_datetime_any(row[time_i])
         lat = parse_float(row[lat_i])
         lon = parse_float(row[lon_i])
         if dt is None or lat is None or lon is None:
-            _warn_limited(warn_counter, "解析失敗", f"[WARN] 日時/緯度/経度の解析失敗でスキップ: 行番号{row_no}")
             continue
         op_v = None
         if op_i is not None and op_i < len(row):
@@ -402,13 +358,11 @@ def _read_records(csv_path: Path) -> tuple[list[Record], str | None]:
                 rows = list(csv.reader(f))
                 if not rows:
                     return [], None
-
-                log("[INFO] 読込方式: 様式1-2固定列")
                 records, op_from_col = _try_read_style12_rows(rows)
                 if records:
+                    log("[INFO] 読込方式: 様式1-2固定列")
                     return records, op_from_col
 
-                log("[WARN] 固定列方式で有効レコード0件、ヘッダー方式にフォールバック")
                 first = rows[0]
                 if not _looks_like_header_row(first):
                     raise RuntimeError("様式1-2固定列/ヘッダー付き方式のいずれでも有効レコードを読めません")
@@ -433,38 +387,9 @@ def estimate_for_file(csv_path: Path, zone_def: Sequence[PolygonZone]) -> tuple[
     records, op_col = _read_records(csv_path)
     op_id = _resolve_op_id(records, op_col, csv_path)
     if not records:
-        log("[WARN] 有効レコード0件")
         return op_id, "判定不可", "有効レコード0件"
-
-    night = extract_night_records(records)
-    if not night:
-        log("[WARN] 夜間レコード0件")
-        return op_id, "判定不可", "夜間レコード0件"
-
-    segments = detect_stop_segments(night)
-    if not segments:
-        log("[WARN] 停留候補0件")
-        return op_id, "判定不可", "停留候補0件"
-
-    candidates: list[ZoneCandidate] = []
-    for seg in segments:
-        zone = judge_zone_from_stop(seg, night, zone_def)
-        candidates.append(
-            ZoneCandidate(
-                zone=zone,
-                stop_minutes=seg.stop_minutes,
-                rep_lat=seg.rep_lat,
-                rep_lon=seg.rep_lon,
-                basis_count=1,
-                dawn_score=_night_minute(seg.end_time),
-            )
-        )
-
-    base_zone, _best = select_best_base_zone(candidates)
-    if base_zone == "ゾーン外":
-        log("[WARN] 停留候補はあるが全てゾーン外")
-        return op_id, base_zone, "ゾーン外"
-    return op_id, base_zone, "正常判定"
+    base_zone, memo = estimate_base_zone_with_fallback(records, zone_def)
+    return op_id, base_zone, memo
 
 
 def iter_csv_files(folder: Path, recursive: bool) -> list[Path]:
@@ -489,29 +414,25 @@ def run(args: argparse.Namespace) -> int:
 
     files = iter_csv_files(input_dir, args.recursive)
     total = len(files)
+    log(f"[INFO] 開始 / 対象CSV数={total} / ゾーン数={len(zone_def)}")
     log(f"[TOTAL] total={total}")
-    log(f"[INFO] 対象CSV数: {total}")
     if total == 0:
         log("[ERROR] 対象CSVが0件です")
         return 2
 
-    if args.output:
-        out_csv = Path(args.output)
-    else:
-        out_csv = input_dir.parent / f"{input_dir.name}_拠点ゾーン.csv"
+    out_csv = Path(args.output) if args.output else input_dir.parent / f"{input_dir.name}_拠点ゾーン.csv"
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 
     out_rows: list[tuple[str, str, str]] = []
     hit_count = 0
     for i, fp in enumerate(files, 1):
-        log(f"[INFO] 現在処理中: {fp.name}")
         try:
             op_id, base_zone, reason = estimate_for_file(fp, zone_def)
-        except Exception as e:
-            log(f"[ERROR] {fp.name}: {e}")
+        except Exception:
             op_id, base_zone, reason = fp.stem, "判定不可", "読込失敗"
+            log(f"[ERROR] 読込失敗 / file={fp.name}")
         out_rows.append((op_id, base_zone, reason))
-        if reason == "正常判定" and base_zone != "判定不可":
+        if base_zone != "判定不可":
             hit_count += 1
             log(f"[HIT] op_id={op_id} zone={base_zone} hit_count={hit_count}")
         log(f"[PROGRESS] done={i} total={total} file={fp.name}")
@@ -521,7 +442,7 @@ def run(args: argparse.Namespace) -> int:
         w.writerow(["op_id", "base_zone", "判定メモ"])
         w.writerows(out_rows)
 
-    log(f"[INFO] 出力CSV: {out_csv}")
+    log(f"[INFO] 完了 / 出力CSV={out_csv}")
     return 0
 
 
