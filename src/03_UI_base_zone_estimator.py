@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import os
 import re
 import sys
@@ -9,7 +10,7 @@ from pathlib import Path
 import logging
 from html import escape
 
-from PyQt6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt, QUrl
+from PyQt6.QtCore import QPointF, QProcess, QProcessEnvironment, QTimer, Qt, QUrl
 from PyQt6.QtGui import QPainter, QPen, QColor, QPolygonF
 from PyQt6.QtWidgets import (
     QApplication,
@@ -175,28 +176,81 @@ class RadarWidget(QWidget):
 class ZoneMapWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self.zone_name = ""
-        self.points: list[tuple[float, float]] = []
+        self.main_zone_name = ""
+        self.main_polygon_points: list[tuple[float, float]] = []
+        self.all_zone_polygons: list[list[tuple[float, float]]] = []
+        self.aux_sector_polygon: list[tuple[float, float]] = []
+        self.center_point: tuple[float, float] | None = None
+        self.render_mode = "normal"
         self.message = "ゾーンカードをクリックするとここに表示"
         self.setMinimumHeight(360)
 
-    def set_zone(self, zone_name: str, points: list[tuple[float, float]], message: str = "") -> None:
-        self.zone_name = zone_name
-        self.points = points
+    def set_normal_zone(self, zone_name: str, points: list[tuple[float, float]], message: str = "") -> None:
+        self.main_zone_name = zone_name
+        self.main_polygon_points = points
+        self.all_zone_polygons = []
+        self.aux_sector_polygon = []
+        self.center_point = None
+        self.render_mode = "normal"
         self.message = message
         self.update()
+
+    def set_aux_direction_zone(
+        self,
+        zone_name: str,
+        sector_points: list[tuple[float, float]],
+        all_zone_polygons: list[list[tuple[float, float]]],
+        center_point: tuple[float, float],
+        message: str = "",
+    ) -> None:
+        self.main_zone_name = zone_name
+        self.main_polygon_points = []
+        self.all_zone_polygons = all_zone_polygons
+        self.aux_sector_polygon = sector_points
+        self.center_point = center_point
+        self.render_mode = "aux"
+        self.message = message
+        self.update()
+
+    @staticmethod
+    def _bounds(
+        polygons: list[list[tuple[float, float]]],
+        points: list[tuple[float, float]] | None = None,
+    ) -> tuple[float, float, float, float] | None:
+        all_points = [pt for poly in polygons for pt in poly] + list(points or [])
+        if not all_points:
+            return None
+        lons = [pt[0] for pt in all_points]
+        lats = [pt[1] for pt in all_points]
+        return min(lons), max(lons), min(lats), max(lats)
+
+    def _map_point(self, lon: float, lat: float, cx: float, cy: float, scale: float) -> QPointF:
+        x = self.width() / 2 + (lon - cx) * scale
+        y = self.height() / 2 - (lat - cy) * scale
+        return QPointF(x, y)
 
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.fillRect(self.rect(), QColor("#ffffff"))
-        if not self.points:
+        if self.render_mode == "normal" and not self.main_polygon_points:
             p.setPen(QPen(QColor("#999999"), 1))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.message)
             return
-        lons = [pt[0] for pt in self.points]
-        lats = [pt[1] for pt in self.points]
-        min_lon, max_lon = min(lons), max(lons)
-        min_lat, max_lat = min(lats), max(lats)
+
+        if self.render_mode == "aux" and (not self.aux_sector_polygon or not self.all_zone_polygons):
+            p.setPen(QPen(QColor("#999999"), 1))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.message)
+            return
+
+        polygons = [self.main_polygon_points] if self.render_mode == "normal" else [self.aux_sector_polygon] + self.all_zone_polygons
+        center_points = [self.center_point] if self.center_point else []
+        bounds = self._bounds(polygons, points=[pt for pt in center_points if pt])
+        if bounds is None:
+            p.setPen(QPen(QColor("#999999"), 1))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.message)
+            return
+
+        min_lon, max_lon, min_lat, max_lat = bounds
         w = max(max_lon - min_lon, 1e-9)
         h = max(max_lat - min_lat, 1e-9)
         margin = 0.1
@@ -205,24 +259,54 @@ class ZoneMapWidget(QWidget):
         scale = min(draw_w / w, draw_h / h)
         cx = (min_lon + max_lon) / 2.0
         cy = (min_lat + max_lat) / 2.0
-        poly = QPolygonF()
-        for lon, lat in self.points:
-            x = self.width() / 2 + (lon - cx) * scale
-            y = self.height() / 2 - (lat - cy) * scale
-            poly.append(__import__("PyQt6.QtCore").QtCore.QPointF(x, y))
-        p.setPen(QPen(QColor("#00a3a3"), 4))
-        p.setBrush(QColor(0, 170, 170, 80))
-        p.drawPolygon(poly)
-        if self.zone_name in AUX_ZONE_NAMES:
-            p.setPen(QPen(QColor(30, 30, 30, 130), 1))
-            p.setBrush(QColor(0, 0, 0, 30))
+
+        if self.render_mode == "normal":
+            poly = QPolygonF()
+            for lon, lat in self.main_polygon_points:
+                poly.append(self._map_point(lon, lat, cx, cy, scale))
+            p.setPen(QPen(QColor("#00a3a3"), 4))
+            p.setBrush(QColor(0, 170, 170, 80))
             p.drawPolygon(poly)
+        else:
+            for zone_poly in self.all_zone_polygons:
+                poly = QPolygonF()
+                for lon, lat in zone_poly:
+                    poly.append(self._map_point(lon, lat, cx, cy, scale))
+                p.setPen(QPen(QColor("#cc1f1f"), 2))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawPolygon(poly)
+
+            sector_poly = QPolygonF()
+            for lon, lat in self.aux_sector_polygon:
+                sector_poly.append(self._map_point(lon, lat, cx, cy, scale))
+            p.setPen(QPen(QColor("#1d4ed8"), 3))
+            p.setBrush(QColor(29, 78, 216, 90))
+            p.drawPolygon(sector_poly)
+
+            if self.center_point:
+                cp = self._map_point(self.center_point[0], self.center_point[1], cx, cy, scale)
+                p.setPen(QPen(QColor("#0f172a"), 1))
+                p.setBrush(QColor("#1d4ed8"))
+                p.drawEllipse(cp, 4, 4)
+                p.drawText(int(cp.x()) + 8, int(cp.y()) - 8, "中心")
+
+            p.setPen(QPen(QColor("#333333"), 1))
+            p.setBrush(QColor(255, 255, 255, 220))
+            p.drawRoundedRect(self.width() - 240, 10, 225, 54, 4, 4)
+            p.setPen(QPen(QColor("#cc1f1f"), 1))
+            p.drawText(self.width() - 230, 30, "赤線: 指定ゾーニング")
+            p.setPen(QPen(QColor("#1d4ed8"), 1))
+            p.drawText(self.width() - 230, 50, "青塗: 方面補助分類")
+
         p.setPen(QPen(QColor("#333333"), 1))
         font = p.font()
         font.setPointSize(16)
         font.setBold(True)
         p.setFont(font)
-        p.drawText(self.rect().adjusted(0, 8, 0, 0), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter, self.zone_name)
+        title = self.main_zone_name
+        if self.render_mode == "aux":
+            title = f"{self.main_zone_name}（補助分類エリア）"
+        p.drawText(self.rect().adjusted(0, 8, 0, 0), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter, title)
 
 
 class ZoneCard(QPushButton):
@@ -547,37 +631,80 @@ class MainWindow(QMainWindow):
         return re.sub(r"\s+", "", (name or "").strip())
 
     def _resolve_zone_points(self, zone_name: str) -> list[tuple[float, float]]:
-        if zone_name in AUX_ZONE_NAMES:
-            return self._aux_zone_shape(zone_name)
         if zone_name in self.zone_shapes:
             return self.zone_shapes[zone_name]
         alias_name = self.zone_shape_aliases.get(self._normalize_zone_key(zone_name), "")
         return self.zone_shapes.get(alias_name, []) if alias_name else []
 
-    def _aux_zone_shape(self, zone_name: str) -> list[tuple[float, float]]:
+    def is_aux_direction_zone(self, zone_name: str) -> bool:
+        return zone_name in AUX_ZONE_NAMES
+
+    def get_global_zone_bounds(self) -> tuple[float, float, float, float] | None:
         points = [pt for poly in self.zone_shapes.values() for pt in poly]
         if not points:
-            return []
+            return None
         lons = [p[0] for p in points]
         lats = [p[1] for p in points]
         min_lon, max_lon = min(lons), max(lons)
         min_lat, max_lat = min(lats), max(lats)
-        mid_lon = (min_lon + max_lon) / 2.0
-        mid_lat = (min_lat + max_lat) / 2.0
-        if zone_name == "北方面":
-            return [(min_lon, mid_lat), (max_lon, mid_lat), (max_lon, max_lat), (min_lon, max_lat)]
-        if zone_name == "南方面":
-            return [(min_lon, min_lat), (max_lon, min_lat), (max_lon, mid_lat), (min_lon, mid_lat)]
-        if zone_name == "東方面":
-            return [(mid_lon, min_lat), (max_lon, min_lat), (max_lon, max_lat), (mid_lon, max_lat)]
-        return [(min_lon, min_lat), (mid_lon, min_lat), (mid_lon, max_lat), (min_lon, max_lat)]
+        return min_lon, max_lon, min_lat, max_lat
+
+    @staticmethod
+    def build_sector_polygon(
+        center_lon: float,
+        center_lat: float,
+        radius: float,
+        start_deg: float,
+        end_deg: float,
+        step_deg: float = 5.0,
+    ) -> list[tuple[float, float]]:
+        pts = [(center_lon, center_lat)]
+        s = float(start_deg)
+        e = float(end_deg)
+        if e < s:
+            e += 360.0
+        ang = s
+        while ang <= e + 1e-9:
+            rad = math.radians(ang)
+            lon = center_lon + radius * math.cos(rad)
+            lat = center_lat + radius * math.sin(rad)
+            pts.append((lon, lat))
+            ang += step_deg
+        rad = math.radians(e)
+        pts.append((center_lon + radius * math.cos(rad), center_lat + radius * math.sin(rad)))
+        pts.append((center_lon, center_lat))
+        return pts
+
+    def build_aux_sector(self, zone_name: str) -> tuple[list[tuple[float, float]], tuple[float, float]]:
+        bounds = self.get_global_zone_bounds()
+        if not bounds:
+            return [], (0.0, 0.0)
+        min_lon, max_lon, min_lat, max_lat = bounds
+        center_lon = (min_lon + max_lon) / 2.0
+        center_lat = (min_lat + max_lat) / 2.0
+        radius = max(max_lon - min_lon, max_lat - min_lat) * 0.9
+        angle_map = {
+            "東方面": (-45.0, 45.0),
+            "北方面": (45.0, 135.0),
+            "西方面": (135.0, 225.0),
+            "南方面": (-135.0, -45.0),
+        }
+        if zone_name not in angle_map:
+            return [], (center_lon, center_lat)
+        start_deg, end_deg = angle_map[zone_name]
+        sector = self.build_sector_polygon(center_lon, center_lat, radius, start_deg, end_deg, step_deg=5.0)
+        return sector, (center_lon, center_lat)
 
     def render_zone_on_map(self, zone_name: str) -> None:
+        if self.is_aux_direction_zone(zone_name):
+            self.render_aux_direction_map(zone_name)
+            return
+
         points = self._resolve_zone_points(zone_name)
         self._debug_logger.debug("[DEBUG] polygon points: %d", len(points))
         if len(points) < 3:
             msg = "ゾーン定義が見つかりません"
-            self.map_widget.set_zone(zone_name, [], msg)
+            self.map_widget.set_normal_zone(zone_name, [], msg)
             self.map_stack.setCurrentWidget(self.map_widget)
             self.lbl_map_mode.setText("地図表示: SIMPLE")
             self.map_widget.update()
@@ -590,16 +717,38 @@ class MainWindow(QMainWindow):
             valid_points.append((float(lon), float(lat)))
 
         if len(valid_points) < 3:
-            self.map_widget.set_zone(zone_name, [], "ゾーンポリゴンを表示できません")
+            self.map_widget.set_normal_zone(zone_name, [], "ゾーンポリゴンを表示できません")
             self.map_stack.setCurrentWidget(self.map_widget)
             self.lbl_map_mode.setText("地図表示: SIMPLE")
             self.map_widget.update()
             return
 
-        self.map_widget.set_zone(zone_name, valid_points)
+        self.map_widget.set_normal_zone(zone_name, valid_points)
         self.map_widget.update()
         if WEBENGINE_AVAILABLE and self.web_map is not None:
             self._render_web_map(zone_name, valid_points)
+        else:
+            self.map_stack.setCurrentWidget(self.map_widget)
+            self.lbl_map_mode.setText("地図表示: SIMPLE")
+
+    def render_aux_direction_map(self, zone_name: str) -> None:
+        all_zone_polygons = [poly for poly in self.zone_shapes.values() if len(poly) >= 3]
+        if not all_zone_polygons:
+            self.map_widget.set_aux_direction_zone(zone_name, [], [], (0.0, 0.0), "ゾーンポリゴンを表示できません")
+            self.map_stack.setCurrentWidget(self.map_widget)
+            self.lbl_map_mode.setText("地図表示: SIMPLE")
+            return
+
+        sector_points, center_point = self.build_aux_sector(zone_name)
+        if len(sector_points) < 3:
+            self.map_widget.set_aux_direction_zone(zone_name, [], all_zone_polygons, center_point, "方面エリアを表示できません")
+            self.map_stack.setCurrentWidget(self.map_widget)
+            self.lbl_map_mode.setText("地図表示: SIMPLE")
+            return
+
+        self.map_widget.set_aux_direction_zone(zone_name, sector_points, all_zone_polygons, center_point)
+        if WEBENGINE_AVAILABLE and self.web_map is not None:
+            self._render_web_map_aux(zone_name, sector_points, all_zone_polygons, center_point)
         else:
             self.map_stack.setCurrentWidget(self.map_widget)
             self.lbl_map_mode.setText("地図表示: SIMPLE")
@@ -661,6 +810,79 @@ map.fitBounds(poly.getBounds(), {{ padding: [20, 20] }});
             self.lbl_map_mode.setText("地図表示: SIMPLE")
             self.append_uiwarn("ベースマップ取得に失敗したため簡易地図表示に切替")
 
+    def _render_web_map_aux(
+        self,
+        zone_name: str,
+        sector_points: list[tuple[float, float]],
+        all_zone_polygons: list[list[tuple[float, float]]],
+        center_point: tuple[float, float],
+    ) -> None:
+        if self.web_map is None or not sector_points or not all_zone_polygons:
+            self.map_stack.setCurrentWidget(self.map_widget)
+            self.lbl_map_mode.setText("地図表示: SIMPLE")
+            return
+        try:
+            safe_zone_name = escape(f"{zone_name}（補助分類エリア）")
+            zone_coords = []
+            for zone_poly in all_zone_polygons:
+                coord = ", ".join(f"[{lat}, {lon}]" for lon, lat in zone_poly)
+                zone_coords.append(f"[{coord}]")
+            all_zone_js = ",\n".join(zone_coords)
+            sector_js = ",\n".join(f"[{lat}, {lon}]" for lon, lat in sector_points)
+            html = f"""
+<!doctype html>
+<html>
+<head>
+<meta charset=\"utf-8\"/>
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/>
+<link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\"/>
+<script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script>
+<style>
+html, body, #map {{ height:100%; margin:0; background:#fff; }}
+.ttl {{
+  position:absolute; z-index:1000; left:8px; top:8px;
+  background:rgba(255,255,255,0.92); padding:6px 10px; border-radius:6px; font-weight:700;
+}}
+.lg {{
+  position:absolute; z-index:1000; right:8px; top:8px;
+  background:rgba(255,255,255,0.92); padding:6px 10px; border-radius:6px; font-size:12px;
+}}
+</style>
+</head>
+<body>
+<div class=\"ttl\">{safe_zone_name}</div>
+<div class=\"lg\">赤線: 指定ゾーニング<br/>青塗: 方面補助分類</div>
+<div id=\"map\"></div>
+<script>
+const map = L.map('map').setView([{center_point[1]}, {center_point[0]}], 12);
+L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap'
+}}).addTo(map);
+
+const zones = [{all_zone_js}];
+const group = L.featureGroup().addTo(map);
+for (const z of zones) {{
+  L.polygon(z, {{ color: '#cc1f1f', weight: 2, fillOpacity: 0.02 }}).addTo(group);
+}}
+
+const sector = [{sector_js}];
+L.polygon(sector, {{ color: '#1d4ed8', weight: 3, fillColor: '#1d4ed8', fillOpacity: 0.35 }}).addTo(group);
+L.circleMarker([{center_point[1]}, {center_point[0]}], {{ color:'#1d4ed8', fillColor:'#1d4ed8', radius:5 }}).addTo(group).bindTooltip('中心', {{permanent:true, direction:'right'}});
+
+map.fitBounds(group.getBounds(), {{ padding: [20, 20] }});
+</script>
+</body>
+</html>
+"""
+            self.web_map.setHtml(html, QUrl("https://unpkg.com/"))
+            self.map_stack.setCurrentWidget(self.web_map)
+            self.lbl_map_mode.setText("地図表示: WEB")
+        except Exception:
+            self.map_stack.setCurrentWidget(self.map_widget)
+            self.lbl_map_mode.setText("地図表示: SIMPLE")
+            self.append_uiwarn("ベースマップ取得に失敗したため簡易地図表示に切替")
+
     def increment_zone_hit_count(self, zone_name: str) -> None:
         resolved_name = zone_name
         if resolved_name not in self.zone_cards:
@@ -690,7 +912,7 @@ map.fitBounds(poly.getBounds(), {{ padding: [20, 20] }});
         if self.zone_shapes:
             self.on_zone_card_clicked(next(iter(self.zone_shapes.keys())))
         else:
-            self.map_widget.set_zone("", [], "ゾーンポリゴンを表示できません")
+            self.map_widget.set_normal_zone("", [], "ゾーンポリゴンを表示できません")
         self._update_run_state()
 
     def _refresh_progress(self) -> None:
