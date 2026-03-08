@@ -21,7 +21,6 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
-    QFormLayout,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -164,7 +163,7 @@ class RealtimeSlotChart(QWidget):
         self.slot_counts = [0] * 48
         self._dirty = False
         self._last_paint_t = 0.0
-        self.setMinimumHeight(170)
+        self.setMinimumHeight(130)
 
     def set_slot(self, i: int, count: int):
         if 0 <= i < 48 and self.slot_counts[i] != count:
@@ -184,7 +183,7 @@ class RealtimeSlotChart(QWidget):
         p = QPainter(self)
         r = self.rect()
         p.fillRect(r, QColor("#09120f"))
-        chart = r.adjusted(54, 18, -12, -64)
+        chart = r.adjusted(46, 16, -10, -58)
         if chart.width() <= 0 or chart.height() <= 0:
             return
 
@@ -218,7 +217,7 @@ class RealtimeSlotChart(QWidget):
             p.fillRect(x, y, bar_w, h, col)
 
         axis_font = QFont(p.font())
-        axis_font.setPointSize(max(8, axis_font.pointSize() - 1))
+        axis_font.setPointSize(max(7, axis_font.pointSize() - 2))
         p.setFont(axis_font)
         axis_labels = [
             (0, "0:00"),
@@ -244,15 +243,15 @@ class RealtimeSlotChart(QWidget):
         p.drawText(r.adjusted(6, 1, -8, -4), Qt.AlignmentFlag.AlignLeft, "縦軸: 時間帯別レコード数（日平均）")
         p.drawText(r.adjusted(10, r.height() - 24, -10, -4), Qt.AlignmentFlag.AlignCenter, "時間帯（30分スロット）")
 
-        info_rect = r.adjusted(int(r.width() * 0.42), 4, -8, -6)
-        am_text = "午前ピーク（日平均レコード数）：--:-- / 0"
+        info_rect = r.adjusted(int(r.width() * 0.48), 4, -8, -6)
+        am_text = "午前ピーク: --:-- / 0"
         if am_peak_i is not None:
             hh, mm = divmod(am_peak_i * 30, 60)
-            am_text = f"午前ピーク（日平均レコード数）：{hh:02d}:{mm:02d}-{hh:02d}:{mm + 29:02d} / {self.slot_counts[am_peak_i]:,}"
-        pm_text = "午後ピーク（日平均レコード数）：--:-- / 0"
+            am_text = f"午前ピーク: {hh:02d}:{mm:02d}-{hh:02d}:{mm + 29:02d} / {self.slot_counts[am_peak_i]:,}"
+        pm_text = "午後ピーク: --:-- / 0"
         if pm_peak_i is not None:
             hh, mm = divmod(pm_peak_i * 30, 60)
-            pm_text = f"午後ピーク（日平均レコード数）：{hh:02d}:{mm:02d}-{hh:02d}:{mm + 29:02d} / {self.slot_counts[pm_peak_i]:,}"
+            pm_text = f"午後ピーク: {hh:02d}:{mm:02d}-{hh:02d}:{mm + 29:02d} / {self.slot_counts[pm_peak_i]:,}"
         p.setPen(QPen(QColor("#b8ffd6")))
         p.drawText(info_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight, f"{am_text}\n{pm_text}")
 
@@ -384,7 +383,6 @@ class MainWindow(QMainWindow):
         self.logo = None
         self.setWindowTitle(APP_TITLE)
         self.resize(1700, 980)
-        self.showMaximized()
 
         self.proc_count: QProcess | None = None
         self.proc_od: QProcess | None = None
@@ -425,10 +423,18 @@ class MainWindow(QMainWindow):
 
         self.recommended_slot_index = 0
         self.recommended_slot_avg = 0
+        self.app_state = "IDLE"
 
         self._build_ui()
         self.timer = QTimer(self); self.timer.timeout.connect(self._tick); self.timer.start(1000)
-        self.anim_timer = QTimer(self); self.anim_timer.timeout.connect(self.sweep.tick); self.anim_timer.start(60)
+        self.anim_timer = QTimer(self); self.anim_timer.timeout.connect(self.sweep.tick)
+        QTimer.singleShot(0, self._post_init_layout)
+
+    def _post_init_layout(self):
+        self.showMaximized()
+        self._adjust_layout_for_window()
+        self.updateGeometry()
+        self.repaint()
 
     def _slot_labels(self) -> list[str]:
         labels = []
@@ -475,34 +481,42 @@ class MainWindow(QMainWindow):
         s2.addWidget(self.scr, 1)
         left.addWidget(StepBox("STEP 2：対象日の選択（カレンダー）", s2w), 4)
 
-        step3_frame = QFrame(); step3_frame.setObjectName("stepBox"); step3_frame.setMaximumHeight(60)
+        step3_frame = QFrame(); step3_frame.setObjectName("stepBox"); step3_frame.setMaximumHeight(64)
         step3_layout = QHBoxLayout(step3_frame); step3_layout.setContentsMargins(10, 8, 10, 8); step3_layout.setSpacing(8)
-        step3_title = QLabel("STEP 3：実行"); step3_title.setObjectName("stepTitle")
+        step3_title = QLabel("STEP 3：時間帯存在トリップ集計"); step3_title.setObjectName("stepTitle")
         self.btn_run = QPushButton("集計スタート"); self.btn_run.clicked.connect(self.start_run)
         self.btn_open_csv = QPushButton("出力CSVを開く"); self.btn_open_csv.clicked.connect(self.open_output_csv); self.btn_open_csv.setEnabled(False)
         self.btn_open_folder = QPushButton("保存先フォルダを開く（集計）"); self.btn_open_folder.clicked.connect(self.open_output_folder); self.btn_open_folder.setEnabled(False)
         step3_layout.addWidget(step3_title); step3_layout.addStretch(1); step3_layout.addWidget(self.btn_run); step3_layout.addWidget(self.btn_open_csv); step3_layout.addWidget(self.btn_open_folder)
         left.addWidget(step3_frame)
 
-        self.chart = RealtimeSlotChart(); left.addWidget(self.chart, 2)
+        s5w = QWidget(); s5 = QVBoxLayout(s5w); s5.setContentsMargins(0, 0, 0, 0); s5.setSpacing(6)
 
-        s5w = QWidget(); s5 = QVBoxLayout(s5w); s5.setContentsMargins(0, 0, 0, 0)
-        formw = QWidget(); form = QFormLayout(formw)
+        row1 = QHBoxLayout(); row1.setSpacing(6)
         self.cmb_slot = QComboBox(); self.cmb_slot.addItems(self._slot_labels()); self.cmb_slot.setCurrentIndex(0)
         self.lbl_recommended = QLabel("推奨30分帯: 00:00-00:29（日平均 0）")
-        zrow = QHBoxLayout(); self.btn_zone = QPushButton("ゾーニングCSV選択"); self.btn_zone.clicked.connect(self.pick_zoning); self.lbl_zone = QLabel("未選択"); zrow.addWidget(self.btn_zone); zrow.addWidget(self.lbl_zone, 1)
-        zw = QWidget(); zw.setLayout(zrow)
-        crow = QHBoxLayout(); self.lbl_center_name = QLabel(self.center_name); self.lbl_center_lon = QLabel(f"lon: {self.center_lon:.6f}"); self.lbl_center_lat = QLabel(f"lat: {self.center_lat:.6f}")
+        lbl_slot = QLabel("30分帯")
+        lbl_slot.setWordWrap(False)
+        self.lbl_recommended.setWordWrap(False)
+        row1.addWidget(lbl_slot)
+        row1.addWidget(self.cmb_slot, 1)
+        row1.addWidget(self.lbl_recommended, 2)
+        s5.addLayout(row1)
+
+        row2 = QHBoxLayout(); row2.setSpacing(6)
+        self.btn_zone = QPushButton("ゾーニングCSV選択"); self.btn_zone.clicked.connect(self.pick_zoning)
+        self.lbl_zone = QLabel("未選択"); self.lbl_zone.setMinimumWidth(220); self.lbl_zone.setWordWrap(False)
+        self.lbl_center_name = QLabel(self.center_name); self.lbl_center_name.setMinimumWidth(190); self.lbl_center_name.setWordWrap(False)
         self.btn_pick_center = QPushButton("地図で選択"); self.btn_pick_center.clicked.connect(self.pick_center_map)
         self.btn_center_default = QPushButton("既定値に戻す"); self.btn_center_default.clicked.connect(self.reset_center)
-        crow.addWidget(self.lbl_center_name); crow.addWidget(self.lbl_center_lon); crow.addWidget(self.lbl_center_lat); crow.addStretch(1); crow.addWidget(self.btn_pick_center); crow.addWidget(self.btn_center_default)
-        cw2 = QWidget(); cw2.setLayout(crow)
-        form.addRow("30分帯", self.cmb_slot); form.addRow("推奨", self.lbl_recommended); form.addRow("ゾーニング", zw); form.addRow("方向判定中心点", cw2)
-        s5.addWidget(formw)
+        row2.addWidget(self.btn_zone)
+        row2.addWidget(self.lbl_zone, 1)
+        row2.addWidget(self.lbl_center_name)
+        row2.addWidget(self.btn_pick_center)
+        row2.addWidget(self.btn_center_default)
+        s5.addLayout(row2)
 
-        self.lbl_od_conditions = QLabel("対象CSV数: 0\n選択中日数: 0\n指定30分帯: 00:00-00:29\nゾーン数: 0")
-        s5.addWidget(self.lbl_od_conditions)
-        bline = QHBoxLayout()
+        bline = QHBoxLayout(); bline.setSpacing(6)
         self.btn_run_od = QPushButton("OD抽出スタート"); self.btn_run_od.clicked.connect(self.start_od_run)
         self.btn_open_matrix = QPushButton("出力CSVを開く"); self.btn_open_matrix.clicked.connect(lambda: self._open(self.last_output_matrix)); self.btn_open_matrix.setEnabled(False)
         self.btn_open_detail = QPushButton("明細CSVを開く"); self.btn_open_detail.clicked.connect(lambda: self._open(self.last_output_detail)); self.btn_open_detail.setEnabled(False)
@@ -510,10 +524,18 @@ class MainWindow(QMainWindow):
         bline.addWidget(self.btn_run_od); bline.addWidget(self.btn_open_matrix); bline.addWidget(self.btn_open_detail); bline.addWidget(self.btn_open_od_folder); bline.addStretch(1)
         s5.addLayout(bline)
         self.chart_od = RealtimeODChart(); s5.addWidget(self.chart_od)
-        left.addWidget(StepBox("STEP 5：ピーク30分OD抽出", s5w), 3)
+        step4_box = StepBox("STEP 4：ピーク30分OD抽出", s5w)
+        step4_box.setMinimumHeight(155)
+        left.addWidget(step4_box, 1)
 
-        self.log = QPlainTextEdit(); self.log.setReadOnly(True); self.log.setMaximumBlockCount(3000); self.log.setMinimumHeight(80)
+        self.log = QPlainTextEdit(); self.log.setReadOnly(True); self.log.setMaximumBlockCount(3000); self.log.setMinimumHeight(70)
         left.addWidget(self.log, 1)
+
+        left.setStretch(0, 0)
+        left.setStretch(1, 8)
+        left.setStretch(2, 0)
+        left.setStretch(3, 0)
+        left.setStretch(4, 1)
 
         right = QVBoxLayout(); body.addLayout(right, 2)
         panel = QFrame(); pv = QVBoxLayout(panel)
@@ -522,9 +544,12 @@ class MainWindow(QMainWindow):
         self.lbl_elapsed = QLabel("経過 00:00:00"); self.lbl_elapsed.setFont(QFont("Consolas", 16, QFont.Weight.Bold))
         self.lbl_eta = QLabel("残り --:--:--"); self.lbl_eta.setFont(QFont("Consolas", 16, QFont.Weight.Bold))
         self.lbl_telemetry = QLabel("CYBER TELEMETRY"); self.lbl_telemetry.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.lbl_telemetry.setWordWrap(True)
+        self.chart = RealtimeSlotChart()
         self.sweep = SweepWidget()
-        pv.addWidget(self.lbl_status); pv.addWidget(self.lbl_progress); pv.addWidget(self.lbl_elapsed); pv.addWidget(self.lbl_eta); pv.addWidget(self.lbl_telemetry); pv.addWidget(self.sweep, 1)
+        pv.addWidget(self.lbl_status); pv.addWidget(self.lbl_progress); pv.addWidget(self.lbl_elapsed); pv.addWidget(self.lbl_eta); pv.addWidget(self.lbl_telemetry); pv.addWidget(self.chart, 1); pv.addWidget(self.sweep, 1)
         right.addWidget(panel, 1)
+        self._update_center_labels()
 
         logo_path = Path(__file__).resolve().parent / "assets" / "logos" / UI_LOGO_FILENAME
         if logo_path.exists():
@@ -558,6 +583,14 @@ class MainWindow(QMainWindow):
         super().resizeEvent(e)
         if self.logo is not None:
             self.logo.move(self.width() - self.logo.width() - 18, self.height() - self.logo.height() - 18)
+        self._adjust_layout_for_window()
+
+    def _adjust_layout_for_window(self):
+        h = max(700, self.height())
+        self.scr.setMinimumHeight(max(280, int(h * 0.34)))
+        self.chart.setMinimumHeight(max(120, int(h * 0.15)))
+        self.sweep.setMinimumHeight(max(130, int(h * 0.16)))
+        self.log.setMinimumHeight(max(60, int(h * 0.09)))
 
     def now_text(self):
         return datetime.now().strftime("%H:%M:%S")
@@ -577,17 +610,18 @@ class MainWindow(QMainWindow):
             return
         self.input_folder = Path(d)
         self.lbl_folder.setText(str(self.input_folder))
-        self.refresh_csv_and_dates(confirm=False)
+        self.refresh_csv_and_dates(confirm=True)
 
     def on_recursive_changed(self):
         if self.input_folder:
-            self.refresh_csv_and_dates(confirm=False)
+            self.refresh_csv_and_dates(confirm=True)
 
     def _scan_dates(self, files: list[Path], progress: QProgressDialog | None = None) -> tuple[list[date], list[str]]:
         found_dates: set[date] = set(); mesh_set: set[str] = set()
         dt_re = re.compile(r"(\d{4})[-/]?(\d{2})[-/]?(\d{2})")
         for i, fpath in enumerate(files, 1):
             if progress:
+                progress.setLabelText(f"CSVを読み込み中... {i:,} / {len(files):,}")
                 progress.setValue(i)
                 QApplication.processEvents()
             for enc in ("utf-8-sig", "utf-8", "cp932"):
@@ -618,13 +652,30 @@ class MainWindow(QMainWindow):
     def refresh_csv_and_dates(self, confirm: bool = True):
         self.csv_files = self._list_csv(); self.total_files = len(self.csv_files)
         if self.total_files == 0:
-            self.available_dates = []; self.available_meshes = []; self.selected_dates = set(); self._rebuild_calendar(); self._update_step5_labels(); return
-        pr = QProgressDialog("対象CSVをスキャン中...", "キャンセル", 0, self.total_files, self)
-        pr.setWindowModality(Qt.WindowModality.WindowModal); pr.show()
+            self.available_dates = []; self.available_meshes = []; self.selected_dates = set(); self._rebuild_calendar(); return
+        if confirm:
+            res = QMessageBox.question(self, "確認", f"CSV {self.total_files:,} 件を読み込みます。続行しますか？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if res != QMessageBox.StandardButton.Yes:
+                return
+        self._load_dates_with_progress()
+
+    def _load_dates_with_progress(self):
+        self._set_app_state("LOADING")
+        pr = QProgressDialog("CSVを読み込み中... 0 / 0", "", 0, self.total_files, self)
+        pr.setWindowTitle("日付読込み中")
+        pr.setCancelButton(None)
+        pr.setWindowModality(Qt.WindowModality.WindowModal)
+        pr.show()
+        QApplication.processEvents()
         ds, meshes = self._scan_dates(self.csv_files, pr)
         pr.close()
-        self.available_dates = ds; self.available_meshes = meshes; self.selected_dates = set(ds)
-        self._rebuild_calendar(); self._update_step5_labels()
+        self.available_dates = ds
+        self.available_meshes = meshes
+        self.selected_dates = set(self.available_dates)
+        self._rebuild_calendar()
+        self.scr.ensureVisible(0, 0)
+        self.calendar_container.adjustSize()
+        self._set_app_state("IDLE")
 
     def _rebuild_calendar(self):
         while self.calendar_months_layout.count():
@@ -632,6 +683,7 @@ class MainWindow(QMainWindow):
             if it.widget():
                 it.widget().deleteLater()
         self.day_cells.clear()
+        self.calendar_months_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         if not self.available_dates:
             self.calendar_months_layout.addWidget(QLabel("日付データなし"), 0, 0); self.lbl_date_stats.setText("選択中: 0日 / 全0日"); return
         by_month: dict[tuple[int, int], list[date]] = defaultdict(list)
@@ -639,17 +691,20 @@ class MainWindow(QMainWindow):
         cols = 3
         for i, ym in enumerate(sorted(by_month.keys())):
             y, m = ym
-            box = QFrame(); lv = QVBoxLayout(box)
+            box = QFrame(); box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed); lv = QVBoxLayout(box); lv.setContentsMargins(6, 6, 6, 6); lv.setSpacing(4)
             lv.addWidget(QLabel(f"{y}年{m}月"))
-            grid = QGridLayout(); lv.addLayout(grid)
+            grid = QGridLayout(); grid.setContentsMargins(0, 0, 0, 0); grid.setHorizontalSpacing(3); grid.setVerticalSpacing(3); lv.addLayout(grid)
             for c, wd in enumerate(["月", "火", "水", "木", "金", "土", "日"]):
                 h = QLabel(wd); h.setAlignment(Qt.AlignmentFlag.AlignCenter); grid.addWidget(h, 0, c)
             row = 1; col = date(y, m, 1).weekday()
             for d in sorted(by_month[ym]):
                 b = QPushButton(str(d.day)); b.setCheckable(True); b.setChecked(True); b.clicked.connect(lambda _=False, dd=d: self.toggle_day(dd))
+                b.setMinimumHeight(24)
                 grid.addWidget(b, row, col); self.day_cells[d] = b; col += 1
                 if col >= 7: col = 0; row += 1
             self.calendar_months_layout.addWidget(box, i // cols, i % cols)
+        self.calendar_months_wrap.adjustSize()
+        self.calendar_container.adjustSize()
         self._update_day_styles()
 
     def _update_day_styles(self):
@@ -657,7 +712,6 @@ class MainWindow(QMainWindow):
             on = d in self.selected_dates; b.setChecked(on)
             b.setStyleSheet("background:#00aa66;border:1px solid #76ff8e;border-radius:7px;" if on else "background:#1a2320;border:1px solid #42544d;border-radius:7px;")
         self.lbl_date_stats.setText(f"選択中: {len(self.selected_dates)}日 / 全{len(self.available_dates)}日")
-        self._update_step5_labels()
 
     def toggle_day(self, d: date):
         if d in self.selected_dates: self.selected_dates.remove(d)
@@ -698,9 +752,17 @@ class MainWindow(QMainWindow):
             parent / f"{base}_43_peak30min_od_summary.csv",
         )
 
-    def _set_running_flags(self):
-        running = self.is_count_running or self.is_od_running
-        self.sweep.set_running(running)
+    def _set_radar_active(self, active: bool):
+        self.sweep.set_running(active)
+        if active:
+            if not self.anim_timer.isActive():
+                self.anim_timer.start(60)
+        else:
+            self.anim_timer.stop()
+
+    def _set_app_state(self, state: str):
+        self.app_state = state
+        self._set_radar_active(state in {"LOADING", "RUNNING", "OD_RUNNING"})
 
     def _set_inputs_enabled(self, enabled: bool):
         widgets = [self.btn_pick, self.chk_recursive, self.btn_run, self.btn_run_od, self.btn_zone, self.cmb_slot, self.btn_pick_center, self.btn_center_default, self.btn_all]
@@ -729,7 +791,7 @@ class MainWindow(QMainWindow):
         self.proc_count.finished.connect(self._on_count_finished)
 
         self.last_output_csv = out; self.done_files_count = 0; self.error_count = 0; self.slot_counts = [0] * 48; self.chart.clear()
-        self.count_started_at = time.time(); self.is_count_running = True; self.count_state_text = "RUNNING"; self._set_running_flags(); self._set_inputs_enabled(False)
+        self.count_started_at = time.time(); self.is_count_running = True; self.count_state_text = "RUNNING"; self._set_app_state("RUNNING"); self._set_inputs_enabled(False)
         self.append_log("[COUNT] 集計開始")
         self.proc_count.start()
 
@@ -770,7 +832,7 @@ class MainWindow(QMainWindow):
 
     def _on_count_finished(self, code: int, _status):
         ok = code == 0
-        self.is_count_running = False; self.count_state_text = "COMPLETED" if ok else "ERROR"; self._set_running_flags(); self._set_inputs_enabled(True)
+        self.is_count_running = False; self.count_state_text = "COMPLETED" if ok else "ERROR"; self._set_app_state("COMPLETED" if ok else "ERROR"); self._set_inputs_enabled(True)
         self.btn_open_csv.setEnabled(ok and self.last_output_csv and self.last_output_csv.exists()); self.btn_open_folder.setEnabled(ok and self.last_output_csv is not None)
         if ok:
             self._select_recommended_slot()
@@ -782,7 +844,6 @@ class MainWindow(QMainWindow):
         if not p: return
         self.zoning_file = Path(p); self.lbl_zone.setText(self.zoning_file.name)
         self.zone_count = self._count_zones(self.zoning_file)
-        self._update_step5_labels()
 
     def _count_zones(self, path: Path) -> int:
         for enc in ("utf-8-sig", "utf-8", "cp932"):
@@ -799,16 +860,14 @@ class MainWindow(QMainWindow):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.center_lon = dlg.selected_lon; self.center_lat = dlg.selected_lat
             self.center_name = "地図選択中心点"
-            self._update_center_labels(); self._update_step5_labels()
+            self._update_center_labels()
 
     def reset_center(self):
         self.center_lon = DEFAULT_CENTER_LON; self.center_lat = DEFAULT_CENTER_LAT; self.center_name = DEFAULT_CENTER_NAME
-        self._update_center_labels(); self._update_step5_labels()
+        self._update_center_labels()
 
     def _update_center_labels(self):
-        self.lbl_center_name.setText(self.center_name)
-        self.lbl_center_lon.setText(f"lon: {self.center_lon:.6f}")
-        self.lbl_center_lat.setText(f"lat: {self.center_lat:.6f}")
+        self.lbl_center_name.setText(f"{self.center_name} ({self.center_lon:.6f}, {self.center_lat:.6f})")
 
     def _validate_od(self) -> bool:
         if self.is_count_running:
@@ -849,7 +908,7 @@ class MainWindow(QMainWindow):
         self.last_output_matrix, self.last_output_detail, self.last_output_summary = out_m, out_d, out_s
         self.done_files_od = 0; self.od_error_count = 0; self.same_zone_ratio = 0.0; self.same_zone_count = 0; self.od_total_trips = 0
         self.dir_counts = {"EAST": 0, "WEST": 0, "NORTH": 0, "SOUTH": 0}; self.od_counts = {}; self.chart_od.clear()
-        self.od_started_at = time.time(); self.is_od_running = True; self.od_state_text = "RUNNING"; self._set_running_flags(); self._set_inputs_enabled(False)
+        self.od_started_at = time.time(); self.is_od_running = True; self.od_state_text = "RUNNING"; self._set_app_state("OD_RUNNING"); self._set_inputs_enabled(False)
         self.append_log(f"[OD] 指定30分帯: {self.cmb_slot.currentText()}")
         self.proc_od.start()
 
@@ -893,7 +952,7 @@ class MainWindow(QMainWindow):
 
     def _on_od_finished(self, code: int, _status):
         ok = code == 0
-        self.is_od_running = False; self.od_state_text = "DONE" if ok else "ERROR"; self._set_running_flags(); self._set_inputs_enabled(True)
+        self.is_od_running = False; self.od_state_text = "COMPLETED" if ok else "ERROR"; self._set_app_state("COMPLETED" if ok else "ERROR"); self._set_inputs_enabled(True)
         self.btn_open_matrix.setEnabled(ok and self.last_output_matrix and self.last_output_matrix.exists())
         self.btn_open_detail.setEnabled(ok and self.last_output_detail and self.last_output_detail.exists())
         self.btn_open_od_folder.setEnabled(ok and self.last_output_matrix is not None)
@@ -915,37 +974,20 @@ class MainWindow(QMainWindow):
         if rate <= 0: return "--:--:--"
         return self._fmt_hms((total - done) / rate)
 
-    def _update_step5_labels(self):
-        self.lbl_od_conditions.setText(
-            f"対象CSV数: {self.total_files:,}\n"
-            f"選択中日数: {len(self.selected_dates):,}\n"
-            f"指定30分帯: {self.cmb_slot.currentText()}\n"
-            f"ゾーン数: {self.zone_count:,}\n"
-            f"中心点名: {self.center_name}\n"
-            f"中心点 lon/lat: {self.center_lon:.6f}, {self.center_lat:.6f}\n"
-            f"総抽出トリップ数: {self.od_total_trips:,}\n"
-            f"同一ゾーンOD数: {self.same_zone_count:,}\n"
-            f"同一ゾーンOD比率: {self.same_zone_ratio:.1f}%\n"
-            f"東方面件数: {self.dir_counts['EAST']:,} / 西方面件数: {self.dir_counts['WEST']:,} / 北方面件数: {self.dir_counts['NORTH']:,} / 南方面件数: {self.dir_counts['SOUTH']:,}\n"
-            f"エラー件数: {self.od_error_count:,} / 進捗ファイル数: {self.done_files_od:,}/{self.total_files:,}\n"
-            f"matrix: {(self.last_output_matrix.name if self.last_output_matrix else '-')}\n"
-            f"detail: {(self.last_output_detail.name if self.last_output_detail else '-')}\n"
-            f"summary: {(self.last_output_summary.name if self.last_output_summary else '-')}"
-        )
-
     def _tick(self):
         active_elapsed = 0.0
         if self.is_count_running: active_elapsed = time.time() - self.count_started_at
         elif self.is_od_running: active_elapsed = time.time() - self.od_started_at
         self.lbl_elapsed.setText(f"経過 {self._fmt_hms(active_elapsed)}")
         eta = self._eta_text(self.done_files_count, self.total_files, self.count_started_at, self.is_count_running) if self.is_count_running else self._eta_text(self.done_files_od, self.total_files, self.od_started_at, self.is_od_running)
+        if not self.is_count_running and not self.is_od_running and self.count_state_text == "IDLE" and self.od_state_text == "IDLE":
+            eta = "--:--:--"
         self.lbl_eta.setText(f"残り {eta}")
         count_pct = (self.done_files_count / self.total_files * 100) if self.total_files else 0
         od_pct = (self.done_files_od / self.total_files * 100) if self.total_files else 0
         self.lbl_progress.setText(f"集計進捗: {self.done_files_count:,}/{self.total_files:,}（{count_pct:.1f}%） / OD進捗: {self.done_files_od:,}/{self.total_files:,}（{od_pct:.1f}%）")
         self.lbl_status.setText(f"集計状態: {self.count_state_text} / OD状態: {self.od_state_text}")
         meshes_text = ", ".join(self.available_meshes) if self.available_meshes else "-"
-        self._update_step5_labels()
         self.lbl_telemetry.setText(
             f"CYBER TELEMETRY\n"
             f"対象CSV数: {self.total_files:,}\n"
