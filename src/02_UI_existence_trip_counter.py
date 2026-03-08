@@ -617,37 +617,36 @@ class MainWindow(QMainWindow):
             self.refresh_csv_and_dates(confirm=True)
 
     def _scan_dates(self, files: list[Path], progress: QProgressDialog | None = None) -> tuple[list[date], list[str]]:
-        found_dates: set[date] = set(); mesh_set: set[str] = set()
-        dt_re = re.compile(r"(\d{4})[-/]?(\d{2})[-/]?(\d{2})")
-        for i, fpath in enumerate(files, 1):
-            if progress:
-                progress.setLabelText(f"CSVを読み込み中... {i:,} / {len(files):,}")
-                progress.setValue(i)
-                QApplication.processEvents()
-            for enc in ("utf-8-sig", "utf-8", "cp932"):
-                try:
-                    with fpath.open("r", encoding=enc, newline="") as fh:
-                        reader = csv.DictReader(fh)
-                        if not reader.fieldnames:
-                            continue
-                        tkey = next((k for k in reader.fieldnames if "時" in k or "time" in k.lower() or "date" in k.lower()), None)
-                        mkey = next((k for k in reader.fieldnames if "mesh" in k.lower() or "メッシュ" in k), None)
-                        for row in reader:
-                            if tkey:
-                                m = dt_re.search((row.get(tkey) or "").strip())
-                                if m:
-                                    try:
-                                        found_dates.add(date(int(m.group(1)), int(m.group(2)), int(m.group(3))))
-                                    except Exception:
-                                        pass
-                            if mkey:
-                                mv = (row.get(mkey) or "").strip()
-                                if mv:
-                                    mesh_set.add(mv)
-                    break
-                except Exception:
-                    continue
-        return sorted(found_dates), sorted(mesh_set)
+        out_dates: set[date] = set()
+        out_meshes: set[str] = set()
+        total = len(files)
+
+        for i, fp in enumerate(files, start=1):
+            try:
+                with fp.open("r", encoding="utf-8-sig", errors="ignore", newline="") as f:
+                    r = csv.reader(f)
+                    for row in r:
+                        if len(row) > 6:
+                            tok = row[6].strip()
+                            if len(tok) >= 8 and tok[:8].isdigit():
+                                try:
+                                    out_dates.add(datetime.strptime(tok[:8], "%Y%m%d").date())
+                                except ValueError:
+                                    pass
+                        if len(row) > 24:
+                            mesh = row[24].strip()
+                            if mesh and re.fullmatch(r"\d+", mesh):
+                                out_meshes.add(mesh)
+            except Exception:
+                continue
+            finally:
+                if progress:
+                    progress.setValue(i)
+                    progress.setLabelText(f"CSVを読み込み中... {i:,} / {total:,}")
+                    if i % 10 == 0 or i == total:
+                        QApplication.processEvents()
+
+        return sorted(out_dates), sorted(out_meshes)
 
     def refresh_csv_and_dates(self, confirm: bool = True):
         if self.input_folder is None:
@@ -699,6 +698,12 @@ class MainWindow(QMainWindow):
         pr.close()
         self.available_dates = ds
         self.available_meshes = meshes
+        self.append_log(f"抽出日数: {len(self.available_dates):,}")
+        if self.available_dates:
+            self.append_log(f"最小日付: {self.available_dates[0]}")
+            self.append_log(f"最大日付: {self.available_dates[-1]}")
+        else:
+            self.append_log("日付抽出結果: 0件")
         self.selected_dates = set(self.available_dates)
         self._rebuild_calendar()
         self.scr.ensureVisible(0, 0)
