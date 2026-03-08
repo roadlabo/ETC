@@ -157,7 +157,7 @@ class RealtimeSlotChart(QWidget):
         self.slot_counts = [0] * 48
         self._dirty = False
         self._last_paint_t = 0.0
-        self.setMinimumHeight(220)
+        self.setMinimumHeight(180)
 
     def set_slot(self, i: int, count: int):
         if 0 <= i < 48 and self.slot_counts[i] != count:
@@ -285,15 +285,18 @@ class MainWindow(QMainWindow):
         body.addLayout(left, 5)
 
         # STEP 1
-        s1w = QWidget(); s1 = QVBoxLayout(s1w); s1.setContentsMargins(0, 0, 0, 0)
-        r1 = QHBoxLayout()
+        step1_frame = QFrame(); step1_frame.setObjectName("stepBox")
+        step1_layout = QHBoxLayout(step1_frame); step1_layout.setContentsMargins(10, 8, 10, 8); step1_layout.setSpacing(8)
+        step1_title = QLabel("STEP 1：第1スクリーニングフォルダの選択"); step1_title.setObjectName("stepTitle")
         self.btn_pick = QPushButton("第1スクリーニングフォルダ選択"); self.btn_pick.clicked.connect(self.pick_folder)
         self.lbl_folder = QLabel("未選択")
         self.chk_recursive = QCheckBox("サブフォルダも含める"); self.chk_recursive.stateChanged.connect(self.on_recursive_changed)
-        r1.addWidget(self.btn_pick); r1.addWidget(self.lbl_folder, 1); r1.addWidget(self.chk_recursive)
-        self.lbl_csv_count = QLabel("対象CSV数: 0")
-        s1.addLayout(r1); s1.addWidget(self.lbl_csv_count)
-        left.addWidget(StepBox("STEP 1：第1スクリーニングフォルダの選択", s1w))
+        step1_layout.addWidget(step1_title)
+        step1_layout.addStretch(1)
+        step1_layout.addWidget(self.btn_pick)
+        step1_layout.addWidget(self.lbl_folder, 1)
+        step1_layout.addWidget(self.chk_recursive)
+        left.addWidget(step1_frame)
 
         # STEP 2
         s3w = QWidget(); s3 = QVBoxLayout(s3w); s3.setContentsMargins(0, 0, 0, 0)
@@ -314,21 +317,28 @@ class MainWindow(QMainWindow):
         self.calendar_months_layout.setSpacing(20)
         self.calendar_outer_layout.addWidget(self.calendar_months_wrap)
         self.scr = QScrollArea(); self.scr.setWidgetResizable(True); self.scr.setWidget(self.calendar_container)
+        self.scr.setMinimumHeight(460)
         s3.addWidget(self.scr, 1)
-        left.addWidget(StepBox("STEP 2：対象日の選択（カレンダー）", s3w), 1)
+        left.addWidget(StepBox("STEP 2：対象日の選択（カレンダー）", s3w), 7)
 
         # STEP 3
-        s4w = QWidget(); s4 = QHBoxLayout(s4w); s4.setContentsMargins(0, 0, 0, 0)
+        step3_frame = QFrame(); step3_frame.setObjectName("stepBox")
+        step3_layout = QHBoxLayout(step3_frame); step3_layout.setContentsMargins(10, 8, 10, 8); step3_layout.setSpacing(8)
+        step3_title = QLabel("STEP 3：実行"); step3_title.setObjectName("stepTitle")
         self.btn_run = QPushButton("集計スタート"); self.btn_run.clicked.connect(self.start_run)
         self.btn_open_csv = QPushButton("出力CSVを開く"); self.btn_open_csv.clicked.connect(self.open_output_csv); self.btn_open_csv.setEnabled(False)
         self.btn_open_folder = QPushButton("保存先フォルダを開く"); self.btn_open_folder.clicked.connect(self.open_output_folder); self.btn_open_folder.setEnabled(False)
-        s4.addWidget(self.btn_run); s4.addWidget(self.btn_open_csv); s4.addWidget(self.btn_open_folder); s4.addStretch(1)
-        left.addWidget(StepBox("STEP 3：実行", s4w))
+        step3_layout.addWidget(step3_title)
+        step3_layout.addStretch(1)
+        step3_layout.addWidget(self.btn_run)
+        step3_layout.addWidget(self.btn_open_csv)
+        step3_layout.addWidget(self.btn_open_folder)
+        left.addWidget(step3_frame)
 
-        self.chart = RealtimeSlotChart(); left.addWidget(self.chart)
+        self.chart = RealtimeSlotChart(); left.addWidget(self.chart, 2)
 
-        self.log = QPlainTextEdit(); self.log.setReadOnly(True); self.log.setMaximumBlockCount(2000); self.log.setMinimumHeight(170)
-        left.addWidget(self.log)
+        self.log = QPlainTextEdit(); self.log.setReadOnly(True); self.log.setMaximumBlockCount(2000); self.log.setMinimumHeight(60); self.log.setMaximumHeight(90)
+        left.addWidget(self.log, 1)
 
         right = QVBoxLayout(); body.addLayout(right, 2)
         panel = QFrame(); pv = QVBoxLayout(panel)
@@ -450,7 +460,6 @@ class MainWindow(QMainWindow):
     def _refresh_csv_count_only(self) -> bool:
         self.append_log("CSV件数を確認中...")
         self.total_files = self._count_csv_only()
-        self.lbl_csv_count.setText(f"対象CSV数: {self.total_files:,}")
         if self.total_files == 0:
             QMessageBox.warning(self, "警告", "CSVが0件です。")
             self.input_folder = None
