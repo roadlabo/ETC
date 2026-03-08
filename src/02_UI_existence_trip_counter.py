@@ -43,16 +43,6 @@ RE_FILE_DONE = re.compile(r"進捗ファイル:\s*([0-9,]+)\s*/\s*([0-9,]+)")
 RE_SLOT = re.compile(r"^SLOTCOUNT:(\d+):(\d+)\s*$")
 
 
-def second_mesh_code(lat: float, lon: float) -> str:
-    p = int(lat * 60.0 / 40.0)
-    a = int(lon) - 100
-    lat_rem_min = lat * 60.0 - (p * 40.0)
-    lon_rem_min = (lon - int(lon)) * 60.0
-    q = int(lat_rem_min / 5.0)
-    b = int(lon_rem_min / 7.5)
-    return f"{p:02d}{a:02d}{q}{b}"
-
-
 class FlowLayout(QLayout):
     def __init__(self, parent=None, margin=0, spacing=10):
         super().__init__(parent)
@@ -425,11 +415,10 @@ class MainWindow(QMainWindow):
                                     out_dates.add(datetime.strptime(tok[:8], "%Y%m%d").date())
                                 except ValueError:
                                     pass
-                        if len(row) > 15:
-                            lat = self._parse_float(row, 15)
-                            lon = self._parse_float(row, 14)
-                            if lat is not None and lon is not None:
-                                out_meshes.add(second_mesh_code(lat, lon))
+                        if len(row) > 24:
+                            mesh_token = row[24].strip()
+                            if mesh_token and re.fullmatch(r"\d+", mesh_token):
+                                out_meshes.add(mesh_token)
             except Exception:
                 continue
             finally:
@@ -439,17 +428,6 @@ class MainWindow(QMainWindow):
                     if i % 100 == 0 or i == total:
                         QApplication.processEvents()
         return sorted(out_dates), sorted(out_meshes)
-
-    def _parse_float(self, row: list[str], idx: int) -> float | None:
-        if idx >= len(row):
-            return None
-        t = row[idx].strip()
-        if not t:
-            return None
-        try:
-            return float(t)
-        except ValueError:
-            return None
 
     def _clear_date_selection(self):
         self.available_dates = []
@@ -489,6 +467,7 @@ class MainWindow(QMainWindow):
         self._rebuild_calendar()
         self.append_log(f"抽出日数: {len(self.available_dates):,}")
         self.append_log(f"抽出メッシュ数: {len(self.available_meshes):,}")
+        self.append_log("抽出メッシュはCSVの25列目から取得（座標再計算なし）")
 
     def refresh_csv_and_dates(self, confirm: bool = True):
         if not self._refresh_csv_count_only():
