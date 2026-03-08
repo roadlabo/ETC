@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QProcess, QRect, Qt, QTimer
+from PyQt6.QtCore import QProcess, QProcessEnvironment, QRect, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -34,7 +34,6 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QVBoxLayout,
     QWidget,
-    QLineEdit,
 )
 
 APP_TITLE = "02_時間帯存在トリップ集計（第1スクリーニング済みデータから30分別存在トリップ数を集計）"
@@ -42,6 +41,16 @@ UI_LOGO_FILENAME = "logo_02_UI_existence_trip_counter.png"
 
 RE_FILE_DONE = re.compile(r"進捗ファイル:\s*([0-9,]+)\s*/\s*([0-9,]+)")
 RE_SLOT = re.compile(r"^SLOTCOUNT:(\d+):(\d+)\s*$")
+
+
+def second_mesh_code(lat: float, lon: float) -> str:
+    p = int(lat * 60.0 / 40.0)
+    a = int(lon) - 100
+    lat_rem_min = lat * 60.0 - (p * 40.0)
+    lon_rem_min = (lon - int(lon)) * 60.0
+    q = int(lat_rem_min / 5.0)
+    b = int(lon_rem_min / 7.5)
+    return f"{p:02d}{a:02d}{q}{b}"
 
 
 class FlowLayout(QLayout):
@@ -160,14 +169,21 @@ class RealtimeSlotChart(QWidget):
         p = QPainter(self)
         r = self.rect()
         p.fillRect(r, QColor("#09120f"))
-        chart = r.adjusted(10, 10, -10, -26)
+        chart = r.adjusted(54, 18, -12, -58)
         if chart.width() <= 0 or chart.height() <= 0:
             return
-        p.setPen(QPen(QColor(25, 90, 70, 120), 1))
-        for i in range(1, 5):
-            y = chart.bottom() - int(chart.height() * (i / 5))
-            p.drawLine(chart.left(), y, chart.right(), y)
+
         mx = max(1, max(self.slot_counts))
+        p.setPen(QPen(QColor(25, 90, 70, 120), 1))
+        for ratio in (0.25, 0.5, 0.75, 1.0):
+            y = chart.bottom() - int(chart.height() * ratio)
+            p.drawLine(chart.left(), y, chart.right(), y)
+
+        p.setPen(QPen(QColor("#9ef4ff")))
+        for ratio, label in ((0.0, "0"), (0.25, f"{int(mx*0.25):,}"), (0.5, f"{int(mx*0.5):,}"), (0.75, f"{int(mx*0.75):,}"), (1.0, f"{mx:,}")):
+            y = chart.bottom() - int(chart.height() * ratio)
+            p.drawText(6, y - 8, 42, 16, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, label)
+
         peak_i = max(range(48), key=lambda i: self.slot_counts[i])
         bar_w = max(2, int(chart.width() / 48) - 1)
         for i, v in enumerate(self.slot_counts):
@@ -176,11 +192,14 @@ class RealtimeSlotChart(QWidget):
             y = chart.bottom() - h
             col = QColor("#11b3ff") if i != peak_i else QColor("#76ff8e")
             p.fillRect(x, y, bar_w, h, col)
-        p.setPen(QPen(QColor("#9ef4ff")))
-        p.drawText(r.adjusted(12, r.height() - 20, -12, -4), Qt.AlignmentFlag.AlignLeft, "30分スロット(48本)")
-        sh, sm = divmod(peak_i * 30, 60)
-        eh, em = divmod(peak_i * 30 + 29, 60)
-        p.drawText(r.adjusted(12, 4, -12, -4), Qt.AlignmentFlag.AlignRight, f"現在ピーク: {sh:02d}:{sm:02d}-{eh:02d}:{em:02d} / {self.slot_counts[peak_i]}")
+
+        for idx, txt in [(0, "00:00"), (12, "06:00"), (24, "12:00"), (36, "18:00"), (47, "23:30")]:
+            x = chart.left() + int(idx * chart.width() / 47)
+            p.drawLine(x, chart.bottom(), x, chart.bottom() + 4)
+            p.drawText(x - 24, chart.bottom() + 8, 48, 18, Qt.AlignmentFlag.AlignCenter, txt)
+
+        p.drawText(r.adjusted(8, 4, -8, -4), Qt.AlignmentFlag.AlignLeft, "縦軸: 存在トリップ数")
+        p.drawText(r.adjusted(10, r.height() - 24, -10, -4), Qt.AlignmentFlag.AlignCenter, "時間帯（30分スロット）")
 
 
 @dataclass
@@ -202,6 +221,7 @@ class MainWindow(QMainWindow):
         self.input_folder: Path | None = None
         self.csv_files: list[Path] = []
         self.available_dates: list[date] = []
+        self.available_meshes: list[str] = []
         self.selected_dates: set[date] = set()
         self.day_cells: dict[date, QPushButton] = {}
         self.slot_counts = [0] * 48
@@ -242,12 +262,6 @@ class MainWindow(QMainWindow):
         left.addWidget(StepBox("STEP 1：第1スクリーニングフォルダの選択", s1w))
 
         # STEP 2
-        s2w = QWidget(); s2 = QVBoxLayout(s2w); s2.setContentsMargins(0, 0, 0, 0)
-        self.edit_mesh = QLineEdit(); self.edit_mesh.setPlaceholderText("例: 523456+523457")
-        s2.addWidget(self.edit_mesh)
-        left.addWidget(StepBox("STEP 2：対象2次メッシュの指定", s2w))
-
-        # STEP3
         s3w = QWidget(); s3 = QVBoxLayout(s3w); s3.setContentsMargins(0, 0, 0, 0)
         togg = QHBoxLayout(); self.btn_all = QPushButton("ALL"); self.btn_all.clicked.connect(self.toggle_all_dates); togg.addWidget(self.btn_all)
         self.wday_buttons = []
@@ -256,19 +270,26 @@ class MainWindow(QMainWindow):
         togg.addStretch(1)
         self.lbl_date_stats = QLabel("選択中: 0日 / 全0日")
         s3.addLayout(togg); s3.addWidget(self.lbl_date_stats)
-        self.calendar_container = QWidget(); self.calendar_layout = QVBoxLayout(self.calendar_container); self.calendar_layout.setContentsMargins(0, 0, 0, 0)
-        self.calendar_layout.addWidget(QLabel("フォルダ選択後に日付をスキャンします。"))
+        self.calendar_container = QWidget()
+        self.calendar_outer_layout = QVBoxLayout(self.calendar_container)
+        self.calendar_outer_layout.setContentsMargins(0, 8, 0, 10)
+        self.calendar_outer_layout.setSpacing(0)
+        self.calendar_months_wrap = QWidget()
+        self.calendar_months_layout = QHBoxLayout(self.calendar_months_wrap)
+        self.calendar_months_layout.setContentsMargins(0, 0, 0, 0)
+        self.calendar_months_layout.setSpacing(20)
+        self.calendar_outer_layout.addWidget(self.calendar_months_wrap)
         self.scr = QScrollArea(); self.scr.setWidgetResizable(True); self.scr.setWidget(self.calendar_container)
         s3.addWidget(self.scr, 1)
-        left.addWidget(StepBox("STEP 3：対象日の選択（カレンダー）", s3w), 1)
+        left.addWidget(StepBox("STEP 2：対象日の選択（カレンダー）", s3w), 1)
 
-        # STEP4
+        # STEP 3
         s4w = QWidget(); s4 = QHBoxLayout(s4w); s4.setContentsMargins(0, 0, 0, 0)
         self.btn_run = QPushButton("集計スタート"); self.btn_run.clicked.connect(self.start_run)
         self.btn_open_csv = QPushButton("出力CSVを開く"); self.btn_open_csv.clicked.connect(self.open_output_csv); self.btn_open_csv.setEnabled(False)
         self.btn_open_folder = QPushButton("保存先フォルダを開く"); self.btn_open_folder.clicked.connect(self.open_output_folder); self.btn_open_folder.setEnabled(False)
         s4.addWidget(self.btn_run); s4.addWidget(self.btn_open_csv); s4.addWidget(self.btn_open_folder); s4.addStretch(1)
-        left.addWidget(StepBox("STEP 4：実行", s4w))
+        left.addWidget(StepBox("STEP 3：実行", s4w))
 
         self.chart = RealtimeSlotChart(); left.addWidget(self.chart)
 
@@ -281,8 +302,9 @@ class MainWindow(QMainWindow):
         self.lbl_progress = QLabel("進捗ファイル: 0/0（0.0%）")
         self.lbl_elapsed = QLabel("経過 00:00:00"); self.lbl_elapsed.setFont(QFont("Consolas", 18, QFont.Weight.Bold))
         self.lbl_eta = QLabel("残り --:--:--"); self.lbl_eta.setFont(QFont("Consolas", 18, QFont.Weight.Bold))
-        self.lbl_telemetry = QLabel("CYBER TELEMETRY\n対象CSV数: 0\n抽出日数: 0\n選択中日数: 0\n対象メッシュ数: 0\nエラー数: 0")
+        self.lbl_telemetry = QLabel("CYBER TELEMETRY\n対象CSV数: 0\n抽出日数: 0\n選択中日数: 0\n対象メッシュ数: 0\n対象2次メッシュ:\n-\nエラー数: 0")
         self.lbl_telemetry.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.lbl_telemetry.setWordWrap(True)
         self.sweep = SweepWidget()
         pv.addWidget(self.lbl_status); pv.addWidget(self.lbl_progress); pv.addWidget(self.lbl_elapsed); pv.addWidget(self.lbl_eta)
         pv.addWidget(self.lbl_telemetry); pv.addWidget(self.sweep, 1)
@@ -299,7 +321,7 @@ class MainWindow(QMainWindow):
             QLabel#stepTitle{color:#00ff99;font-weight:700;}
             QPushButton{background:#083424;border:1px solid #13d989;border-radius:10px;padding:6px 12px;}
             QPushButton:disabled{background:#0d1814;color:#6f887e;border-color:#365247;}
-            QLineEdit,QPlainTextEdit{background:#0b1412;border:1px solid #1f4a3d;border-radius:8px;}
+            QPlainTextEdit{background:#0b1412;border:1px solid #1f4a3d;border-radius:8px;}
             QScrollArea{border:1px solid #1f4a3d;}
             QLabel#title{color:#76ff8e;}
             """
@@ -330,8 +352,9 @@ class MainWindow(QMainWindow):
             return sorted(p for p in self.input_folder.rglob("*.csv") if p.is_file())
         return sorted(p for p in self.input_folder.glob("*.csv") if p.is_file())
 
-    def _scan_dates(self, files: list[Path], progress: QProgressDialog | None = None) -> list[date]:
-        out: set[date] = set()
+    def _scan_dates(self, files: list[Path], progress: QProgressDialog | None = None) -> tuple[list[date], list[str]]:
+        out_dates: set[date] = set()
+        out_meshes: set[str] = set()
         total = len(files)
         for i, fp in enumerate(files, start=1):
             try:
@@ -340,18 +363,22 @@ class MainWindow(QMainWindow):
                     first = next(r, None)
                     if first is None:
                         continue
-                    idx = 6
+                    dt_idx = 6
                     has_header = any(not re.fullmatch(r"[-+]?\d+(\.\d+)?", c.strip()) for c in first)
                     rows = r if has_header else [first]
                     for row in rows:
-                        if idx >= len(row):
-                            continue
-                        tok = row[idx].strip()
-                        if len(tok) >= 8 and tok[:8].isdigit():
-                            try:
-                                out.add(datetime.strptime(tok[:8], "%Y%m%d").date())
-                            except ValueError:
-                                pass
+                        if dt_idx < len(row):
+                            tok = row[dt_idx].strip()
+                            if len(tok) >= 8 and tok[:8].isdigit():
+                                try:
+                                    out_dates.add(datetime.strptime(tok[:8], "%Y%m%d").date())
+                                except ValueError:
+                                    pass
+                        if len(row) > 15:
+                            lat = self._parse_float(row, 15)
+                            lon = self._parse_float(row, 14)
+                            if lat is not None and lon is not None:
+                                out_meshes.add(second_mesh_code(lat, lon))
             except Exception:
                 continue
             finally:
@@ -360,10 +387,22 @@ class MainWindow(QMainWindow):
                     progress.setLabelText(f"CSVを読み込み中... {i:,} / {total:,}")
                     if i % 100 == 0 or i == total:
                         QApplication.processEvents()
-        return sorted(out)
+        return sorted(out_dates), sorted(out_meshes)
+
+    def _parse_float(self, row: list[str], idx: int) -> float | None:
+        if idx >= len(row):
+            return None
+        t = row[idx].strip()
+        if not t:
+            return None
+        try:
+            return float(t)
+        except ValueError:
+            return None
 
     def _clear_date_selection(self):
         self.available_dates = []
+        self.available_meshes = []
         self.selected_dates = set()
         self._rebuild_calendar()
 
@@ -377,7 +416,7 @@ class MainWindow(QMainWindow):
             self.lbl_folder.setText("未選択")
             self._clear_date_selection()
             return False
-        self.append_log(f"[INFO] 対象CSV数: {self.total_files}")
+        self.append_log(f"対象CSV数: {self.total_files:,}")
         return True
 
     def _load_dates_with_progress(self):
@@ -390,13 +429,14 @@ class MainWindow(QMainWindow):
         progress.show()
         QApplication.processEvents()
         try:
-            self.available_dates = self._scan_dates(self.csv_files, progress=progress)
+            self.available_dates, self.available_meshes = self._scan_dates(self.csv_files, progress=progress)
         finally:
             progress.close()
 
         self.selected_dates = set(self.available_dates)
         self._rebuild_calendar()
-        self.append_log(f"[INFO] 抽出日数: {len(self.available_dates)}")
+        self.append_log(f"抽出日数: {len(self.available_dates):,}")
+        self.append_log(f"抽出メッシュ数: {len(self.available_meshes):,}")
 
     def refresh_csv_and_dates(self, confirm: bool = True):
         if not self._refresh_csv_count_only():
@@ -412,44 +452,69 @@ class MainWindow(QMainWindow):
             )
             if ret != QMessageBox.StandardButton.Ok:
                 self._clear_date_selection()
-                self.append_log("[INFO] 日付読込みをキャンセルしました。")
+                self.append_log("日付読込みをキャンセルしました。")
                 return
         self._load_dates_with_progress()
 
     def _rebuild_calendar(self):
-        while self.calendar_layout.count():
-            item = self.calendar_layout.takeAt(0)
+        while self.calendar_months_layout.count():
+            item = self.calendar_months_layout.takeAt(0)
             w = item.widget()
             if w:
                 w.deleteLater()
         self.day_cells.clear()
         if not self.available_dates:
-            self.calendar_layout.addWidget(QLabel("日付データなし"))
+            self.calendar_months_layout.addWidget(QLabel("日付データなし"))
             self.lbl_date_stats.setText("選択中: 0日 / 全0日")
             return
+
         by_month: dict[tuple[int, int], list[date]] = defaultdict(list)
         for d in self.available_dates:
             by_month[(d.year, d.month)].append(d)
+
+        month_w = 350
         for ym in sorted(by_month.keys()):
             y, m = ym
-            box = QFrame(); lv = QVBoxLayout(box)
+            box = QFrame()
+            lv = QVBoxLayout(box)
+            lv.setContentsMargins(10, 10, 10, 12)
+            lv.setSpacing(8)
             lv.addWidget(QLabel(f"{y}年{m}月"))
             grid = QGridLayout(); lv.addLayout(grid)
+            grid.setHorizontalSpacing(8)
+            grid.setVerticalSpacing(8)
             for c, wd in enumerate(["月", "火", "水", "木", "金", "土", "日"]):
-                h = QLabel(wd); h.setAlignment(Qt.AlignmentFlag.AlignCenter); grid.addWidget(h, 0, c)
+                h = QLabel(wd)
+                h.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                h.setMinimumHeight(28)
+                grid.addWidget(h, 0, c)
             first_wd = date(y, m, 1).weekday()
             row = 1
             col = first_wd
             for d in sorted(by_month[ym]):
                 b = QPushButton(str(d.day)); b.setCheckable(True); b.setChecked(True)
+                b.setMinimumHeight(40)
                 b.clicked.connect(lambda _=False, dd=d: self.toggle_day(dd))
                 grid.addWidget(b, row, col)
                 self.day_cells[d] = b
                 col += 1
                 if col >= 7:
                     col = 0; row += 1
-            self.calendar_layout.addWidget(box)
-        self.calendar_layout.addStretch(1)
+            box.setMinimumWidth(month_w)
+            self.calendar_months_layout.addWidget(box)
+
+        self.calendar_months_layout.addStretch(1)
+        mcount = len(by_month)
+        if mcount == 1:
+            self.calendar_container.setMinimumWidth(month_w + 40)
+            self.scr.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        elif mcount == 2:
+            self.calendar_container.setMinimumWidth(month_w * 2 + 90)
+            self.scr.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        else:
+            self.calendar_container.setMinimumWidth(month_w * mcount + 40 + (mcount - 1) * 20)
+            self.scr.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+
         self._update_day_styles()
 
     def _update_day_styles(self):
@@ -489,17 +554,6 @@ class MainWindow(QMainWindow):
                 self.selected_dates.add(d)
         self._update_day_styles()
 
-    def _parse_meshes(self) -> list[str] | None:
-        txt = self.edit_mesh.text().strip()
-        if not txt or not re.fullmatch(r"\d+(\+\d+)*", txt):
-            return None
-        out = []
-        seen = set()
-        for m in txt.split("+"):
-            if m not in seen:
-                out.append(m); seen.add(m)
-        return out
-
     def _compact_dates(self, dates: list[date]) -> str:
         if not dates:
             return ""
@@ -528,9 +582,8 @@ class MainWindow(QMainWindow):
         if not self.input_folder or self.total_files <= 0:
             QMessageBox.warning(self, "警告", "フォルダ未選択またはCSV 0件です。")
             return
-        meshes = self._parse_meshes()
-        if not meshes:
-            QMessageBox.warning(self, "警告", "メッシュ指定が不正です。")
+        if not self.available_meshes:
+            QMessageBox.warning(self, "警告", "対象メッシュが見つかりません。")
             return
         if not self.selected_dates:
             QMessageBox.warning(self, "警告", "対象日を1日以上選択してください。")
@@ -551,7 +604,7 @@ class MainWindow(QMainWindow):
         date_list = [d.strftime("%Y-%m-%d") for d in sorted(self.selected_dates)]
         compact = self._compact_dates(sorted(self.selected_dates))
         args = [
-            str(script), "--input", str(self.input_folder), "--meshes", "+".join(meshes),
+            str(script), "--input", str(self.input_folder), "--meshes", "+".join(self.available_meshes),
             "--dates", json.dumps(date_list, ensure_ascii=False), "--dates-compact", compact, "--output", str(out)
         ]
         if self.chk_recursive.isChecked():
@@ -561,6 +614,9 @@ class MainWindow(QMainWindow):
         self.proc.setProgram(py)
         self.proc.setArguments(args)
         self.proc.setWorkingDirectory(str(Path(__file__).resolve().parent))
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("PYTHONIOENCODING", "utf-8")
+        self.proc.setProcessEnvironment(env)
         self.proc.readyReadStandardOutput.connect(self._on_stdout)
         self.proc.readyReadStandardError.connect(self._on_stderr)
         self.proc.finished.connect(self._on_finished)
@@ -570,11 +626,14 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText("状態: RUNNING")
         self.started_at = time.time()
         self._set_inputs_enabled(False)
-        self.append_log(f"[INFO] start: meshes={'+'.join(meshes)} dates={len(self.selected_dates)}days recursive={self.chk_recursive.isChecked()}")
+        self.append_log("集計開始")
+        self.append_log(f"対象メッシュ: {', '.join(self.available_meshes)}")
+        self.append_log(f"対象日数: {len(self.selected_dates)}日")
+        self.append_log(f"サブフォルダ: {'はい' if self.chk_recursive.isChecked() else 'いいえ'}")
         self.proc.start()
 
     def _set_inputs_enabled(self, enabled: bool):
-        self.btn_pick.setEnabled(enabled); self.chk_recursive.setEnabled(enabled); self.edit_mesh.setEnabled(enabled)
+        self.btn_pick.setEnabled(enabled); self.chk_recursive.setEnabled(enabled)
         self.btn_run.setEnabled(enabled)
 
     def _on_stdout(self):
@@ -592,14 +651,22 @@ class MainWindow(QMainWindow):
                     self.slot_counts[i] = c
                     self.chart.set_slot(i, c)
                 continue
-            self.append_log(t)
             fd = RE_FILE_DONE.search(t)
             if fd:
                 self.done_files = int(fd.group(1).replace(",", "")); self.total_files = max(1, int(fd.group(2).replace(",", "")))
                 self._eta_done = self.done_files; self._eta_total = self.total_files
                 self._update_progress_label()
+                continue
+            if t.startswith("現在ピーク:"):
+                continue
             if "[ERROR]" in t:
                 self.error_count += 1
+                self.append_log(t)
+                continue
+            if t.startswith("[INFO]"):
+                self.append_log(t.replace("[INFO] ", ""))
+                continue
+            self.append_log(t)
 
     def _on_stderr(self):
         if not self.proc:
@@ -684,16 +751,22 @@ class MainWindow(QMainWindow):
         if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
             self._update_eta()
         self._update_progress_label()
-        mesh_n = len(self._parse_meshes() or [])
+        mesh_n = len(self.available_meshes)
+        meshes_text = ", ".join(self.available_meshes) if self.available_meshes else "-"
+        if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
+            state_text = "RUNNING"
+        else:
+            state_text = "DONE" if self.started_at and self.done_files >= self.total_files and self.total_files > 0 else "IDLE"
         self.lbl_telemetry.setText(
             f"CYBER TELEMETRY\n"
             f"対象CSV数: {self.total_files:,}\n"
             f"抽出日数: {len(self.available_dates):,}\n"
             f"選択中日数: {len(self.selected_dates):,}\n"
             f"対象メッシュ数: {mesh_n:,}\n"
+            f"対象2次メッシュ:\n{meshes_text}\n"
             f"進捗ファイル: {self.done_files:,}/{self.total_files:,}\n"
             f"エラー数: {self.error_count:,}\n"
-            f"現在状態: {'RUNNING' if self.proc and self.proc.state()!=QProcess.ProcessState.NotRunning else 'IDLE'}\n"
+            f"現在状態: {state_text}\n"
             f"経過時間: {self._fmt_hms(elapsed)}\n"
             f"残り時間: {self.lbl_eta.text().replace('残り ','')}"
         )
@@ -725,7 +798,11 @@ class MainWindow(QMainWindow):
         total_sec = time.time() - self.started_at if self.started_at else 0
         lines = [
             f"Input: {self.input_folder}",
-            f"Meshes: {self.edit_mesh.text().strip()}",
+            f"CSV数: {self.total_files:,}",
+            f"抽出日数: {len(self.available_dates):,}",
+            f"選択日数: {len(self.selected_dates):,}",
+            f"対象2次メッシュ一覧: {','.join(self.available_meshes)}",
+            f"Meshes: {','.join(self.available_meshes)}",
             f"Dates: {','.join(d.strftime('%Y-%m-%d') for d in sorted(self.selected_dates))}",
             f"開始: {datetime.fromtimestamp(self.started_at).strftime('%Y/%m/%d %H:%M:%S') if self.started_at else ''}",
             f"終了: {datetime.now().strftime('%Y/%m/%d %H:%M:%S')}",
