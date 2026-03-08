@@ -47,9 +47,9 @@ RE_ODCOUNT = re.compile(r"^ODCOUNT:(.*?):(.*?):(\d+)\s*$")
 RE_DIRCOUNT = re.compile(r"^DIRCOUNT:(EAST|WEST|NORTH|SOUTH):(\d+)\s*$")
 RE_SAME = re.compile(r"SAME_ZONE_RATIO:\s*([0-9.]+)")
 
-DEFAULT_CENTER_LON = 133.93
-DEFAULT_CENTER_LAT = 35.07
-DEFAULT_CENTER_NAME = "津山市中心点（既定値）"
+DEFAULT_CENTER_LON = 134.003809
+DEFAULT_CENTER_LAT = 35.064685
+DEFAULT_CENTER_NAME = "津山城（既定値）"
 
 try:
     from PyQt6.QtWebChannel import QWebChannel
