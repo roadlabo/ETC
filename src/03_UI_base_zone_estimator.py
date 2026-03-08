@@ -7,8 +7,9 @@ import sys
 import time
 from pathlib import Path
 import logging
+from html import escape
 
-from PyQt6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt
+from PyQt6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt, QUrl
 from PyQt6.QtGui import QPainter, QPen, QColor, QPolygonF
 from PyQt6.QtWidgets import (
     QApplication,
@@ -24,9 +25,17 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
+
+WEBENGINE_AVAILABLE = False
+try:
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+    WEBENGINE_AVAILABLE = True
+except Exception:
+    QWebEngineView = None
 
 APP_TITLE = "03_運行ID別 推定拠点ゾーン対応表 作成"
 RE_PROGRESS = re.compile(r"\[PROGRESS\]\s+done=(\d+)\s+total=(\d+)(?:\s+file=(.+))?")
@@ -338,10 +347,16 @@ class MainWindow(QMainWindow):
         center_frame = QFrame(); center_frame.setObjectName("card")
         cf = QVBoxLayout(center_frame); cf.setContentsMargins(8, 8, 8, 8)
         cf.addWidget(QLabel("地図表示エリア", objectName="panelTitle"))
-        self.map_holder = QWidget(); map_layout = QVBoxLayout(self.map_holder)
-        map_layout.setContentsMargins(0, 0, 0, 0)
+        self.map_holder = QWidget()
+        self.map_stack = QStackedLayout(self.map_holder)
+        self.map_stack.setContentsMargins(0, 0, 0, 0)
         self.map_widget = ZoneMapWidget()
-        map_layout.addWidget(self.map_widget)
+        self.map_stack.addWidget(self.map_widget)
+        self.web_map = None
+        if WEBENGINE_AVAILABLE:
+            self.web_map = QWebEngineView(self.map_holder)
+            self.map_stack.addWidget(self.web_map)
+        self.map_stack.setCurrentWidget(self.map_widget)
         cf.addWidget(self.map_holder, 1)
 
         right_frame = QFrame(); right_frame.setObjectName("telemetry")
@@ -352,9 +367,10 @@ class MainWindow(QMainWindow):
         self.lbl_current = QLabel("現在: -"); self.lbl_current.setWordWrap(True)
         self.lbl_progress = QLabel("進捗ファイル: 0/0 (0.0%)")
         self.lbl_hit = QLabel("正常HIT: 0")
+        self.lbl_map_mode = QLabel("地図表示: SIMPLE")
         self.lbl_elapsed = QLabel("経過 00:00:00", objectName="big")
         self.lbl_remaining = QLabel("残り --:--:--", objectName="big")
-        for w in [self.lbl_zone_count, self.lbl_status, self.lbl_current, self.lbl_progress, self.lbl_hit, self.lbl_elapsed, self.lbl_remaining]:
+        for w in [self.lbl_zone_count, self.lbl_status, self.lbl_current, self.lbl_progress, self.lbl_hit, self.lbl_map_mode, self.lbl_elapsed, self.lbl_remaining]:
             rf.addWidget(w)
         self.radar = RadarWidget(); rf.addWidget(self.radar)
 
@@ -562,6 +578,8 @@ class MainWindow(QMainWindow):
         if len(points) < 3:
             msg = "ゾーン定義が見つかりません"
             self.map_widget.set_zone(zone_name, [], msg)
+            self.map_stack.setCurrentWidget(self.map_widget)
+            self.lbl_map_mode.setText("地図表示: SIMPLE")
             self.map_widget.update()
             return
 
@@ -573,11 +591,75 @@ class MainWindow(QMainWindow):
 
         if len(valid_points) < 3:
             self.map_widget.set_zone(zone_name, [], "ゾーンポリゴンを表示できません")
+            self.map_stack.setCurrentWidget(self.map_widget)
+            self.lbl_map_mode.setText("地図表示: SIMPLE")
             self.map_widget.update()
             return
 
         self.map_widget.set_zone(zone_name, valid_points)
         self.map_widget.update()
+        if WEBENGINE_AVAILABLE and self.web_map is not None:
+            self._render_web_map(zone_name, valid_points)
+        else:
+            self.map_stack.setCurrentWidget(self.map_widget)
+            self.lbl_map_mode.setText("地図表示: SIMPLE")
+
+    def _render_web_map(self, zone_name: str, points: list[tuple[float, float]]) -> None:
+        if self.web_map is None or not points:
+            self.map_stack.setCurrentWidget(self.map_widget)
+            self.lbl_map_mode.setText("地図表示: SIMPLE")
+            return
+        try:
+            lat_center = sum(lat for _, lat in points) / len(points)
+            lon_center = sum(lon for lon, _ in points) / len(points)
+            coords = ",\n".join(f"[{lat}, {lon}]" for lon, lat in points)
+            safe_zone_name = escape(zone_name)
+            html = f"""
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+html, body, #map {{ height:100%; margin:0; background:#fff; }}
+.ttl {{
+  position:absolute; z-index:1000; left:8px; top:8px;
+  background:rgba(255,255,255,0.92);
+  padding:6px 10px; border-radius:6px; font-weight:700;
+}}
+</style>
+</head>
+<body>
+<div class="ttl">{safe_zone_name}</div>
+<div id="map"></div>
+<script>
+const map = L.map('map').setView([{lat_center}, {lon_center}], 13);
+L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap'
+}}).addTo(map);
+
+const pts = [{coords}];
+const poly = L.polygon(pts, {{
+  color: '#00a3a3',
+  weight: 3,
+  fillOpacity: 0.25
+}}).addTo(map);
+
+map.fitBounds(poly.getBounds(), {{ padding: [20, 20] }});
+</script>
+</body>
+</html>
+"""
+            self.web_map.setHtml(html, QUrl("https://unpkg.com/"))
+            self.map_stack.setCurrentWidget(self.web_map)
+            self.lbl_map_mode.setText("地図表示: WEB")
+        except Exception:
+            self.map_stack.setCurrentWidget(self.map_widget)
+            self.lbl_map_mode.setText("地図表示: SIMPLE")
+            self.append_uiwarn("ベースマップ取得に失敗したため簡易地図表示に切替")
 
     def increment_zone_hit_count(self, zone_name: str) -> None:
         resolved_name = zone_name
