@@ -16,6 +16,7 @@ NIGHT_START_HOUR = 20
 MORNING_START_HOUR = 5
 MORNING_END_HOUR = 10
 NIGHT_CROSS_MAX_DIST_M = 300.0
+AUX_ZONE_NAMES = ("北方面", "南方面", "東方面", "西方面")
 
 
 @dataclass
@@ -192,6 +193,32 @@ def assign_point_to_zone(lat: float | None, lon: float | None, zone_def: Sequenc
     return None
 
 
+def _zone_bounds_and_center(zone_def: Sequence[PolygonZone]) -> tuple[tuple[float, float, float, float], tuple[float, float]] | None:
+    points = [pt for z in zone_def for pt in z.points]
+    if not points:
+        return None
+    lons = [p[0] for p in points]
+    lats = [p[1] for p in points]
+    min_lon, max_lon = min(lons), max(lons)
+    min_lat, max_lat = min(lats), max(lats)
+    center = ((min_lon + max_lon) / 2.0, (min_lat + max_lat) / 2.0)
+    return (min_lon, min_lat, max_lon, max_lat), center
+
+
+def assign_aux_direction(lat: float | None, lon: float | None, zone_def: Sequence[PolygonZone]) -> str | None:
+    if lat is None or lon is None:
+        return None
+    info = _zone_bounds_and_center(zone_def)
+    if info is None:
+        return None
+    (_min_lon, _min_lat, _max_lon, _max_lat), (cx, cy) = info
+    dx = lon - cx
+    dy = lat - cy
+    if abs(dy) >= abs(dx):
+        return "北方面" if dy >= 0 else "南方面"
+    return "東方面" if dx >= 0 else "西方面"
+
+
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371000.0
     p1 = math.radians(lat1)
@@ -278,7 +305,10 @@ def estimate_base_zone_with_fallback(records: list[Record], zones: Sequence[Poly
     fallback_zone = assign_point_to_zone(near_3.lat, near_3.lon, zones)
     if fallback_zone:
         return fallback_zone, "深夜3時近傍点で判定"
-    return "判定不可", "夜越し地点なし・深夜3時近傍もゾーン外"
+    aux = assign_aux_direction(near_3.lat, near_3.lon, zones)
+    if aux:
+        return aux, f"通常ゾーン外のため{aux}補助分類"
+    return "判定不可", "判定不可"
 
 
 def _detect_input_columns(headers: Sequence[str]) -> tuple[int | None, int | None, int | None, int | None]:
@@ -394,7 +424,14 @@ def estimate_for_file(csv_path: Path, zone_def: Sequence[PolygonZone]) -> tuple[
 
 def iter_csv_files(folder: Path, recursive: bool) -> list[Path]:
     gen = folder.rglob("*.csv") if recursive else folder.glob("*.csv")
-    return sorted(p for p in gen if p.is_file())
+    return sorted(
+        p
+        for p in gen
+        if p.is_file()
+        and p.name != "zoning_data.csv"
+        and not p.name.endswith("_拠点ゾーン.csv")
+        and not p.name.startswith(".")
+    )
 
 
 def run(args: argparse.Namespace) -> int:
@@ -425,24 +462,32 @@ def run(args: argparse.Namespace) -> int:
 
     out_rows: list[tuple[str, str, str]] = []
     hit_count = 0
+    aux_hit_count = 0
+    ng_count = 0
     for i, fp in enumerate(files, 1):
         try:
             op_id, base_zone, reason = estimate_for_file(fp, zone_def)
         except Exception:
             op_id, base_zone, reason = fp.stem, "判定不可", "読込失敗"
-            log(f"[ERROR] 読込失敗 / file={fp.name}")
+            ng_count += 1
         out_rows.append((op_id, base_zone, reason))
-        if base_zone != "判定不可":
+        if base_zone in AUX_ZONE_NAMES:
+            hit_count += 1
+            aux_hit_count += 1
+            log(f"[HIT_AUX] op_id={op_id} zone={base_zone} aux_count={aux_hit_count}")
+        elif base_zone != "判定不可":
             hit_count += 1
             log(f"[HIT] op_id={op_id} zone={base_zone} hit_count={hit_count}")
-        log(f"[PROGRESS] done={i} total={total} file={fp.name}")
+        else:
+            ng_count += 1
+        log(f"[PROGRESS] done={i} total={total}")
 
     with out_csv.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
         w.writerow(["op_id", "base_zone", "判定メモ"])
         w.writerows(out_rows)
 
-    log(f"[INFO] 完了 / 出力CSV={out_csv}")
+    log(f"[INFO] 解析完了 / 正常HIT={hit_count} / 判定不可={ng_count} / 出力CSV={out_csv}")
     return 0
 
 
