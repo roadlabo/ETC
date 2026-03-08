@@ -125,10 +125,17 @@ class SweepWidget(QWidget):
     def __init__(self):
         super().__init__()
         self.angle = 0
+        self._running = False
         self.setMinimumHeight(140)
 
     def tick(self):
+        if not self._running:
+            return
         self.angle = (self.angle + 7) % 360
+        self.update()
+
+    def set_running(self, running: bool):
+        self._running = running
         self.update()
 
     def paintEvent(self, _event):
@@ -138,7 +145,8 @@ class SweepWidget(QWidget):
         r = min(self.width(), self.height()) // 2 - 8
         p.setPen(QPen(QColor("#1b4f2f")))
         p.drawEllipse(c, r, r); p.drawEllipse(c, int(r * 0.66), int(r * 0.66)); p.drawEllipse(c, int(r * 0.33), int(r * 0.33))
-        p.setPen(QPen(QColor("#56d27f"), 2))
+        beam_color = QColor("#56d27f") if self._running else QColor("#2c6a45")
+        p.setPen(QPen(beam_color, 2))
         rad = self.angle * math.pi / 180
         p.drawLine(c.x(), c.y(), int(c.x() + r * math.cos(rad)), int(c.y() - r * math.sin(rad)))
 
@@ -184,13 +192,22 @@ class RealtimeSlotChart(QWidget):
             y = chart.bottom() - int(chart.height() * ratio)
             p.drawText(6, y - 8, 42, 16, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, label)
 
-        peak_i = max(range(48), key=lambda i: self.slot_counts[i])
+        am_counts = self.slot_counts[:24]
+        pm_counts = self.slot_counts[24:]
+        am_peak_i = max(range(24), key=lambda i: am_counts[i]) if max(am_counts) > 0 else None
+        pm_peak_local = max(range(24), key=lambda i: pm_counts[i]) if max(pm_counts) > 0 else None
+        pm_peak_i = 24 + pm_peak_local if pm_peak_local is not None else None
         bar_w = max(2, int(chart.width() / 48) - 1)
         for i, v in enumerate(self.slot_counts):
             h = int((v / mx) * (chart.height() - 2))
             x = chart.left() + int(i * chart.width() / 48)
             y = chart.bottom() - h
-            col = QColor("#11b3ff") if i != peak_i else QColor("#76ff8e")
+            if i == am_peak_i:
+                col = QColor("#76ff8e")
+            elif i == pm_peak_i:
+                col = QColor("#d8ff6a")
+            else:
+                col = QColor("#11b3ff")
             p.fillRect(x, y, bar_w, h, col)
 
         for idx, txt in [(0, "00:00"), (12, "06:00"), (24, "12:00"), (36, "18:00"), (47, "23:30")]:
@@ -200,6 +217,18 @@ class RealtimeSlotChart(QWidget):
 
         p.drawText(r.adjusted(8, 4, -8, -4), Qt.AlignmentFlag.AlignLeft, "縦軸: 存在トリップ数")
         p.drawText(r.adjusted(10, r.height() - 24, -10, -4), Qt.AlignmentFlag.AlignCenter, "時間帯（30分スロット）")
+
+        info_rect = r.adjusted(int(r.width() * 0.42), 4, -8, -6)
+        am_text = "午前ピーク: --:-- / 0"
+        if am_peak_i is not None:
+            hh, mm = divmod(am_peak_i * 30, 60)
+            am_text = f"午前ピーク: {hh:02d}:{mm:02d}-{hh:02d}:{mm + 29:02d} / {self.slot_counts[am_peak_i]:,}"
+        pm_text = "午後ピーク: --:-- / 0"
+        if pm_peak_i is not None:
+            hh, mm = divmod(pm_peak_i * 30, 60)
+            pm_text = f"午後ピーク: {hh:02d}:{mm:02d}-{hh:02d}:{mm + 29:02d} / {self.slot_counts[pm_peak_i]:,}"
+        p.setPen(QPen(QColor("#b8ffd6")))
+        p.drawText(info_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight, f"{am_text}\n{pm_text}")
 
 
 @dataclass
@@ -229,6 +258,11 @@ class MainWindow(QMainWindow):
         self.done_files = 0
         self.error_count = 0
         self.started_at = 0.0
+        self.finished_at = None
+        self._frozen_elapsed_sec = 0.0
+        self._run_completed = False
+        self._run_result = "idle"
+        self.run_state_text = "IDLE"
         self.last_output_csv: Path | None = None
 
         self._eta_done = 0; self._eta_total = 0; self._eta_last_calc_t = 0.0
@@ -238,7 +272,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self.timer = QTimer(self); self.timer.timeout.connect(self._tick); self.timer.start(1000)
-        self.anim_timer = QTimer(self); self.anim_timer.timeout.connect(self.sweep.tick); self.anim_timer.start(60)
+        self.anim_timer = QTimer(self); self.anim_timer.timeout.connect(self.sweep.tick)
 
     def _build_ui(self):
         cw = QWidget(); self.setCentralWidget(cw)
@@ -620,11 +654,20 @@ class MainWindow(QMainWindow):
         self.proc.readyReadStandardOutput.connect(self._on_stdout)
         self.proc.readyReadStandardError.connect(self._on_stderr)
         self.proc.finished.connect(self._on_finished)
+        self.proc.errorOccurred.connect(self._on_proc_error)
 
         self.done_files = 0; self.error_count = 0; self.slot_counts = [0] * 48; self.chart.clear(); self.last_output_csv = out
         self._eta_done = 0; self._eta_total = self.total_files; self._reset_eta_estimator()
+        self.finished_at = None
+        self._frozen_elapsed_sec = 0.0
+        self._run_completed = False
+        self._run_result = "running"
+        self.run_state_text = "RUNNING"
         self.lbl_status.setText("状態: RUNNING")
+        self.lbl_eta.setText("残り --:--:--")
         self.started_at = time.time()
+        self.sweep.set_running(True)
+        self.anim_timer.start(60)
         self._set_inputs_enabled(False)
         self.append_log("集計開始")
         self.append_log(f"対象メッシュ: {', '.join(self.available_meshes)}")
@@ -678,14 +721,48 @@ class MainWindow(QMainWindow):
 
     def _on_finished(self, code: int, _status):
         ok = code == 0
-        self.lbl_status.setText("状態: DONE" if ok else "状態: ERROR")
+        if ok:
+            self.run_state_text = "COMPLETED"
+        elif self.run_state_text != "ERROR":
+            self.run_state_text = "ERROR"
+        self._freeze_runtime_ui(completed=ok, errored=not ok)
+        self.lbl_status.setText("状態: COMPLETED" if ok else "状態: ERROR")
         self._set_inputs_enabled(True)
         self.btn_open_csv.setEnabled(ok and self.last_output_csv is not None and self.last_output_csv.exists())
         self.btn_open_folder.setEnabled(ok and self.last_output_csv is not None)
         if ok:
             self.append_log("🎉 おめでとうございます。存在トリップ集計完了です。")
-            self.lbl_eta.setText("残り 00:00:00")
         self._write_batch_log_file()
+        self.proc = None
+
+    def _on_proc_error(self, _err):
+        self.run_state_text = "ERROR"
+        self._freeze_runtime_ui(completed=False, errored=True)
+
+    def _freeze_runtime_ui(self, *, completed: bool = False, errored: bool = False):
+        if self._run_completed:
+            return
+        self.finished_at = time.time()
+        self._frozen_elapsed_sec = (self.finished_at - self.started_at) if self.started_at else 0.0
+        self._run_completed = True
+        self._run_result = "completed" if completed else ("error" if errored else "idle")
+
+        self.anim_timer.stop()
+        self.sweep.set_running(False)
+
+        self.lbl_elapsed.setText(f"経過 {self._fmt_hms(self._frozen_elapsed_sec)}")
+        if completed:
+            self.lbl_eta.setText("残り 00:00:00")
+            self.run_state_text = "COMPLETED"
+            self.lbl_status.setText("状態: COMPLETED")
+        elif errored:
+            self.lbl_eta.setText("残り --:--:--")
+            self.run_state_text = "ERROR"
+            self.lbl_status.setText("状態: ERROR")
+        else:
+            self.lbl_eta.setText("残り --:--:--")
+            self.run_state_text = "IDLE"
+            self.lbl_status.setText("状態: IDLE")
 
     def _update_progress_label(self):
         pct = (self.done_files / self.total_files * 100) if self.total_files else 0
@@ -746,17 +823,22 @@ class MainWindow(QMainWindow):
         self._eta_last_text = f"残り {self._fmt_hms(remain)}"; self.lbl_eta.setText(self._eta_last_text)
 
     def _tick(self):
-        elapsed = time.time() - self.started_at if self.started_at else 0
+        is_running = (not self._run_completed) and self.proc is not None and self.proc.state() != QProcess.ProcessState.NotRunning
+        if is_running and self.started_at:
+            elapsed = time.time() - self.started_at
+        else:
+            elapsed = self._frozen_elapsed_sec if self._run_completed else 0.0
         self.lbl_elapsed.setText(f"経過 {self._fmt_hms(elapsed)}")
-        if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
+        if is_running:
             self._update_eta()
         self._update_progress_label()
         mesh_n = len(self.available_meshes)
         meshes_text = ", ".join(self.available_meshes) if self.available_meshes else "-"
-        if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
+        if is_running:
             state_text = "RUNNING"
+            self.run_state_text = "RUNNING"
         else:
-            state_text = "DONE" if self.started_at and self.done_files >= self.total_files and self.total_files > 0 else "IDLE"
+            state_text = self.run_state_text
         self.lbl_telemetry.setText(
             f"CYBER TELEMETRY\n"
             f"対象CSV数: {self.total_files:,}\n"
@@ -795,7 +877,7 @@ class MainWindow(QMainWindow):
             return
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         out = self.last_output_csv.parent / f"02_batch_log_{stamp}.txt"
-        total_sec = time.time() - self.started_at if self.started_at else 0
+        total_sec = self._frozen_elapsed_sec if self._run_completed else (time.time() - self.started_at if self.started_at else 0)
         lines = [
             f"Input: {self.input_folder}",
             f"CSV数: {self.total_files:,}",
