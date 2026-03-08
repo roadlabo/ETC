@@ -167,7 +167,7 @@ class RealtimeSlotChart(QWidget):
         p = QPainter(self)
         r = self.rect()
         p.fillRect(r, QColor("#09120f"))
-        chart = r.adjusted(54, 18, -12, -58)
+        chart = r.adjusted(54, 18, -12, -64)
         if chart.width() <= 0 or chart.height() <= 0:
             return
 
@@ -200,23 +200,28 @@ class RealtimeSlotChart(QWidget):
                 col = QColor("#11b3ff")
             p.fillRect(x, y, bar_w, h, col)
 
-        for idx, txt in [(0, "00:00"), (12, "06:00"), (24, "12:00"), (36, "18:00"), (47, "23:30")]:
-            x = chart.left() + int(idx * chart.width() / 47)
+        axis_font = QFont(p.font())
+        axis_font.setPointSize(max(8, axis_font.pointSize() - 1))
+        p.setFont(axis_font)
+        for idx in range(0, 49, 4):
+            x = chart.left() + int(idx * chart.width() / 48)
+            txt = f"{idx // 2}:00"
             p.drawLine(x, chart.bottom(), x, chart.bottom() + 4)
-            p.drawText(x - 24, chart.bottom() + 8, 48, 18, Qt.AlignmentFlag.AlignCenter, txt)
+            text_w = 50 if idx in (0, 48) else 44
+            p.drawText(x - text_w // 2, chart.bottom() + 8, text_w, 18, Qt.AlignmentFlag.AlignCenter, txt)
 
-        p.drawText(r.adjusted(8, 4, -8, -4), Qt.AlignmentFlag.AlignLeft, "縦軸: 対象日該当レコード数")
+        p.drawText(r.adjusted(6, 1, -8, -4), Qt.AlignmentFlag.AlignLeft, "縦軸：時間帯別レコード数（日平均）")
         p.drawText(r.adjusted(10, r.height() - 24, -10, -4), Qt.AlignmentFlag.AlignCenter, "時間帯（30分スロット）")
 
         info_rect = r.adjusted(int(r.width() * 0.42), 4, -8, -6)
-        am_text = "午前ピーク（対象日該当レコード数）: --:-- / 0"
+        am_text = "午前ピーク（日平均レコード数）：--:-- / 0"
         if am_peak_i is not None:
             hh, mm = divmod(am_peak_i * 30, 60)
-            am_text = f"午前ピーク（対象日該当レコード数）: {hh:02d}:{mm:02d}-{hh:02d}:{mm + 29:02d} / {self.slot_counts[am_peak_i]:,}"
-        pm_text = "午後ピーク（対象日該当レコード数）: --:-- / 0"
+            am_text = f"午前ピーク（日平均レコード数）：{hh:02d}:{mm:02d}-{hh:02d}:{mm + 29:02d} / {self.slot_counts[am_peak_i]:,}"
+        pm_text = "午後ピーク（日平均レコード数）：--:-- / 0"
         if pm_peak_i is not None:
             hh, mm = divmod(pm_peak_i * 30, 60)
-            pm_text = f"午後ピーク（対象日該当レコード数）: {hh:02d}:{mm:02d}-{hh:02d}:{mm + 29:02d} / {self.slot_counts[pm_peak_i]:,}"
+            pm_text = f"午後ピーク（日平均レコード数）：{hh:02d}:{mm:02d}-{hh:02d}:{mm + 29:02d} / {self.slot_counts[pm_peak_i]:,}"
         p.setPen(QPen(QColor("#b8ffd6")))
         p.drawText(info_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight, f"{am_text}\n{pm_text}")
 
@@ -736,7 +741,7 @@ class MainWindow(QMainWindow):
         self.btn_open_csv.setEnabled(ok and self.last_output_csv is not None and self.last_output_csv.exists())
         self.btn_open_folder.setEnabled(ok and self.last_output_csv is not None)
         if ok:
-            self.append_log("🎉 おめでとうございます。存在トリップ集計完了です。")
+            self.append_log("🎉 おめでとうございます。存在トリップ集計完了です。\n再度対象日を変更して計算できます。（STEP2から）")
         self._write_batch_log_file()
         self.proc = None
 

@@ -128,14 +128,18 @@ def process_file(path: Path, target_dates: set[date]) -> dict[int, int]:
 
 def write_output_csv(
     output: Path,
-    slot_counts: list[int],
+    slot_counts_total: list[int],
+    target_day_count: int,
     dates_expr: str,
 ) -> None:
+    safe_target_day_count = max(1, target_day_count)
     with output.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["time_slot", "対象日該当レコード数", "対象日"])
+        w.writerow(["time_slot", "対象日該当レコード総数", "対象日該当レコード数（日平均）", "対象日"])
         for i in range(48):
-            w.writerow([slot_label(i), slot_counts[i], dates_expr])
+            total = slot_counts_total[i]
+            avg = int(total / safe_target_day_count)
+            w.writerow([slot_label(i), total, avg, dates_expr])
 
 
 def run(args: argparse.Namespace) -> int:
@@ -150,16 +154,18 @@ def run(args: argparse.Namespace) -> int:
         return 2
     files = iter_csv_files(input_dir, args.recursive)
     total = len(files)
+    target_day_count = max(1, len(target_dates))
     log_info(f"対象CSV数: {total}")
-    log_info(f"対象日数: {len(target_dates)}")
+    log_info(f"対象日数: {target_day_count}")
     log_info("集計条件: 対象日一致のみ（メッシュ条件なし）")
     log_info("集計方法: 全CSVの全行を走査し、対象日の日時を30分スロットへ累積")
-    log_info("SLOTCOUNT は対象日該当レコード数を表す")
+    log_info("表示値: 対象日数で割った日平均レコード数（整数止め）")
+    log_info("SLOTCOUNT は日平均レコード数を表す（内部では総数を保持）")
     if total <= 0:
         log_error("対象CSVが0件")
         return 2
 
-    slot_counts = [0] * 48
+    slot_counts_total = [0] * 48
     done = 0
     err = 0
     last_emit_t = 0.0
@@ -169,8 +175,10 @@ def run(args: argparse.Namespace) -> int:
             file_slot_counts = process_file(fp, target_dates)
             for s, c in file_slot_counts.items():
                 if 0 <= s < 48 and c > 0:
-                    slot_counts[s] += c
-                    print(f"SLOTCOUNT:{s}:{slot_counts[s]}", flush=True)
+                    slot_counts_total[s] += c
+            for s in range(48):
+                avg_count = int(slot_counts_total[s] / target_day_count)
+                print(f"SLOTCOUNT:{s}:{avg_count}", flush=True)
         except Exception as e:
             err += 1
             log_error(f"{fp.name}: {e}")
@@ -183,7 +191,7 @@ def run(args: argparse.Namespace) -> int:
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
-    write_output_csv(out, slot_counts, args.dates_compact or args.dates)
+    write_output_csv(out, slot_counts_total, target_day_count, args.dates_compact or args.dates)
 
     log_info(f"エラー数: {err}")
     log_info(f"出力CSV: {out}")
