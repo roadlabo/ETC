@@ -135,7 +135,7 @@ def write_output_csv(
     safe_target_day_count = max(1, target_day_count)
     with output.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["time_slot", "対象日該当レコード総数", "対象日該当レコード数（日平均）", "対象日"])
+        w.writerow(["time_slot", "対象日該当レコード総数", "日平均レコード数", "対象日"])
         for i in range(48):
             total = slot_counts_total[i]
             avg = int(total / safe_target_day_count)
