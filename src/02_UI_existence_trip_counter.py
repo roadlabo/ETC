@@ -476,6 +476,7 @@ class MainWindow(QMainWindow):
         self.calendar_outer_layout.setContentsMargins(0, 4, 0, 4); self.calendar_outer_layout.setSpacing(0)
         self.calendar_months_wrap = QWidget(); self.calendar_months_layout = QGridLayout(self.calendar_months_wrap)
         self.calendar_months_layout.setContentsMargins(0, 0, 0, 0); self.calendar_months_layout.setSpacing(15)
+        self.calendar_months_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.calendar_outer_layout.addWidget(self.calendar_months_wrap)
         self.scr = QScrollArea(); self.scr.setWidgetResizable(True); self.scr.setWidget(self.calendar_container); self.scr.setMinimumHeight(300)
         s2.addWidget(self.scr, 1)
@@ -523,7 +524,15 @@ class MainWindow(QMainWindow):
         self.btn_open_od_folder = QPushButton("保存先フォルダを開く（OD）"); self.btn_open_od_folder.clicked.connect(self.open_od_folder); self.btn_open_od_folder.setEnabled(False)
         bline.addWidget(self.btn_run_od); bline.addWidget(self.btn_open_matrix); bline.addWidget(self.btn_open_detail); bline.addWidget(self.btn_open_od_folder); bline.addStretch(1)
         s5.addLayout(bline)
-        self.chart_od = RealtimeODChart(); s5.addWidget(self.chart_od)
+
+        self.lbl_od_logic = QLabel(
+            "OD抽出ロジック：STEP2で選択した対象日のトリップのうち、指定した30分帯に存在するトリップを抽出します。\n"
+            "その30分帯内で最初に観測された位置をO、最後に観測された位置をDとして任意ゾーンへ割り当て、ゾーン単位OD表を作成します。\n"
+            "表示単位はトリップ/ピーク1時間（30分値を1時間換算）です。SUMO等へ投入する際は実測交通量に基づく拡大推計を行ってください。"
+        )
+        self.lbl_od_logic.setWordWrap(True)
+        self.lbl_od_logic.setStyleSheet("color:#b8ffd6;")
+        s5.addWidget(self.lbl_od_logic)
         step4_box = StepBox("STEP 4：ピーク30分OD抽出", s5w)
         step4_box.setMinimumHeight(155)
         left.addWidget(step4_box, 1)
@@ -540,7 +549,7 @@ class MainWindow(QMainWindow):
         right = QVBoxLayout(); body.addLayout(right, 2)
         panel = QFrame(); pv = QVBoxLayout(panel)
         self.lbl_status = QLabel("集計状態: IDLE / OD状態: IDLE")
-        self.lbl_progress = QLabel("集計進捗: 0/0（0.0%） / OD進捗: 0/0（0.0%）")
+        self.lbl_progress = QLabel("集計進捗: 0/0（0.0%）\nOD進捗: 0/0（0.0%）")
         self.lbl_elapsed = QLabel("経過 00:00:00"); self.lbl_elapsed.setFont(QFont("Consolas", 16, QFont.Weight.Bold))
         self.lbl_eta = QLabel("残り --:--:--"); self.lbl_eta.setFont(QFont("Consolas", 16, QFont.Weight.Bold))
         self.lbl_telemetry = QLabel("CYBER TELEMETRY"); self.lbl_telemetry.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -725,14 +734,17 @@ class MainWindow(QMainWindow):
         for i, ym in enumerate(sorted(by_month.keys())):
             y, m = ym
             box = QFrame(); box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed); lv = QVBoxLayout(box); lv.setContentsMargins(6, 6, 6, 6); lv.setSpacing(4)
+            lv.setAlignment(Qt.AlignmentFlag.AlignTop)
             lv.addWidget(QLabel(f"{y}年{m}月"))
-            grid = QGridLayout(); grid.setContentsMargins(0, 0, 0, 0); grid.setHorizontalSpacing(3); grid.setVerticalSpacing(3); lv.addLayout(grid)
+            grid = QGridLayout(); grid.setContentsMargins(0, 0, 0, 0); grid.setHorizontalSpacing(3); grid.setVerticalSpacing(3); grid.setAlignment(Qt.AlignmentFlag.AlignTop); lv.addLayout(grid)
+            for c in range(7):
+                grid.setColumnStretch(c, 1)
             for c, wd in enumerate(["月", "火", "水", "木", "金", "土", "日"]):
-                h = QLabel(wd); h.setAlignment(Qt.AlignmentFlag.AlignCenter); grid.addWidget(h, 0, c)
+                h = QLabel(wd); h.setAlignment(Qt.AlignmentFlag.AlignCenter); h.setMinimumWidth(28); grid.addWidget(h, 0, c)
             row = 1; col = date(y, m, 1).weekday()
             for d in sorted(by_month[ym]):
                 b = QPushButton(str(d.day)); b.setCheckable(True); b.setChecked(True); b.clicked.connect(lambda _=False, dd=d: self.toggle_day(dd))
-                b.setMinimumHeight(24)
+                b.setMinimumHeight(24); b.setMinimumWidth(28)
                 grid.addWidget(b, row, col); self.day_cells[d] = b; col += 1
                 if col >= 7: col = 0; row += 1
             self.calendar_months_layout.addWidget(box, i // cols, i % cols)
@@ -743,7 +755,11 @@ class MainWindow(QMainWindow):
     def _update_day_styles(self):
         for d, b in self.day_cells.items():
             on = d in self.selected_dates; b.setChecked(on)
-            b.setStyleSheet("background:#00aa66;border:1px solid #76ff8e;border-radius:7px;" if on else "background:#1a2320;border:1px solid #42544d;border-radius:7px;")
+            b.setStyleSheet(
+                "background:#00aa66;color:#ffffff;border:1px solid #76ff8e;border-radius:7px;"
+                if on
+                else "background:#16211d;color:#b8ffd6;border:1px solid #42544d;border-radius:7px;"
+            )
         self.lbl_date_stats.setText(f"選択中: {len(self.selected_dates)}日 / 全{len(self.available_dates)}日")
 
     def toggle_day(self, d: date):
@@ -940,7 +956,7 @@ class MainWindow(QMainWindow):
 
         self.last_output_matrix, self.last_output_detail, self.last_output_summary = out_m, out_d, out_s
         self.done_files_od = 0; self.od_error_count = 0; self.same_zone_ratio = 0.0; self.same_zone_count = 0; self.od_total_trips = 0
-        self.dir_counts = {"EAST": 0, "WEST": 0, "NORTH": 0, "SOUTH": 0}; self.od_counts = {}; self.chart_od.clear()
+        self.dir_counts = {"EAST": 0, "WEST": 0, "NORTH": 0, "SOUTH": 0}; self.od_counts = {}
         self.od_started_at = time.time(); self.is_od_running = True; self.od_state_text = "RUNNING"; self._set_app_state("OD_RUNNING"); self._set_inputs_enabled(False)
         self.append_log(f"[OD] 指定30分帯: {self.cmb_slot.currentText()}")
         self.proc_od.start()
@@ -953,11 +969,11 @@ class MainWindow(QMainWindow):
             if not t: continue
             m = RE_ODCOUNT.match(t)
             if m:
-                oz, dz, c = m.group(1), m.group(2), int(m.group(3)); self.od_counts[(oz, dz)] = c; self.chart_od.set_od_count(oz, dz, c)
+                oz, dz, c = m.group(1), m.group(2), int(m.group(3)); self.od_counts[(oz, dz)] = c
             m = RE_DIRCOUNT.match(t)
             if m: self.dir_counts[m.group(1)] = int(m.group(2))
             m = RE_SAME.search(t)
-            if m: self.same_zone_ratio = float(m.group(1)); self.chart_od.set_same_ratio(self.same_zone_ratio)
+            if m: self.same_zone_ratio = float(m.group(1))
             fd = RE_FILE_DONE.search(t)
             if fd: self.done_files_od = int(fd.group(1).replace(",", ""))
             if "[ERROR]" in t: self.od_error_count += 1
@@ -1018,8 +1034,11 @@ class MainWindow(QMainWindow):
         self.lbl_eta.setText(f"残り {eta}")
         count_pct = (self.done_files_count / self.total_files * 100) if self.total_files else 0
         od_pct = (self.done_files_od / self.total_files * 100) if self.total_files else 0
-        self.lbl_progress.setText(f"集計進捗: {self.done_files_count:,}/{self.total_files:,}（{count_pct:.1f}%） / OD進捗: {self.done_files_od:,}/{self.total_files:,}（{od_pct:.1f}%）")
-        self.lbl_status.setText(f"集計状態: {self.count_state_text} / OD状態: {self.od_state_text}")
+        self.lbl_progress.setText(
+            f"集計進捗: {self.done_files_count:,}/{self.total_files:,}（{count_pct:.1f}%）\n"
+            f"OD進捗: {self.done_files_od:,}/{self.total_files:,}（{od_pct:.1f}%）"
+        )
+        self.lbl_status.setText(f"集計状態: {self.count_state_text}\nOD状態: {self.od_state_text}")
         meshes_text = ", ".join(self.available_meshes) if self.available_meshes else "-"
         self.lbl_telemetry.setText(
             f"CYBER TELEMETRY\n"
