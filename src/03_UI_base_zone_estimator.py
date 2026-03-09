@@ -897,7 +897,7 @@ const displayGroup = L.featureGroup().addTo(map);
 // fitBounds用グループ（赤枠ゾーンだけを入れる）
 const zonesGroup = L.featureGroup().addTo(map);
 
-// 青扇形（穴あき版にしている場合は sectorWithHoles を使用）
+// 扇形の中から指定ゾーンを穴抜き
 const sector = [{sector_js}];
 const sectorWithHoles = [sector, ...zones];
 L.polygon(sectorWithHoles, {{
