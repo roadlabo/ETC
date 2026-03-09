@@ -873,7 +873,7 @@ html, body, #map {{ height:100%; margin:0; background:#fff; }}
 </head>
 <body>
 <div class=\"ttl\">{safe_zone_name}</div>
-<div class=\"lg\">赤線: 指定ゾーニング<br/>青塗: 方面補助分類</div>
+<div class=\"lg\">赤線: 指定ゾーニング<br/>青塗: 指定ゾーン外の方面補助分類</div>
 <div id=\"map\"></div>
 <script>
 const map = L.map('map').setView([{center_point[1]}, {center_point[0]}], 12);
@@ -884,12 +884,24 @@ L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
 
 const zones = [{all_zone_js}];
 const group = L.featureGroup().addTo(map);
+const sector = [{sector_js}];
+const sectorWithHoles = [sector, ...zones];
+L.polygon(sectorWithHoles, {{
+  color: '#1d4ed8',
+  weight: 3,
+  fillColor: '#1d4ed8',
+  fillOpacity: 0.35,
+  interactive: false
+}}).addTo(group);
+
 for (const z of zones) {{
-  L.polygon(z, {{ color: '#cc1f1f', weight: 2, fillOpacity: 0.02 }}).addTo(group);
+  L.polygon(z, {{
+    color: '#cc1f1f',
+    weight: 2,
+    fill: false
+  }}).addTo(group);
 }}
 
-const sector = [{sector_js}];
-L.polygon(sector, {{ color: '#1d4ed8', weight: 3, fillColor: '#1d4ed8', fillOpacity: 0.35 }}).addTo(group);
 L.circleMarker([{center_point[1]}, {center_point[0]}], {{ color:'#1d4ed8', fillColor:'#1d4ed8', radius:5 }}).addTo(group).bindTooltip('中心', {{permanent:true, direction:'right'}});
 
 map.fitBounds(group.getBounds(), {{ padding: [20, 20] }});
