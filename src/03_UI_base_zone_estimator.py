@@ -701,7 +701,14 @@ class MainWindow(QMainWindow):
         min_lon, max_lon, min_lat, max_lat = bounds
         center_lon = (min_lon + max_lon) / 2.0
         center_lat = (min_lat + max_lat) / 2.0
-        radius = max(max_lon - min_lon, max_lat - min_lat) * 0.9
+
+        # 扇形は見た目用に広めに取り、約100km相当を基本半径とする
+        # 緯度1度 ≒ 111km を基準に、まず緯度方向で約100km = 0.90度相当
+        radius_km = 100.0
+        radius_deg = radius_km / 111.0
+
+        # 念のため、指定ゾーン群が小さすぎても扇形が十分大きく見えるよう固定値優先
+        radius = radius_deg
         angle_map = {
             "東方面": (-45.0, 45.0),
             "北方面": (45.0, 135.0),
@@ -883,7 +890,14 @@ L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
 }}).addTo(map);
 
 const zones = [{all_zone_js}];
-const group = L.featureGroup().addTo(map);
+
+// 表示用グループ
+const displayGroup = L.featureGroup().addTo(map);
+
+// fitBounds用グループ（赤枠ゾーンだけを入れる）
+const zonesGroup = L.featureGroup().addTo(map);
+
+// 青扇形（穴あき版にしている場合は sectorWithHoles を使用）
 const sector = [{sector_js}];
 const sectorWithHoles = [sector, ...zones];
 L.polygon(sectorWithHoles, {{
@@ -892,19 +906,35 @@ L.polygon(sectorWithHoles, {{
   fillColor: '#1d4ed8',
   fillOpacity: 0.35,
   interactive: false
-}}).addTo(group);
+}}).addTo(displayGroup);
 
+// 赤枠ゾーン
 for (const z of zones) {{
   L.polygon(z, {{
     color: '#cc1f1f',
     weight: 2,
     fill: false
-  }}).addTo(group);
+  }}).addTo(displayGroup);
+
+  // fitBounds判定は赤枠だけ
+  L.polygon(z, {{
+    color: '#cc1f1f',
+    weight: 0,
+    opacity: 0,
+    fillOpacity: 0
+  }}).addTo(zonesGroup);
 }}
 
-L.circleMarker([{center_point[1]}, {center_point[0]}], {{ color:'#1d4ed8', fillColor:'#1d4ed8', radius:5 }}).addTo(group).bindTooltip('中心', {{permanent:true, direction:'right'}});
+L.circleMarker([{center_point[1]}, {center_point[0]}], {{
+  color:'#1d4ed8',
+  fillColor:'#1d4ed8',
+  radius:5
+}}).addTo(displayGroup).bindTooltip('中心', {{permanent:true, direction:'right'}});
 
-map.fitBounds(group.getBounds(), {{ padding: [20, 20] }});
+// 地図縮尺は指定メッシュ全体に合わせる
+if (zonesGroup.getLayers().length > 0) {{
+  map.fitBounds(zonesGroup.getBounds(), {{ padding: [20, 20] }});
+}}
 </script>
 </body>
 </html>
