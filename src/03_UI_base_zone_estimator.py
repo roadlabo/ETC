@@ -459,7 +459,7 @@ class MainWindow(QMainWindow):
 
         logic = QFrame(); logic.setObjectName("logicCard")
         ll = QVBoxLayout(logic); ll.setContentsMargins(8, 8, 8, 8); ll.setSpacing(4)
-        ll.addWidget(QLabel("JUDGMENT LOGIC", objectName="panelTitle"))
+        ll.addWidget(QLabel("JUDGEMENT LOGIC", objectName="panelTitle"))
         logic_text = (
             "【判定コンセプト】\n"
             "このソフトは、運行IDごとの軌跡から「拠点らしい場所」を推定します。\n"
@@ -473,11 +473,27 @@ class MainWindow(QMainWindow):
             "【補助分類】\n"
             "通常ゾーンに入らない場合は、全体位置関係から東西南北の補助分類を行います。"
         )
-        lbl_logic = QLabel(logic_text)
-        lbl_logic.setWordWrap(True)
-        lbl_logic.setStyleSheet("font-size:11px;color:#baf7de;")
-        ll.addWidget(lbl_logic)
-        rf.addWidget(logic)
+        self.logic_scroll = QScrollArea()
+        self.logic_scroll.setWidgetResizable(True)
+        self.logic_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.logic_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.logic_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        logic_inner = QWidget()
+        logic_inner_layout = QVBoxLayout(logic_inner)
+        logic_inner_layout.setContentsMargins(4, 4, 4, 4)
+        logic_inner_layout.setSpacing(0)
+
+        self.logic_label = QLabel(logic_text)
+        self.logic_label.setWordWrap(True)
+        self.logic_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.logic_label.setStyleSheet("font-size:11px;color:#baf7de; line-height:1.35;")
+        logic_inner_layout.addWidget(self.logic_label)
+        logic_inner_layout.addStretch(1)
+
+        self.logic_scroll.setWidget(logic_inner)
+        ll.addWidget(self.logic_scroll, 1)
+        rf.addWidget(logic, 1)
         rf.addStretch(1)
 
         middle.addWidget(left_frame)
@@ -514,6 +530,10 @@ class MainWindow(QMainWindow):
             QLabel#zoneTitle { font-size:16px; font-weight:900; color:#e8fff6; }
             QPushButton#zoneCard[selected="true"] QLabel#zoneTitle { color:#fff58a; }
             QPlainTextEdit { background:#0a120f; border:1px solid #1f4a38; }
+            QScrollArea { background:#0d1714; }
+            QScrollBar:vertical { background:#08110d; width:8px; margin:0; }
+            QScrollBar::handle:vertical { background:#2fa182; border-radius:4px; min-height:24px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
             """
         )
 
