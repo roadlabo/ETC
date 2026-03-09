@@ -273,6 +273,21 @@ class ZoneMapWidget(QWidget):
             p.setBrush(QColor(0, 170, 170, 80))
             p.drawPolygon(poly)
         else:
+            sector_poly = QPolygonF()
+            for lon, lat in self.aux_sector_polygon:
+                sector_poly.append(self._map_point(lon, lat, cx, cy, scale))
+            p.setPen(QPen(QColor("#1d4ed8"), 3))
+            p.setBrush(QColor(29, 78, 216, 90))
+            p.drawPolygon(sector_poly)
+
+            for zone_poly in self.all_zone_polygons:
+                poly = QPolygonF()
+                for lon, lat in zone_poly:
+                    poly.append(self._map_point(lon, lat, cx, cy, scale))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor("#ffffff"))
+                p.drawPolygon(poly)
+
             for zone_poly in self.all_zone_polygons:
                 poly = QPolygonF()
                 for lon, lat in zone_poly:
@@ -281,19 +296,11 @@ class ZoneMapWidget(QWidget):
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawPolygon(poly)
 
-            sector_poly = QPolygonF()
-            for lon, lat in self.aux_sector_polygon:
-                sector_poly.append(self._map_point(lon, lat, cx, cy, scale))
-            p.setPen(QPen(QColor("#1d4ed8"), 3))
-            p.setBrush(QColor(29, 78, 216, 90))
-            p.drawPolygon(sector_poly)
-
             if self.center_point:
                 cp = self._map_point(self.center_point[0], self.center_point[1], cx, cy, scale)
                 p.setPen(QPen(QColor("#0f172a"), 1))
                 p.setBrush(QColor("#1d4ed8"))
                 p.drawEllipse(cp, 4, 4)
-                p.drawText(int(cp.x()) + 8, int(cp.y()) - 8, "中心")
 
             p.setPen(QPen(QColor("#333333"), 1))
             p.setBrush(QColor(255, 255, 255, 220))
@@ -301,7 +308,7 @@ class ZoneMapWidget(QWidget):
             p.setPen(QPen(QColor("#cc1f1f"), 1))
             p.drawText(self.width() - 230, 30, "赤線: 指定ゾーニング")
             p.setPen(QPen(QColor("#1d4ed8"), 1))
-            p.drawText(self.width() - 230, 50, "青塗: 方面補助分類")
+            p.drawText(self.width() - 230, 50, "青塗: 指定ゾーン外の方面補助分類")
 
         p.setPen(QPen(QColor("#333333"), 1))
         font = p.font()
@@ -918,13 +925,12 @@ const zones = [{all_zone_js}];
 // 表示用グループ
 const displayGroup = L.featureGroup().addTo(map);
 
-// fitBounds用グループ（赤枠ゾーンだけを入れる）
+// fitBounds用グループ（赤枠ゾーンだけ）
 const zonesGroup = L.featureGroup().addTo(map);
 
-// 扇形の中から指定ゾーンを穴抜き
+// 青い方面補助分類エリア
 const sector = [{sector_js}];
-const sectorWithHoles = [sector, ...zones];
-L.polygon(sectorWithHoles, {{
+L.polygon(sector, {{
   color: '#1d4ed8',
   weight: 3,
   fillColor: '#1d4ed8',
@@ -932,7 +938,19 @@ L.polygon(sectorWithHoles, {{
   interactive: false
 }}).addTo(displayGroup);
 
-// 赤枠ゾーン
+// 指定ゾーン内は白マスクで塗りを消す
+for (const z of zones) {{
+  L.polygon(z, {{
+    color: '#ffffff',
+    weight: 0,
+    fill: true,
+    fillColor: '#ffffff',
+    fillOpacity: 1.0,
+    interactive: false
+  }}).addTo(displayGroup);
+}}
+
+// 赤枠ゾーンを最前面に描く
 for (const z of zones) {{
   L.polygon(z, {{
     color: '#cc1f1f',
@@ -940,7 +958,7 @@ for (const z of zones) {{
     fill: false
   }}).addTo(displayGroup);
 
-  // fitBounds判定は赤枠だけ
+  // fitBounds用
   L.polygon(z, {{
     color: '#cc1f1f',
     weight: 0,
@@ -953,9 +971,9 @@ L.circleMarker([{center_point[1]}, {center_point[0]}], {{
   color:'#1d4ed8',
   fillColor:'#1d4ed8',
   radius:5
-}}).addTo(displayGroup).bindTooltip('中心', {{permanent:true, direction:'right'}});
+}}).addTo(displayGroup);
 
-// 地図縮尺は指定メッシュ全体に合わせる
+// 地図縮尺は赤枠ゾーン全体に合わせる
 if (zonesGroup.getLayers().length > 0) {{
   map.fitBounds(zonesGroup.getBounds(), {{ padding: [20, 20] }});
 }}
