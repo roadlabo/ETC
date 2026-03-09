@@ -4,13 +4,14 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import folium
 import numpy as np
 import pandas as pd
 from folium.plugins import HeatMap
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import Qt, QTimer, QUrl
 from PyQt6.QtGui import QFont
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import (
@@ -67,6 +68,7 @@ class ODHeatmapViewer(QMainWindow):
         self.center_lon: float = 139.767125
         self.current_zoom: int = DEFAULTS["map_zoom"]
         self.map_loaded: bool = False
+        self.ui_render_deadline: float = 0.0
 
         self.build_ui()
         self.set_style()
@@ -146,7 +148,8 @@ class ODHeatmapViewer(QMainWindow):
             "1) CSVを読み込み\n"
             "2) Origin / Destination を選択\n"
             "3) パラメータ調整後に再描画\n"
-            "4) PNG / HTML で保存"
+            "4) UI内表示 / 外部ブラウザ表示 を選択\n"
+            "5) PNG / HTML で保存"
         ))
 
         for grp in [input_group, mode_group, setting_group, action_group, guide_group]:
@@ -158,9 +161,18 @@ class ODHeatmapViewer(QMainWindow):
         title = QLabel("41 OD Heatmap Viewer")
         title.setObjectName("panelTitle")
         title.setFont(QFont("Segoe UI", 14, QFont.Weight.DemiBold))
+        view_mode_layout = QHBoxLayout()
+        self.view_mode_combo = QComboBox()
+        self.view_mode_combo.addItems(["UI内表示", "外部ブラウザ表示"])
+        view_mode_layout.addWidget(QLabel("表示モード"))
+        view_mode_layout.addWidget(self.view_mode_combo, 1)
+
+        self.view_hint_label = QLabel("")
         self.web_view = QWebEngineView()
         self.web_view.loadFinished.connect(self._on_map_loaded)
         right_layout.addWidget(title)
+        right_layout.addLayout(view_mode_layout)
+        right_layout.addWidget(self.view_hint_label)
         right_layout.addWidget(self.web_view, 1)
 
         splitter.addWidget(left)
@@ -207,8 +219,69 @@ class ODHeatmapViewer(QMainWindow):
         return QGroupBox(title)
 
     def _on_map_loaded(self, ok: bool) -> None:
-        self.map_loaded = ok
         print(f"[INFO] map loaded: {ok}")
+        if not ok:
+            self.map_loaded = False
+            self.view_hint_label.setText("UI内表示に失敗したため、外部ブラウザで開きます。")
+            self.statusBar().showMessage("UI内表示失敗 → 外部ブラウザへフォールバック")
+            QTimer.singleShot(100, self.open_in_external_browser)
+            return
+
+        QTimer.singleShot(1200, self._verify_leaflet_map_visible)
+
+    def _verify_leaflet_map_visible(self) -> None:
+        if self.view_mode_combo.currentText() != "UI内表示":
+            return
+
+        js = """
+(function() {
+  try {
+    if (!window.__od_heatmap_map) return "no-map";
+    var c = window.__od_heatmap_map.getCenter();
+    var z = window.__od_heatmap_map.getZoom();
+    var tiles = document.querySelectorAll('.leaflet-tile');
+    return JSON.stringify({
+      status: "ok",
+      lat: c.lat,
+      lng: c.lng,
+      zoom: z,
+      tileCount: tiles.length
+    });
+  } catch (e) {
+    return "error:" + e;
+  }
+})();
+"""
+
+        def callback(result: object) -> None:
+            tile_count = 0
+            if isinstance(result, str):
+                try:
+                    parsed = json.loads(result)
+                    tile_count = int(parsed.get("tileCount", 0))
+                except Exception:
+                    tile_count = 0
+
+            if tile_count >= 1:
+                self.map_loaded = True
+                self.view_hint_label.setText("")
+                self.statusBar().showMessage("UI内表示で描画完了")
+                return
+
+            self.map_loaded = False
+            self.view_hint_label.setText("UI内表示が不安定なため、外部ブラウザで開きました。")
+            self.statusBar().showMessage("UI表示不安定 → 外部ブラウザへフォールバック")
+            self.open_in_external_browser()
+
+        self.web_view.page().runJavaScript(js, callback)
+
+    def open_in_external_browser(self) -> None:
+        if not TEMP_HTML_PATH.exists():
+            QMessageBox.warning(self, "外部ブラウザ表示失敗", "HTMLがまだ生成されていません。")
+            return
+        import webbrowser
+
+        webbrowser.open(TEMP_HTML_PATH.resolve().as_uri())
 
     def browse_csv(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "CSV選択", "", "CSV Files (*.csv);;All Files (*)")
@@ -347,7 +420,13 @@ class ODHeatmapViewer(QMainWindow):
         agg = self.aggregate_points(points)
         settings = self.map_settings()
 
-        m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom, control_scale=True, tiles="CartoDB positron")
+        m = folium.Map(
+            location=[center_lat, center_lon],
+            zoom_start=zoom,
+            control_scale=True,
+            tiles="https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png",
+            attr="国土地理院",
+        )
 
         if not agg.empty:
             heat_data = [
@@ -389,8 +468,21 @@ class ODHeatmapViewer(QMainWindow):
             html = self.build_map_html(mode, center_lat, center_lon, zoom)
             TEMP_DIR.mkdir(parents=True, exist_ok=True)
             TEMP_HTML_PATH.write_text(html, encoding="utf-8")
-            self.web_view.setUrl(QUrl.fromLocalFile(str(TEMP_HTML_PATH.resolve())))
             self.center_lat, self.center_lon, self.current_zoom = center_lat, center_lon, zoom
+
+            if self.view_mode_combo.currentText() == "外部ブラウザ表示":
+                self.web_view.hide()
+                self.view_hint_label.setText("外部ブラウザで表示しました。パラメータ調整後は再描画してください。")
+                self.map_loaded = False
+                self.open_in_external_browser()
+                self.statusBar().showMessage("外部ブラウザで再描画完了")
+                return
+
+            self.web_view.show()
+            self.view_hint_label.setText("UI内表示で描画中…")
+            self.map_loaded = False
+            self.ui_render_deadline = time.monotonic() + 4.0
+            self.web_view.setUrl(QUrl.fromLocalFile(str(TEMP_HTML_PATH.resolve())))
             self.statusBar().showMessage(f"再描画完了: {mode} / zoom={zoom}")
             print(f"[INFO] 再描画完了: mode={mode}, center=({center_lat:.6f},{center_lon:.6f}), zoom={zoom}")
         except Exception as e:
@@ -402,19 +494,24 @@ class ODHeatmapViewer(QMainWindow):
             QMessageBox.warning(self, "再描画失敗", "CSVを先に読み込んでください。")
             return
 
+        if self.view_mode_combo.currentText() == "外部ブラウザ表示":
+            self.render_map(self.center_lat, self.center_lon, self.current_zoom)
+            return
+
         js = "window.__od_heatmap_get_state ? window.__od_heatmap_get_state() : null;"
 
         def callback(result: object) -> None:
             lat, lon, zoom = self.center_lat, self.center_lon, self.current_zoom
-            if isinstance(result, str) and result:
-                try:
+            try:
+                if isinstance(result, str) and result:
                     state = json.loads(result)
                     lat = float(state.get("lat", lat))
                     lon = float(state.get("lng", lon))
                     zoom = int(state.get("zoom", zoom))
-                except Exception:
-                    pass
-            self.render_map(lat, lon, zoom)
+            except Exception:
+                pass
+            finally:
+                self.render_map(lat, lon, zoom)
 
         self.web_view.page().runJavaScript(js, callback)
 
@@ -422,6 +519,13 @@ class ODHeatmapViewer(QMainWindow):
         if self.df_valid is None:
             print("[WARN] PNG保存失敗: CSV未読込")
             QMessageBox.warning(self, "PNG保存失敗", "CSVを先に読み込んでください。")
+            return
+        if self.view_mode_combo.currentText() == "外部ブラウザ表示":
+            QMessageBox.information(
+                self,
+                "PNG保存不可",
+                "外部ブラウザ表示モードではUIからPNG保存できません。UI内表示に切り替えて再描画してください。",
+            )
             return
         if not self.map_loaded:
             print("[WARN] PNG保存失敗: 地図未描画")
