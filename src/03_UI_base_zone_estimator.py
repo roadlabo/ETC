@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -45,6 +46,10 @@ RE_HIT = re.compile(r"\[HIT\]\s+op_id=(\S+)\s+zone=(.+?)\s+hit_count=(\d+)")
 RE_HIT_AUX = re.compile(r"\[HIT_AUX\]\s+op_id=(\S+)\s+zone=(.+?)\s+aux_count=(\d+)")
 RE_ZONE_COUNT = re.compile(r"\[INFO\]\s+有効ゾーン数:\s*(\d+)")
 AUX_ZONE_NAMES = ("北方面", "南方面", "東方面", "西方面")
+
+DEFAULT_CENTER_LON = 134.003809
+DEFAULT_CENTER_LAT = 35.064685
+DEFAULT_CENTER_NAME = "津山城（既定値）"
 
 
 def _normalize_log_line(text: str) -> str:
@@ -363,8 +368,12 @@ class MainWindow(QMainWindow):
         self.is_running = False
         self.selected_zone_name = ""
         self._debug_logger = logging.getLogger("zone_estimator_ui")
+        self.center_lon = DEFAULT_CENTER_LON
+        self.center_lat = DEFAULT_CENTER_LAT
+        self.center_name = DEFAULT_CENTER_NAME
 
         self._build_ui()
+        self._update_center_labels()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
         self.timer.start(500)
@@ -406,6 +415,21 @@ class MainWindow(QMainWindow):
                 self.lbl_zoning = QLabel("未選択"); self.lbl_zoning.setWordWrap(True)
                 r.addWidget(self.btn_pick_zoning); r.addWidget(self.lbl_zoning, 1)
                 bl.addLayout(r)
+
+                bl.addWidget(QLabel("[中心点]"))
+                self.lbl_center_name = QLabel()
+                self.lbl_center_name.setWordWrap(True)
+                bl.addWidget(self.lbl_center_name)
+
+                center_btn_row = QHBoxLayout()
+                self.btn_set_center = QPushButton("中心点指定")
+                self.btn_reset_center = QPushButton("既定値")
+                self.btn_set_center.clicked.connect(self.set_center)
+                self.btn_reset_center.clicked.connect(self.reset_center)
+                center_btn_row.addWidget(self.btn_set_center)
+                center_btn_row.addWidget(self.btn_reset_center)
+                center_btn_row.addStretch(1)
+                bl.addLayout(center_btn_row)
             elif i == 2:
                 self.lbl_output = QLabel("未設定"); self.lbl_output.setWordWrap(True)
                 bl.addWidget(self.lbl_output)
@@ -698,9 +722,9 @@ class MainWindow(QMainWindow):
         bounds = self.get_global_zone_bounds()
         if not bounds:
             return [], (0.0, 0.0)
-        min_lon, max_lon, min_lat, max_lat = bounds
-        center_lon = (min_lon + max_lon) / 2.0
-        center_lat = (min_lat + max_lat) / 2.0
+        _min_lon, _max_lon, _min_lat, _max_lat = bounds
+        center_lon = self.center_lon
+        center_lat = self.center_lat
 
         # 扇形は見た目用に広めに取り、約100km相当を基本半径とする
         # 緯度1度 ≒ 111km を基準に、まず緯度方向で約100km = 0.90度相当
@@ -1081,6 +1105,42 @@ if (zonesGroup.getLayers().length > 0) {{
             elif line.startswith("[ERROR]"):
                 self.append_uierror(line[7:].strip())
             self._process_log_line(line)
+
+    def _update_center_labels(self):
+        self.lbl_center_name.setText(
+            f"{self.center_name} ({self.center_lon:.6f}, {self.center_lat:.6f})"
+        )
+
+    def reset_center(self):
+        self.center_lon = DEFAULT_CENTER_LON
+        self.center_lat = DEFAULT_CENTER_LAT
+        self.center_name = DEFAULT_CENTER_NAME
+        self._update_center_labels()
+
+    def set_center(self):
+        lon, ok1 = QInputDialog.getDouble(
+            self, "中心経度", "経度:", self.center_lon, -180, 180, 6
+        )
+        if not ok1:
+            return
+
+        lat, ok2 = QInputDialog.getDouble(
+            self, "中心緯度", "緯度:", self.center_lat, -90, 90, 6
+        )
+        if not ok2:
+            return
+
+        name, ok3 = QInputDialog.getText(
+            self, "中心名称", "名称:", text=self.center_name
+        )
+        if not ok3:
+            return
+
+        self.center_lon = lon
+        self.center_lat = lat
+        self.center_name = name
+
+        self._update_center_labels()
 
     def _tick(self) -> None:
         self.radar.tick()
