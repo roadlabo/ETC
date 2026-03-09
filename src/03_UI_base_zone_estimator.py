@@ -793,9 +793,10 @@ class MainWindow(QMainWindow):
 <style>
 html, body, #map {{ height:100%; margin:0; background:#fff; }}
 .ttl {{
-  position:absolute; z-index:1000; left:8px; top:8px;
+  position:absolute; z-index:1000; left:8px; bottom:8px;
   background:rgba(255,255,255,0.92);
   padding:6px 10px; border-radius:6px; font-weight:700;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.25);
 }}
 </style>
 </head>
@@ -859,8 +860,10 @@ map.fitBounds(poly.getBounds(), {{ padding: [20, 20] }});
 <style>
 html, body, #map {{ height:100%; margin:0; background:#fff; }}
 .ttl {{
-  position:absolute; z-index:1000; left:8px; top:8px;
-  background:rgba(255,255,255,0.92); padding:6px 10px; border-radius:6px; font-weight:700;
+  position:absolute; z-index:1000; left:8px; bottom:8px;
+  background:rgba(255,255,255,0.92);
+  padding:6px 10px; border-radius:6px; font-weight:700;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.25);
 }}
 .lg {{
   position:absolute; z-index:1000; right:8px; top:8px;
