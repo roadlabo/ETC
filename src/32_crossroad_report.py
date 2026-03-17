@@ -89,34 +89,30 @@ def parse_center_datetime(val) -> datetime | None:
     return None
 
 
-def floor_to_30min(dt: datetime) -> datetime:
-    return dt.replace(minute=(dt.minute // 30) * 30, second=0, microsecond=0)
+def get_slot_idx(dt: datetime) -> int:
+    return dt.hour * 2 + (dt.minute // 30)
 
 
-def format_halfhour_label(slot_start: datetime) -> str:
-    slot_end = slot_start + pd.Timedelta(minutes=30)
-    return f"{slot_start.strftime('%H:%M')}～{slot_end.strftime('%H:%M')}"
+def format_slot_label(slot_idx: int) -> str:
+    start_total_min = slot_idx * 30
+    end_total_min = start_total_min + 30
+    start_h, start_m = divmod(start_total_min, 60)
+    end_h, end_m = divmod(end_total_min, 60)
+    return f"{start_h}:{start_m:02d}～{end_h}:{end_m:02d}"
 
 
-def shorten_halfhour_label(label: str | None) -> str:
-    if not label:
+def format_slot_short_label(slot_idx: int | None) -> str:
+    if slot_idx is None:
         return "-"
-    start = str(label).split("～", 1)[0].strip()
-    if not start:
-        return "-"
-    if re.fullmatch(r"\d{2}:\d{2}", start) and start.startswith("0"):
-        start = start[1:]
-    return f"{start}～"
+    start_total_min = slot_idx * 30
+    start_h, start_m = divmod(start_total_min, 60)
+    return f"{start_h}:{start_m:02d}～"
 
 
 def build_fixed_halfhour_slots() -> list[dict]:
     slots: list[dict] = []
     for slot_idx in range(48):
-        start_total_min = slot_idx * 30
-        end_total_min = start_total_min + 30
-        start_h, start_m = divmod(start_total_min, 60)
-        end_h, end_m = divmod(end_total_min, 60)
-        label = f"{start_h}:{start_m:02d}～{end_h}:{end_m:02d}"
+        label = format_slot_label(slot_idx)
         slots.append({"slot_idx": slot_idx, "label": label})
     return slots
 
@@ -218,7 +214,7 @@ class _ExcelReportHelper:
             total_halfhour_delay_s = sum(item["delay_total_s"] for item in halfhour_summary)
             peak_slot = max(
                 halfhour_summary,
-                key=lambda item: (item["delay_total_s"], -item["slot_start"].timestamp()),
+                key=lambda item: (item["delay_total_s"], -item["slot_idx"]),
                 default=None,
             )
             ok_count = len(ok_subset)
@@ -250,6 +246,7 @@ class _ExcelReportHelper:
                     "time_per_day": time_per_day,
                     "halfhour_summary": halfhour_summary,
                     "total_halfhour_delay_s": total_halfhour_delay_s,
+                    "peak_slot_idx": peak_slot["slot_idx"] if peak_slot else None,
                     "peak_slot_label": peak_slot["slot_label"] if peak_slot else None,
                     "peak_slot_delay_s": peak_slot["delay_total_s"] if peak_slot else 0.0,
                     "peak_slot_delay_min": (peak_slot["delay_total_s"] / 60.0) if peak_slot else 0.0,
@@ -266,7 +263,7 @@ class _ExcelReportHelper:
         return combos
 
     def _build_halfhour_summary(self, ok_subset: pd.DataFrame, total_days: int) -> list[dict]:
-        slot_map: dict[datetime, dict] = {}
+        slot_map: dict[int, dict] = {}
         for row in ok_subset[["time", "delay_s"]].itertuples(index=False):
             delay_s = pd.to_numeric(row.delay_s, errors="coerce")
             if pd.isna(delay_s):
@@ -274,19 +271,20 @@ class _ExcelReportHelper:
             dt = parse_center_datetime(row.time)
             if dt is None:
                 continue
-            slot_start = floor_to_30min(dt)
-            slot = slot_map.setdefault(slot_start, {"delay_total_s": 0.0, "count": 0})
+            slot_idx = get_slot_idx(dt)
+            slot = slot_map.setdefault(slot_idx, {"delay_total_s": 0.0, "count": 0})
             slot["delay_total_s"] += float(delay_s)
             slot["count"] += 1
 
         summary = []
-        for slot_start in sorted(slot_map.keys()):
-            delay_total_s = slot_map[slot_start]["delay_total_s"]
-            count = slot_map[slot_start]["count"]
+        for slot_idx in sorted(slot_map.keys()):
+            delay_total_s = slot_map[slot_idx]["delay_total_s"]
+            count = slot_map[slot_idx]["count"]
             summary.append(
                 {
-                    "slot_start": slot_start,
-                    "slot_label": format_halfhour_label(slot_start),
+                    "slot_idx": slot_idx,
+                    "slot_label": format_slot_label(slot_idx),
+                    "slot_short_label": format_slot_short_label(slot_idx),
                     "delay_total_s": delay_total_s,
                     "delay_total_min": delay_total_s / 60.0,
                     "delay_avg_s": (delay_total_s / count) if count else 0.0,
@@ -357,7 +355,7 @@ class _ExcelReportHelper:
             if dt is None:
                 slot_indices.append(None)
                 continue
-            slot_indices.append(dt.hour * 2 + (dt.minute // 30))
+            slot_indices.append(get_slot_idx(dt))
         delay_df["slot_idx"] = slot_indices
         delay_df = delay_df[delay_df["slot_idx"].notna()].copy()
         delay_df["slot_idx"] = delay_df["slot_idx"].astype(int)
@@ -633,27 +631,28 @@ class _ExcelReportHelper:
     ) -> int:
         max_col = 11
 
-        overall_slot_totals: dict[datetime, float] = {}
+        overall_slot_totals: dict[int, float] = {}
         for combo in combos:
             for item in combo.get("halfhour_summary", []):
-                overall_slot_totals[item["slot_start"]] = overall_slot_totals.get(item["slot_start"], 0.0) + item["delay_total_s"]
+                slot_idx = item["slot_idx"]
+                overall_slot_totals[slot_idx] = overall_slot_totals.get(slot_idx, 0.0) + item["delay_total_s"]
 
-        def pick_peak_slot(start_hour: int, end_hour: int) -> datetime | None:
+        def pick_peak_slot(start_idx: int, end_idx: int) -> int | None:
             candidates = [
-                (slot_start, total)
-                for slot_start, total in overall_slot_totals.items()
-                if start_hour <= slot_start.hour < end_hour
+                (slot_idx, total)
+                for slot_idx, total in overall_slot_totals.items()
+                if start_idx <= slot_idx <= end_idx
             ]
             if not candidates:
                 return None
-            return max(candidates, key=lambda x: (x[1], -x[0].timestamp()))[0]
+            return max(candidates, key=lambda x: (x[1], -x[0]))[0]
 
-        am_peak_slot = pick_peak_slot(5, 12)
-        pm_peak_slot = pick_peak_slot(12, 24)
-        am_peak_label = format_halfhour_label(am_peak_slot) if am_peak_slot else "-"
-        pm_peak_label = format_halfhour_label(pm_peak_slot) if pm_peak_slot else "-"
-        am_peak_total = overall_slot_totals.get(am_peak_slot, 0.0) if am_peak_slot else 0.0
-        pm_peak_total = overall_slot_totals.get(pm_peak_slot, 0.0) if pm_peak_slot else 0.0
+        am_peak_slot = pick_peak_slot(10, 23)
+        pm_peak_slot = pick_peak_slot(24, 47)
+        am_peak_label = format_slot_label(am_peak_slot) if am_peak_slot is not None else "-"
+        pm_peak_label = format_slot_label(pm_peak_slot) if pm_peak_slot is not None else "-"
+        am_peak_total = overall_slot_totals.get(am_peak_slot, 0.0) if am_peak_slot is not None else 0.0
+        pm_peak_total = overall_slot_totals.get(pm_peak_slot, 0.0) if pm_peak_slot is not None else 0.0
 
         ws.merge_cells(start_row=title_row, start_column=1, end_row=data_row, end_column=1)
         ws.cell(row=title_row, column=1, value="方向（流入→流出）")
@@ -704,17 +703,17 @@ class _ExcelReportHelper:
         row_idx = data_row + 1
         total_daily_delay = sum(c["daily_total_delay"] for c in combos)
         for combo in combos:
-            slot_delay_map = {item["slot_start"]: item["delay_total_s"] for item in combo.get("halfhour_summary", [])}
+            slot_delay_map = {item["slot_idx"]: item["delay_total_s"] for item in combo.get("halfhour_summary", [])}
             direction = f"{combo['in_b']}→{combo['out_b']}"
             daily_share_pct = (combo["daily_total_delay"] / total_daily_delay * 100.0) if total_daily_delay else 0.0
-            am_direction_delay = slot_delay_map.get(am_peak_slot, 0.0) if am_peak_slot else 0.0
-            pm_direction_delay = slot_delay_map.get(pm_peak_slot, 0.0) if pm_peak_slot else 0.0
+            am_direction_delay = slot_delay_map.get(am_peak_slot, 0.0) if am_peak_slot is not None else 0.0
+            pm_direction_delay = slot_delay_map.get(pm_peak_slot, 0.0) if pm_peak_slot is not None else 0.0
             values = [
                 direction,
                 round(combo["daily_total_delay"] / 60.0, 1),
                 round(daily_share_pct, 1),
                 round(combo["avg_delay"], 1),
-                shorten_halfhour_label(combo.get("peak_slot_label")),
+                format_slot_short_label(combo.get("peak_slot_idx")),
                 round(combo.get("peak_slot_delay_min", 0.0), 1),
                 round(combo.get("peak_slot_avg_delay_s", 0.0), 1),
                 round(am_direction_delay / 60.0, 1),
@@ -742,15 +741,15 @@ class _ExcelReportHelper:
             "-",
             "-",
             "-",
-            "-",
-            "-",
-            "-",
-            "-",
+            round(am_peak_total / 60.0, 1) if am_peak_slot is not None else "-",
+            100.0 if am_peak_slot is not None else "-",
+            round(pm_peak_total / 60.0, 1) if pm_peak_slot is not None else "-",
+            100.0 if pm_peak_slot is not None else "-",
         ]
         for col, val in enumerate(total_values, start=1):
             cell = ws.cell(row=total_row, column=col, value=val)
             cell.alignment = Alignment(horizontal="center" if col in (1, 5) else "right", vertical="center")
-            if col in (2, 3, 4):
+            if col in (2, 3, 4, 8, 9, 10, 11):
                 cell.number_format = "0.0"
         ws.row_dimensions[total_row].height = 18
 
