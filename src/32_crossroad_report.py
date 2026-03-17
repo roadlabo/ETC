@@ -109,6 +109,18 @@ def shorten_halfhour_label(label: str | None) -> str:
     return f"{start}～"
 
 
+def build_fixed_halfhour_slots() -> list[dict]:
+    slots: list[dict] = []
+    for slot_idx in range(48):
+        start_total_min = slot_idx * 30
+        end_total_min = start_total_min + 30
+        start_h, start_m = divmod(start_total_min, 60)
+        end_h, end_m = divmod(end_total_min, 60)
+        label = f"{start_h}:{start_m:02d}～{end_h}:{end_m:02d}"
+        slots.append({"slot_idx": slot_idx, "label": label})
+    return slots
+
+
 def hour_to_time_bin(hour: int) -> int:
     if hour in (22, 23, 0):
         return 7
@@ -318,45 +330,87 @@ class _ExcelReportHelper:
 
     def _populate_delay_data_sheet(self, ws, combos: list[dict]) -> None:
         headers = [
-            "方向（流入→流出）",
-            "流入枝番",
-            "流出枝番",
-            "30分帯開始時刻",
-            "30分帯ラベル",
-            "総遅れ時間（秒）",
-            "総遅れ時間（分）",
-            "平均遅れ時間（秒）",
-            "件数（台）",
-            "日あたり総遅れ時間（秒/日）",
+            "流入方向",
+            "流出方向",
             "日あたり総遅れ時間（分/日）",
+            "平均遅れ時間（秒）",
+            "時間帯",
+            "30分総遅れ時間（分）",
+            "30分平均遅れ時間（秒）",
         ]
         ws.append(headers)
-        sorted_combos = sorted(combos, key=lambda c: (c["in_b"], c["out_b"]))
+
+        for col_idx in range(1, len(headers) + 1):
+            ws.cell(row=1, column=col_idx).font = Font(bold=True)
+
+        fixed_slots = build_fixed_halfhour_slots()
+        total_days = len(self.unique_dates)
+        delay_df = self.clean_df.copy()
+        delay_df = delay_df[delay_df["time_valid"] == 1].copy()
+        delay_df["delay_s_num"] = pd.to_numeric(delay_df["delay_s"], errors="coerce")
+        delay_df = delay_df[delay_df["delay_s_num"].notna()].copy()
+        delay_df = delay_df[delay_df["in_b"] != delay_df["out_b"]].copy()
+
+        slot_indices: list[int | None] = []
+        for value in delay_df["time"].tolist():
+            dt = parse_center_datetime(value)
+            if dt is None:
+                slot_indices.append(None)
+                continue
+            slot_indices.append(dt.hour * 2 + (dt.minute // 30))
+        delay_df["slot_idx"] = slot_indices
+        delay_df = delay_df[delay_df["slot_idx"].notna()].copy()
+        delay_df["slot_idx"] = delay_df["slot_idx"].astype(int)
+
+        slot_stats_map: dict[tuple[int, int], dict[int, dict[str, float]]] = {}
+        if not delay_df.empty:
+            grouped = delay_df.groupby(["in_b", "out_b", "slot_idx"])
+            for (in_b, out_b, slot_idx), subset in grouped:
+                delay_total_s = float(subset["delay_s_num"].sum())
+                count = int(len(subset))
+                slot_stats_map.setdefault((int(in_b), int(out_b)), {})[int(slot_idx)] = {
+                    "delay_total_min": delay_total_s / 60.0,
+                    "delay_avg_s": (delay_total_s / count) if count else 0.0,
+                }
+
+        sorted_combos = sorted(
+            [c for c in combos if c["in_b"] != c["out_b"]],
+            key=lambda c: (c["in_b"], c["out_b"]),
+        )
         for combo in sorted_combos:
-            direction = f"{combo['in_b']}→{combo['out_b']}"
-            for item in combo.get("halfhour_summary", []):
+            in_b = int(combo["in_b"])
+            out_b = int(combo["out_b"])
+            daily_total_delay_min = (combo["total_delay"] / total_days / 60.0) if total_days else 0.0
+            avg_delay_s = float(combo["avg_delay"] or 0.0)
+            direction_slots = slot_stats_map.get((in_b, out_b), {})
+            for slot in fixed_slots:
+                slot_data = direction_slots.get(slot["slot_idx"], None)
                 ws.append(
                     [
-                        direction,
-                        combo["in_b"],
-                        combo["out_b"],
-                        item["slot_start"].strftime("%H:%M"),
-                        item["slot_label"],
-                        item["delay_total_s"],
-                        item["delay_total_min"],
-                        item["delay_avg_s"],
-                        item["count"],
-                        item["daily_delay_total_s"],
-                        item["daily_delay_total_min"],
+                        in_b,
+                        out_b,
+                        daily_total_delay_min,
+                        avg_delay_s,
+                        slot["label"],
+                        slot_data["delay_total_min"] if slot_data else 0.0,
+                        slot_data["delay_avg_s"] if slot_data else 0.0,
                     ]
                 )
 
-        for row in ws.iter_rows(min_row=2, min_col=6, max_col=8):
+        for row in ws.iter_rows(min_row=2, min_col=3, max_col=4):
             for cell in row:
                 cell.number_format = "0.0"
-        for row in ws.iter_rows(min_row=2, min_col=10, max_col=11):
+        for row in ws.iter_rows(min_row=2, min_col=6, max_col=7):
             for cell in row:
                 cell.number_format = "0.0"
+
+        ws.column_dimensions["A"].width = 8
+        ws.column_dimensions["B"].width = 8
+        ws.column_dimensions["C"].width = 20
+        ws.column_dimensions["D"].width = 15
+        ws.column_dimensions["E"].width = 15
+        ws.column_dimensions["F"].width = 17
+        ws.column_dimensions["G"].width = 17
 
     def _populate_time_data_sheet(self, ws, combos: list[dict]) -> None:
         headers = [
