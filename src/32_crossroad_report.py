@@ -406,19 +406,45 @@ class _ExcelReportHelper:
         combos_for_report = [c for c in combos if int(c["in_b"]) != int(c["out_b"])]
         combos_for_report.sort(key=lambda x: (-x["daily_total_delay"], int(x["in_b"]), int(x["out_b"])))
 
-        time_title_row = 27
+        time_section_title_row = 26
+        self._write_section_title(ws, row=time_section_title_row, text="方向別トリップ数集計表")
+
+        time_title_row = time_section_title_row + 1
         time_header_row = time_title_row + 1
         time_data_row = time_title_row + 2
         time_last_row = self._write_time_table_pdf_style(
             ws, combos_for_report, time_title_row, time_header_row, time_data_row
         )
 
-        delay_title_row = time_last_row + 2
+        delay_section_title_row = time_last_row + 2
+        self._write_section_title(ws, row=delay_section_title_row, text="方向別遅れ時間集計表")
+
+        delay_title_row = delay_section_title_row + 1
         delay_header_row = delay_title_row + 1
         delay_data_row = delay_title_row + 2
-        self._write_delay_table_pdf_style(
+        delay_last_row = self._write_delay_table_pdf_style(
             ws, combos_for_report, delay_title_row, delay_header_row, delay_data_row
         )
+        self._write_delay_table_note(ws, row=delay_last_row + 1)
+
+    @staticmethod
+    def _write_section_title(ws, row: int, text: str) -> None:
+        title_cell = ws.cell(row=row, column=1, value=text)
+        title_cell.font = Font(bold=True, size=12)
+        title_cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    @staticmethod
+    def _write_delay_table_note(ws, row: int) -> None:
+        note_text = (
+            "※遅れ時間とは、スムーズに走行した場合と比べた時間ロスを指し、"
+            "本表は全トリップにおける遅れ時間を方向別・時間帯別に集計したもので、"
+            "交差点の効率化の検討に活用できる。"
+        )
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=11)
+        note_cell = ws.cell(row=row, column=1, value=note_text)
+        note_cell.font = Font(size=9)
+        note_cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        ws.row_dimensions[row].height = 36
 
     def _write_summary_block(self, ws, start_row: int) -> int:
         start_date, end_date = (None, None)
