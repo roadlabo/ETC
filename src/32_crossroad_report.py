@@ -98,6 +98,17 @@ def format_halfhour_label(slot_start: datetime) -> str:
     return f"{slot_start.strftime('%H:%M')}～{slot_end.strftime('%H:%M')}"
 
 
+def shorten_halfhour_label(label: str | None) -> str:
+    if not label:
+        return "-"
+    start = str(label).split("～", 1)[0].strip()
+    if not start:
+        return "-"
+    if re.fullmatch(r"\d{2}:\d{2}", start) and start.startswith("0"):
+        start = start[1:]
+    return f"{start}～"
+
+
 def hour_to_time_bin(hour: int) -> int:
     if hour in (22, 23, 0):
         return 7
@@ -172,9 +183,9 @@ class _ExcelReportHelper:
         ws.column_dimensions["A"].width = 16.0
         ws.column_dimensions["B"].width = 11.86
         ws.column_dimensions["C"].width = 9.5
-        for col in ["D", "F", "G", "H", "I", "J", "K", "L"]:
+        for col in ["D", "F", "G", "H", "I", "J", "K"]:
             ws.column_dimensions[col].width = 7.0
-        ws.column_dimensions["E"].width = 10.0
+        ws.column_dimensions["E"].width = 8.5
 
     def _collect_combination_data(self) -> list[dict]:
         total_days = len(self.unique_dates)
@@ -383,7 +394,7 @@ class _ExcelReportHelper:
         title_text = f"ETC2.0 交差点パフォーマンス調査：{cross_name}"
         title_cell = ws.cell(row=1, column=1, value=title_text)
         title_cell.font = Font(size=16, bold=True)
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=12)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=11)
         title_cell.alignment = Alignment(horizontal="center")
 
         summary_start_row = 3
@@ -540,7 +551,7 @@ class _ExcelReportHelper:
     def _write_delay_table_pdf_style(
         self, ws, combos: list[dict], title_row: int, header_row: int, data_row: int
     ) -> int:
-        max_col = 12
+        max_col = 11
 
         overall_slot_totals: dict[datetime, float] = {}
         for combo in combos:
@@ -568,12 +579,12 @@ class _ExcelReportHelper:
         ws.cell(row=title_row, column=1, value="方向（流入→流出）")
         ws.merge_cells(start_row=title_row, start_column=2, end_row=title_row, end_column=4)
         ws.cell(row=title_row, column=2, value="日あたり集計")
-        ws.merge_cells(start_row=title_row, start_column=5, end_row=title_row, end_column=8)
+        ws.merge_cells(start_row=title_row, start_column=5, end_row=title_row, end_column=7)
         ws.cell(row=title_row, column=5, value="方向別ピーク")
-        ws.merge_cells(start_row=title_row, start_column=9, end_row=title_row, end_column=10)
-        ws.cell(row=title_row, column=9, value="午前ピーク")
-        ws.merge_cells(start_row=title_row, start_column=11, end_row=title_row, end_column=12)
-        ws.cell(row=title_row, column=11, value="午後ピーク")
+        ws.merge_cells(start_row=title_row, start_column=8, end_row=title_row, end_column=9)
+        ws.cell(row=title_row, column=8, value="午前ピーク")
+        ws.merge_cells(start_row=title_row, start_column=10, end_row=title_row, end_column=11)
+        ws.cell(row=title_row, column=10, value="午後ピーク")
 
         ws.merge_cells(start_row=header_row, start_column=2, end_row=data_row, end_column=2)
         ws.cell(row=header_row, column=2, value="日あたり総遅れ時間\n（分・台/日）")
@@ -581,18 +592,17 @@ class _ExcelReportHelper:
         ws.cell(row=header_row, column=3, value="総遅れ時間\n構成率（％）")
         ws.merge_cells(start_row=header_row, start_column=4, end_row=data_row, end_column=4)
         ws.cell(row=header_row, column=4, value="平均遅れ時間\n（秒）")
-        ws.merge_cells(start_row=header_row, start_column=5, end_row=header_row, end_column=8)
+        ws.merge_cells(start_row=header_row, start_column=5, end_row=header_row, end_column=7)
         ws.cell(row=header_row, column=5, value="30分間毎集計")
-        ws.merge_cells(start_row=header_row, start_column=9, end_row=header_row, end_column=10)
-        ws.cell(row=header_row, column=9, value=am_peak_label)
-        ws.merge_cells(start_row=header_row, start_column=11, end_row=header_row, end_column=12)
-        ws.cell(row=header_row, column=11, value=pm_peak_label)
+        ws.merge_cells(start_row=header_row, start_column=8, end_row=header_row, end_column=9)
+        ws.cell(row=header_row, column=8, value=am_peak_label)
+        ws.merge_cells(start_row=header_row, start_column=10, end_row=header_row, end_column=11)
+        ws.cell(row=header_row, column=10, value=pm_peak_label)
 
         detail_headers = [
             "時間",
             "総遅れ時間（分）",
             "平均遅れ時間（秒）",
-            "構成率（％）",
             "総遅れ時間（秒）",
             "構成率（％）",
             "総遅れ時間（秒）",
@@ -624,10 +634,9 @@ class _ExcelReportHelper:
                 round(combo["daily_total_delay"] / 60.0, 1),
                 round(daily_share_pct, 1),
                 round(combo["avg_delay"], 1),
-                combo.get("peak_slot_label"),
+                shorten_halfhour_label(combo.get("peak_slot_label")),
                 round(combo.get("peak_slot_delay_min", 0.0), 1),
                 round(combo.get("peak_slot_avg_delay_s", 0.0), 1),
-                round(combo.get("peak_slot_share_pct", 0.0), 1),
                 round(am_direction_delay, 1),
                 round((am_direction_delay / am_peak_total * 100.0), 1) if am_peak_total else None,
                 round(pm_direction_delay, 1),
@@ -636,7 +645,7 @@ class _ExcelReportHelper:
             for col, val in enumerate(values, start=1):
                 cell = ws.cell(row=row_idx, column=col, value=val)
                 cell.alignment = Alignment(horizontal="center" if col in (1, 5) else "right", vertical="center")
-                if col in (2, 3, 4, 6, 7, 8, 9, 10, 11, 12):
+                if col in (2, 3, 4, 6, 7, 8, 9, 10, 11):
                     cell.number_format = "0.0"
             row_idx += 1
 
@@ -650,7 +659,6 @@ class _ExcelReportHelper:
             round(total_daily_delay_min, 1),
             100.0,
             round(total_avg_delay, 1),
-            "-",
             "-",
             "-",
             "-",
