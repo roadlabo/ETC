@@ -607,7 +607,7 @@ class _ExcelReportHelper:
         total_daytime = sum(total_time_bins[2:6])
         total_ratio = total_daily / total_daytime if total_daytime else None
         total_values = [
-            "合計",
+            "合計or平均",
             round(total_daily, 1),
             round(total_ratio, 2) if total_ratio is not None else None,
             *[round(v, 1) for v in total_time_bins],
@@ -741,10 +741,10 @@ class _ExcelReportHelper:
             "-",
             "-",
             "-",
-            round(am_peak_total / 60.0, 1) if am_peak_slot is not None else "-",
-            100.0 if am_peak_slot is not None else "-",
-            round(pm_peak_total / 60.0, 1) if pm_peak_slot is not None else "-",
-            100.0 if pm_peak_slot is not None else "-",
+            round(am_peak_total / 60.0, 1),
+            100.0,
+            round(pm_peak_total / 60.0, 1),
+            100.0,
         ]
         for col, val in enumerate(total_values, start=1):
             cell = ws.cell(row=total_row, column=col, value=val)
