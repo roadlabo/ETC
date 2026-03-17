@@ -89,6 +89,15 @@ def parse_center_datetime(val) -> datetime | None:
     return None
 
 
+def floor_to_30min(dt: datetime) -> datetime:
+    return dt.replace(minute=(dt.minute // 30) * 30, second=0, microsecond=0)
+
+
+def format_halfhour_label(slot_start: datetime) -> str:
+    slot_end = slot_start + pd.Timedelta(minutes=30)
+    return f"{slot_start.strftime('%H:%M')}～{slot_end.strftime('%H:%M')}"
+
+
 def hour_to_time_bin(hour: int) -> int:
     if hour in (22, 23, 0):
         return 7
@@ -160,11 +169,12 @@ class _ExcelReportHelper:
         )
         ws.print_options.horizontalCentered = True
         ws.print_title_rows = "1:1"
-        ws.column_dimensions["A"].width = 14.29
+        ws.column_dimensions["A"].width = 16.0
         ws.column_dimensions["B"].width = 11.86
         ws.column_dimensions["C"].width = 9.5
-        for col in ["D", "E", "F", "G", "H", "I", "J", "K"]:
+        for col in ["D", "F", "G", "H", "I", "J", "K", "L"]:
             ws.column_dimensions[col].width = 7.0
+        ws.column_dimensions["E"].width = 10.0
 
     def _collect_combination_data(self) -> list[dict]:
         total_days = len(self.unique_dates)
@@ -178,21 +188,25 @@ class _ExcelReportHelper:
             total_delay = ok_subset["delay_s"].sum() if not ok_subset.empty else 0
             daily_total_delay_s = total_delay / total_days if total_days else 0
             daily_total_delay_min = daily_total_delay_s / 60 if total_days else 0
-            delay_per_day = self._calc_delay_per_day_counts(ok_subset["delay_s"], total_days)
             time_per_day, time_parse_ng_count, time_bin_total = self._calc_time_per_day_counts(
                 subset["time"], total_days
+            )
+            halfhour_summary = self._build_halfhour_summary(ok_subset, total_days)
+            total_halfhour_delay_s = sum(item["delay_total_s"] for item in halfhour_summary)
+            peak_slot = max(
+                halfhour_summary,
+                key=lambda item: (item["delay_total_s"], -item["slot_start"].timestamp()),
+                default=None,
             )
             ok_count = len(ok_subset)
             ok_per_day = ok_count / total_days if total_days else 0
             time_bins_total_per_day = sum(time_per_day)
-            delay_bins_total_per_day = sum(delay_per_day)
             print(
                 "[CHECK] direction="
                 f"{int(in_b)}→{int(out_b)} "
                 f"daily_count={daily_count:.6f} "
                 f"sum_time_bins_per_day={time_bins_total_per_day:.6f} "
                 f"ok_per_day={ok_per_day:.6f} "
-                f"sum_delay_bins_per_day={delay_bins_total_per_day:.6f} "
                 f"daily_total_delay_s={daily_total_delay_s:.6f} "
                 f"daily_total_delay_min={daily_total_delay_min:.6f} "
                 f"avg_delay={avg_delay:.6f} "
@@ -210,13 +224,55 @@ class _ExcelReportHelper:
                     "avg_delay": avg_delay,
                     "total_delay": total_delay,
                     "daily_total_delay": daily_total_delay_s,
-                    "delay_per_day": delay_per_day,
                     "time_per_day": time_per_day,
+                    "halfhour_summary": halfhour_summary,
+                    "total_halfhour_delay_s": total_halfhour_delay_s,
+                    "peak_slot_label": peak_slot["slot_label"] if peak_slot else None,
+                    "peak_slot_delay_s": peak_slot["delay_total_s"] if peak_slot else 0.0,
+                    "peak_slot_delay_min": (peak_slot["delay_total_s"] / 60.0) if peak_slot else 0.0,
+                    "peak_slot_avg_delay_s": peak_slot["delay_avg_s"] if peak_slot else 0.0,
+                    "peak_slot_share_pct": (
+                        (peak_slot["delay_total_s"] / total_halfhour_delay_s * 100.0)
+                        if peak_slot and total_halfhour_delay_s
+                        else 0.0
+                    ),
                 }
             )
 
-        combos.sort(key=lambda x: (-x["count_total"], x["in_b"], x["out_b"]))
+        combos.sort(key=lambda x: (-x["daily_total_delay"], x["in_b"], x["out_b"]))
         return combos
+
+    def _build_halfhour_summary(self, ok_subset: pd.DataFrame, total_days: int) -> list[dict]:
+        slot_map: dict[datetime, dict] = {}
+        for row in ok_subset[["time", "delay_s"]].itertuples(index=False):
+            delay_s = pd.to_numeric(row.delay_s, errors="coerce")
+            if pd.isna(delay_s):
+                continue
+            dt = parse_center_datetime(row.time)
+            if dt is None:
+                continue
+            slot_start = floor_to_30min(dt)
+            slot = slot_map.setdefault(slot_start, {"delay_total_s": 0.0, "count": 0})
+            slot["delay_total_s"] += float(delay_s)
+            slot["count"] += 1
+
+        summary = []
+        for slot_start in sorted(slot_map.keys()):
+            delay_total_s = slot_map[slot_start]["delay_total_s"]
+            count = slot_map[slot_start]["count"]
+            summary.append(
+                {
+                    "slot_start": slot_start,
+                    "slot_label": format_halfhour_label(slot_start),
+                    "delay_total_s": delay_total_s,
+                    "delay_total_min": delay_total_s / 60.0,
+                    "delay_avg_s": (delay_total_s / count) if count else 0.0,
+                    "count": count,
+                    "daily_delay_total_s": (delay_total_s / total_days) if total_days else 0.0,
+                    "daily_delay_total_min": (delay_total_s / total_days / 60.0) if total_days else 0.0,
+                }
+            )
+        return summary
 
     def _calc_delay_per_day_counts(self, delay_series: pd.Series, total_days: int) -> list[float]:
         delays = pd.to_numeric(delay_series, errors="coerce").dropna().astype(float).tolist()
@@ -252,30 +308,42 @@ class _ExcelReportHelper:
     def _populate_delay_data_sheet(self, ws, combos: list[dict]) -> None:
         headers = [
             "方向（流入→流出）",
-            "総台数（台）",
-            "日あたり台数（台/日）",
+            "流入枝番",
+            "流出枝番",
+            "30分帯開始時刻",
+            "30分帯ラベル",
+            "総遅れ時間（秒）",
+            "総遅れ時間（分）",
             "平均遅れ時間（秒）",
-            "1日あたり総遅れ時間（秒/日）",
-            "階級（秒）",
-            "台数（台/日）",
+            "件数（台）",
+            "日あたり総遅れ時間（秒/日）",
+            "日あたり総遅れ時間（分/日）",
         ]
         ws.append(headers)
-        for combo in combos:
+        sorted_combos = sorted(combos, key=lambda c: (c["in_b"], c["out_b"]))
+        for combo in sorted_combos:
             direction = f"{combo['in_b']}→{combo['out_b']}"
-            base_info = [
-                direction,
-                combo["count_total"],
-                combo["daily_count"],
-                combo["avg_delay"],
-                combo["daily_total_delay"],
-            ]
-            for label, per_day in zip(DELAY_LABELS, combo["delay_per_day"]):
-                ws.append(base_info + [label, per_day])
+            for item in combo.get("halfhour_summary", []):
+                ws.append(
+                    [
+                        direction,
+                        combo["in_b"],
+                        combo["out_b"],
+                        item["slot_start"].strftime("%H:%M"),
+                        item["slot_label"],
+                        item["delay_total_s"],
+                        item["delay_total_min"],
+                        item["delay_avg_s"],
+                        item["count"],
+                        item["daily_delay_total_s"],
+                        item["daily_delay_total_min"],
+                    ]
+                )
 
-        for row in ws.iter_rows(min_row=2, min_col=3, max_col=5):
+        for row in ws.iter_rows(min_row=2, min_col=6, max_col=8):
             for cell in row:
                 cell.number_format = "0.0"
-        for row in ws.iter_rows(min_row=2, min_col=7, max_col=7):
+        for row in ws.iter_rows(min_row=2, min_col=10, max_col=11):
             for cell in row:
                 cell.number_format = "0.0"
 
@@ -290,7 +358,8 @@ class _ExcelReportHelper:
             "台数（台/日）",
         ]
         ws.append(headers)
-        for combo in combos:
+        sorted_combos = sorted(combos, key=lambda c: (c["in_b"], c["out_b"]))
+        for combo in sorted_combos:
             direction = f"{combo['in_b']}→{combo['out_b']}"
             base_info = [
                 direction,
@@ -314,7 +383,7 @@ class _ExcelReportHelper:
         title_text = f"ETC2.0 交差点パフォーマンス調査：{cross_name}"
         title_cell = ws.cell(row=1, column=1, value=title_text)
         title_cell.font = Font(size=16, bold=True)
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=11)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=12)
         title_cell.alignment = Alignment(horizontal="center")
 
         summary_start_row = 3
@@ -324,7 +393,7 @@ class _ExcelReportHelper:
             ws.add_image(image_obj, MAP_ANCHOR_CELL)
 
         combos_for_report = [c for c in combos if int(c["in_b"]) != int(c["out_b"])]
-        combos_for_report.sort(key=lambda x: (-x["count_total"], int(x["in_b"]), int(x["out_b"])))
+        combos_for_report.sort(key=lambda x: (-x["daily_total_delay"], int(x["in_b"]), int(x["out_b"])))
 
         time_title_row = 27
         time_header_row = time_title_row + 1
@@ -471,47 +540,103 @@ class _ExcelReportHelper:
     def _write_delay_table_pdf_style(
         self, ws, combos: list[dict], title_row: int, header_row: int, data_row: int
     ) -> int:
-        max_col = 11
-        ws.cell(row=title_row, column=1, value="")
-        ws.cell(row=title_row, column=2, value="")
-        ws.cell(row=title_row, column=3, value="")
-        ws.merge_cells(start_row=title_row, start_column=4, end_row=title_row, end_column=max_col)
-        title_cell = ws.cell(row=title_row, column=4, value="遅れ時間ヒストグラム（台/日）")
-        title_cell.font = Font(bold=True)
-        title_cell.alignment = Alignment(horizontal="center", vertical="center")
+        max_col = 12
 
-        headers = [
-            "方向\n（流入→流出）",
-            "日あたり\n総遅れ時間\n（分・台/日）",
-            "平均\n遅れ時間\n（秒）",
-            "0-5秒",
-            "5-10\n秒",
-            "10-20\n秒",
-            "20-30\n秒",
-            "30-60\n秒",
-            "60-\n120秒",
-            "120～\n180秒",
-            "180秒\n～",
-        ]
-        for col, text in enumerate(headers, start=1):
-            cell = ws.cell(row=header_row, column=col, value=text)
-            cell.font = Font(bold=True)
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        ws.row_dimensions[header_row].height = 45
-
-        row_idx = data_row
+        overall_slot_totals: dict[datetime, float] = {}
         for combo in combos:
+            for item in combo.get("halfhour_summary", []):
+                overall_slot_totals[item["slot_start"]] = overall_slot_totals.get(item["slot_start"], 0.0) + item["delay_total_s"]
+
+        def pick_peak_slot(start_hour: int, end_hour: int) -> datetime | None:
+            candidates = [
+                (slot_start, total)
+                for slot_start, total in overall_slot_totals.items()
+                if start_hour <= slot_start.hour < end_hour
+            ]
+            if not candidates:
+                return None
+            return max(candidates, key=lambda x: (x[1], -x[0].timestamp()))[0]
+
+        am_peak_slot = pick_peak_slot(5, 12)
+        pm_peak_slot = pick_peak_slot(12, 24)
+        am_peak_label = format_halfhour_label(am_peak_slot) if am_peak_slot else "-"
+        pm_peak_label = format_halfhour_label(pm_peak_slot) if pm_peak_slot else "-"
+        am_peak_total = overall_slot_totals.get(am_peak_slot, 0.0) if am_peak_slot else 0.0
+        pm_peak_total = overall_slot_totals.get(pm_peak_slot, 0.0) if pm_peak_slot else 0.0
+
+        ws.merge_cells(start_row=title_row, start_column=1, end_row=data_row, end_column=1)
+        ws.cell(row=title_row, column=1, value="方向（流入→流出）")
+        ws.merge_cells(start_row=title_row, start_column=2, end_row=title_row, end_column=4)
+        ws.cell(row=title_row, column=2, value="日あたり集計")
+        ws.merge_cells(start_row=title_row, start_column=5, end_row=title_row, end_column=8)
+        ws.cell(row=title_row, column=5, value="方向別ピーク")
+        ws.merge_cells(start_row=title_row, start_column=9, end_row=title_row, end_column=10)
+        ws.cell(row=title_row, column=9, value="午前ピーク")
+        ws.merge_cells(start_row=title_row, start_column=11, end_row=title_row, end_column=12)
+        ws.cell(row=title_row, column=11, value="午後ピーク")
+
+        ws.merge_cells(start_row=header_row, start_column=2, end_row=data_row, end_column=2)
+        ws.cell(row=header_row, column=2, value="日あたり総遅れ時間\n（分・台/日）")
+        ws.merge_cells(start_row=header_row, start_column=3, end_row=data_row, end_column=3)
+        ws.cell(row=header_row, column=3, value="総遅れ時間\n構成率（％）")
+        ws.merge_cells(start_row=header_row, start_column=4, end_row=data_row, end_column=4)
+        ws.cell(row=header_row, column=4, value="平均遅れ時間\n（秒）")
+        ws.merge_cells(start_row=header_row, start_column=5, end_row=header_row, end_column=8)
+        ws.cell(row=header_row, column=5, value="30分間毎集計")
+        ws.merge_cells(start_row=header_row, start_column=9, end_row=header_row, end_column=10)
+        ws.cell(row=header_row, column=9, value=am_peak_label)
+        ws.merge_cells(start_row=header_row, start_column=11, end_row=header_row, end_column=12)
+        ws.cell(row=header_row, column=11, value=pm_peak_label)
+
+        detail_headers = [
+            "時間",
+            "総遅れ時間（分）",
+            "平均遅れ時間（秒）",
+            "構成率（％）",
+            "総遅れ時間（秒）",
+            "構成率（％）",
+            "総遅れ時間（秒）",
+            "構成率（％）",
+        ]
+        for idx, text in enumerate(detail_headers, start=5):
+            ws.cell(row=data_row, column=idx, value=text)
+
+        for row in range(title_row, data_row + 1):
+            for col in range(1, max_col + 1):
+                cell = ws.cell(row=row, column=col)
+                cell.font = Font(bold=True)
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        ws.row_dimensions[title_row].height = 22
+        ws.row_dimensions[header_row].height = 22
+        ws.row_dimensions[data_row].height = 32
+
+        row_idx = data_row + 1
+        total_daily_delay = sum(c["daily_total_delay"] for c in combos)
+        for combo in combos:
+            slot_delay_map = {item["slot_start"]: item["delay_total_s"] for item in combo.get("halfhour_summary", [])}
             direction = f"{combo['in_b']}→{combo['out_b']}"
+            daily_share_pct = (combo["daily_total_delay"] / total_daily_delay * 100.0) if total_daily_delay else 0.0
+            am_direction_delay = slot_delay_map.get(am_peak_slot, 0.0) if am_peak_slot else 0.0
+            pm_direction_delay = slot_delay_map.get(pm_peak_slot, 0.0) if pm_peak_slot else 0.0
             values = [
                 direction,
                 round(combo["daily_total_delay"] / 60.0, 1),
+                round(daily_share_pct, 1),
                 round(combo["avg_delay"], 1),
-                *[round(v, 1) for v in combo["delay_per_day"]],
+                combo.get("peak_slot_label"),
+                round(combo.get("peak_slot_delay_min", 0.0), 1),
+                round(combo.get("peak_slot_avg_delay_s", 0.0), 1),
+                round(combo.get("peak_slot_share_pct", 0.0), 1),
+                round(am_direction_delay, 1),
+                round((am_direction_delay / am_peak_total * 100.0), 1) if am_peak_total else None,
+                round(pm_direction_delay, 1),
+                round((pm_direction_delay / pm_peak_total * 100.0), 1) if pm_peak_total else None,
             ]
             for col, val in enumerate(values, start=1):
                 cell = ws.cell(row=row_idx, column=col, value=val)
-                cell.alignment = Alignment(horizontal="center" if col == 1 else "right", vertical="center")
-                if col >= 2:
+                cell.alignment = Alignment(horizontal="center" if col in (1, 5) else "right", vertical="center")
+                if col in (2, 3, 4, 6, 7, 8, 9, 10, 11, 12):
                     cell.number_format = "0.0"
             row_idx += 1
 
@@ -520,18 +645,24 @@ class _ExcelReportHelper:
         total_ok = sum(c.get("ok_count", 0) for c in combos)
         total_delay_s = sum(c.get("total_delay", 0.0) for c in combos)
         total_avg_delay = (total_delay_s / total_ok) if total_ok else 0.0
-        total_bins = [sum(c["delay_per_day"][i] for c in combos) for i in range(len(DELAY_LABELS))]
-
         total_values = [
-            "合計",
+            "合計or平均",
             round(total_daily_delay_min, 1),
+            100.0,
             round(total_avg_delay, 1),
-            *[round(v, 1) for v in total_bins],
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
         ]
         for col, val in enumerate(total_values, start=1):
             cell = ws.cell(row=total_row, column=col, value=val)
-            cell.alignment = Alignment(horizontal="center" if col == 1 else "right", vertical="center")
-            if col >= 2:
+            cell.alignment = Alignment(horizontal="center" if col in (1, 5) else "right", vertical="center")
+            if col in (2, 3, 4):
                 cell.number_format = "0.0"
         ws.row_dimensions[total_row].height = 18
 
