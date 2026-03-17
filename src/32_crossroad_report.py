@@ -603,9 +603,9 @@ class _ExcelReportHelper:
             "時間",
             "総遅れ時間（分）",
             "平均遅れ時間（秒）",
-            "総遅れ時間（秒）",
+            "総遅れ時間（分）",
             "構成率（％）",
-            "総遅れ時間（秒）",
+            "総遅れ時間（分）",
             "構成率（％）",
         ]
         for idx, text in enumerate(detail_headers, start=5):
@@ -617,9 +617,9 @@ class _ExcelReportHelper:
                 cell.font = Font(bold=True)
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-        ws.row_dimensions[title_row].height = 22
-        ws.row_dimensions[header_row].height = 22
-        ws.row_dimensions[data_row].height = 32
+        ws.row_dimensions[title_row].height = 24
+        ws.row_dimensions[header_row].height = 24
+        ws.row_dimensions[data_row].height = 44
 
         row_idx = data_row + 1
         total_daily_delay = sum(c["daily_total_delay"] for c in combos)
@@ -637,9 +637,9 @@ class _ExcelReportHelper:
                 shorten_halfhour_label(combo.get("peak_slot_label")),
                 round(combo.get("peak_slot_delay_min", 0.0), 1),
                 round(combo.get("peak_slot_avg_delay_s", 0.0), 1),
-                round(am_direction_delay, 1),
+                round(am_direction_delay / 60.0, 1),
                 round((am_direction_delay / am_peak_total * 100.0), 1) if am_peak_total else None,
-                round(pm_direction_delay, 1),
+                round(pm_direction_delay / 60.0, 1),
                 round((pm_direction_delay / pm_peak_total * 100.0), 1) if pm_peak_total else None,
             ]
             for col, val in enumerate(values, start=1):
