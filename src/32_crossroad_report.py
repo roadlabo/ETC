@@ -91,26 +91,35 @@ def _string_series_or_default(df: pd.DataFrame, col: str, default: str = "") -> 
 
 
 def classify_delay_exclusion_counts(df: pd.DataFrame) -> dict[str, int]:
+    """Count delay exclusions with the same precedence as the UI's CSV-based summary."""
     counts = {"store": 0, "turn": 0, "foldback": 0, "outlier": 0}
     if df.empty:
         return counts
 
     exclusion_type_series = _string_series_or_default(df, "遅れ除外種別", "")
-    store_series = _numeric_series_or_default(df, COL_STORE_STOP, 0)
-    turn_series = _numeric_series_or_default(df, COL_TURN_TRIP, 0)
+    store_series = pd.to_numeric(_numeric_series_or_default(df, COL_STORE_STOP, 0), errors="coerce").fillna(0)
+    turn_series = pd.to_numeric(_numeric_series_or_default(df, COL_TURN_TRIP, 0), errors="coerce").fillna(0)
     turn_reason_series = _string_series_or_default(df, COL_TURN_REASON, "")
 
-    for exclusion_type, is_store, is_turn, turn_reason in zip(exclusion_type_series, store_series, turn_series, turn_reason_series):
+    for exclusion_type, is_store, is_turn, turn_reason in zip(
+        exclusion_type_series,
+        store_series,
+        turn_series,
+        turn_reason_series,
+    ):
         label = str(exclusion_type).strip()
-        if label == EXCLUSION_LABEL_STORE or int(is_store) == 1:
+        store_flag = float(is_store) == 1.0
+        turn_flag = float(is_turn) == 1.0
+        turn_reason_text = str(turn_reason).strip()
+        if label == EXCLUSION_LABEL_STORE or store_flag:
             counts["store"] += 1
         elif label == EXCLUSION_LABEL_TURN:
             counts["turn"] += 1
-        elif label == EXCLUSION_LABEL_FOLDBACK or (int(is_turn) == 1 and turn_reason.strip() == TURNBACK_SINGLE_REASON):
+        elif label == EXCLUSION_LABEL_FOLDBACK or (turn_flag and turn_reason_text == TURNBACK_SINGLE_REASON):
             counts["foldback"] += 1
         elif label == EXCLUSION_LABEL_OUTLIER:
             counts["outlier"] += 1
-        elif int(is_turn) == 1:
+        elif turn_flag:
             counts["turn"] += 1
     return counts
 
@@ -196,6 +205,7 @@ class _ExcelReportHelper:
         crossroad_path: Path,
         image_path: Path,
         performance_path: Path,
+        performance_df: pd.DataFrame,
         all_df: pd.DataFrame,
         clean_df: pd.DataFrame,
         unique_dates: list[date],
@@ -203,6 +213,7 @@ class _ExcelReportHelper:
         self.crossroad_path = crossroad_path
         self.image_path = image_path
         self.performance_path = performance_path
+        self.performance_df = performance_df
         self.all_df = all_df
         self.clean_df = clean_df
         self.unique_dates = unique_dates
@@ -567,7 +578,7 @@ class _ExcelReportHelper:
         total_records = len(self.all_df)
         ok_records = int(self.all_df["time_valid"].sum()) if total_records else 0
         ng_records = total_records - ok_records
-        exclusion_counts = classify_delay_exclusion_counts(self.all_df)
+        exclusion_counts = classify_delay_exclusion_counts(self.performance_df)
         branch_ok = int((self.all_df["in_b"].notna() & self.all_df["out_b"].notna()).sum()) if total_records else 0
         branch_ng = total_records - branch_ok
         date_range = self._format_date_range(start_date, end_date)
@@ -961,6 +972,7 @@ def create_excel_report_headless(
         crossroad_path=crossroad_csv,
         image_path=crossroad_img,
         performance_path=performance_csv,
+        performance_df=df_perf,
         all_df=data_all,
         clean_df=data_clean,
         unique_dates=unique_dates,

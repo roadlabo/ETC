@@ -1011,11 +1011,13 @@ class BranchCheckWindow(QMainWindow):
 
         ensure_columns(self.df, REQUIRED_COLS)
         if "遅れ時間(s)" in self.df.columns:
-            self.df["遅れ時間_表示"] = self.df["遅れ時間(s)"].fillna("").astype(str).str.strip()
-            self.df["遅れ時間_数値"] = pd.to_numeric(self.df["遅れ時間(s)"], errors="coerce")
+            delay_display = self.df["遅れ時間(s)"].fillna("").astype(str).str.strip()
+            delay_numeric = pd.to_numeric(self.df["遅れ時間(s)"], errors="coerce").astype(float)
+            self.df["遅れ時間_表示"] = delay_display
+            self.df["遅れ時間_ソート用"] = delay_numeric
         else:
             self.df["遅れ時間_表示"] = ""
-            self.df["遅れ時間_数値"] = np.nan
+            self.df["遅れ時間_ソート用"] = pd.Series(np.nan, index=self.df.index, dtype=float)
         n = len(self.df)
         if n >= WARN_ROWS:
             self._report_progress(f"CSV読み込み中…（{n:,}行。少しお待ちください）")
@@ -1421,7 +1423,7 @@ class BranchCheckWindow(QMainWindow):
                 item = SortableItem(text)
 
                 if c_name in NUMERIC_SORT_COLS:
-                    vnum = row.get("遅れ時間_数値") if c_name == "遅れ時間(s)" else pd.to_numeric(val, errors="coerce")
+                    vnum = row.get("遅れ時間_ソート用") if c_name == "遅れ時間(s)" else pd.to_numeric(val, errors="coerce")
                     if pd.isna(vnum):
                         item.setData(ROLE_SORTKEY, None)
                     else:
@@ -1550,10 +1552,10 @@ class BranchCheckWindow(QMainWindow):
             self.df["_ok_sort"] = (self.df[ok_col] == "OK").astype(int)
 
         if delay_col in self.df.columns:
-            delay_vals = self.df.get("遅れ時間_数値", pd.to_numeric(self.df[delay_col], errors="coerce"))
-            delay_vals = delay_vals.fillna(-np.inf)
+            delay_vals = self.df.get("遅れ時間_ソート用", pd.to_numeric(self.df[delay_col], errors="coerce"))
+            delay_vals = pd.to_numeric(delay_vals, errors="coerce").astype(float).fillna(-np.inf)
         else:
-            delay_vals = pd.Series([-np.inf] * len(self.df), index=self.df.index)
+            delay_vals = pd.Series([-np.inf] * len(self.df), index=self.df.index, dtype=float)
         self.df["_delay_sort"] = delay_vals
 
         self.df = self.df.sort_values(
