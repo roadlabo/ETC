@@ -72,8 +72,8 @@ STORE_PASS_WINDOW_POST_M = MEASURE_POST_M
 STORE_CLUSTER_DIAMETER_M = 30.0
 STORE_CLUSTER_MIN_POINTS = 3
 STORE_STAY_MIN_SEC = 120.0
-TURN_PASS_WINDOW_PRE_M = 150.0
-TURN_PASS_WINDOW_POST_M = 150.0
+TURN_PASS_WINDOW_PRE_M = 100.0
+TURN_PASS_WINDOW_POST_M = 100.0
 TURN_CUM_ANGLE_MIN_DEG = 160.0
 TURN_STAY_MIN_SEC = 120.0
 
@@ -502,34 +502,57 @@ def _continuous_sequences(target_points):
 
 
 def _continuous_turn_events(target_points):
-    """連続3点の進行方向変化角の絶対値累積による反転候補を列挙する。"""
+    """符号付き回転量と1点折り返しによる反転候補を列挙する。"""
     events = []
     for seq in _continuous_sequences(target_points):
         if len(seq) < 3:
             continue
-        turn_diffs = []
-        for i in range(1, len(seq) - 1):
-            prev_pt = seq[i - 1]
-            curr_pt = seq[i]
-            next_pt = seq[i + 1]
-            bearing1 = bearing_deg(prev_pt["lat"], prev_pt["lon"], curr_pt["lat"], curr_pt["lon"])
-            bearing2 = bearing_deg(curr_pt["lat"], curr_pt["lon"], next_pt["lat"], next_pt["lon"])
-            turn_diffs.append(angular_diff(bearing1, bearing2))
 
-        for start in range(len(turn_diffs)):
-            cum_angle = 0.0
-            for end in range(start, len(turn_diffs)):
-                cum_angle += abs(turn_diffs[end])
+        segment_bearings = []
+        for i in range(len(seq) - 1):
+            start_pt = seq[i]
+            end_pt = seq[i + 1]
+            segment_bearings.append(
+                bearing_deg(start_pt["lat"], start_pt["lon"], end_pt["lat"], end_pt["lon"])
+            )
+
+        signed_turn_diffs = [
+            signed_angular_diff(segment_bearings[i], segment_bearings[i + 1])
+            for i in range(len(segment_bearings) - 1)
+        ]
+
+        for start in range(len(signed_turn_diffs)):
+            signed_rotation = 0.0
+            for end in range(start, len(signed_turn_diffs)):
+                signed_rotation += signed_turn_diffs[end]
                 start_point = seq[start]
                 end_point = seq[end + 2]
                 stay_sec = (end_point["dt"] - start_point["dt"]).total_seconds()
                 events.append(
                     {
                         "stay_sec": stay_sec,
-                        "cum_angle_deg": cum_angle,
+                        "rotation_deg": signed_rotation,
+                        "abs_angle_deg": abs(signed_rotation),
                         "point_count": (end + 2) - start + 1,
+                        "reason": "TURN_SIGNED_ROTATION_OK",
                     }
                 )
+
+        for pivot in range(1, len(seq) - 1):
+            signed_rotation = signed_angular_diff(
+                segment_bearings[pivot - 1],
+                segment_bearings[pivot],
+            )
+            stay_sec = (seq[pivot + 1]["dt"] - seq[pivot - 1]["dt"]).total_seconds()
+            events.append(
+                {
+                    "stay_sec": stay_sec,
+                    "rotation_deg": signed_rotation,
+                    "abs_angle_deg": abs(signed_rotation),
+                    "point_count": 3,
+                    "reason": "TURN_SINGLE_POINT_REVERSAL_OK",
+                }
+            )
     return events
 
 
@@ -540,7 +563,7 @@ def judge_turnback_trip(
     prev_pass_center_pos=None,
     next_pass_center_pos=None,
 ):
-    """現在pass近傍の累積回転角で反転トリップを判定する。"""
+    """現在pass近傍の符号付き回転量で反転トリップを判定する。"""
     target_points = _extract_pass_window_points(
         points,
         gps_times,
@@ -551,41 +574,56 @@ def judge_turnback_trip(
         next_pass_center_pos,
     )
     if len(target_points) < 3:
-        return False, None, None, len(target_points), "TURN_WINDOW_POINTS_LT3"
+        return False, None, None, len(target_points), "しきい値不足"
 
     events = _continuous_turn_events(target_points)
     if not events:
-        return False, None, None, 0, "TURN_SEQUENCE_POINTS_LT3"
+        return False, None, None, 0, "しきい値不足"
 
-    best_event = max(events, key=lambda x: (x["cum_angle_deg"], x["stay_sec"], x["point_count"]))
-    hit_events = [
+    best_event = max(events, key=lambda x: (x["abs_angle_deg"], x["stay_sec"], x["point_count"]))
+    threshold_events = [
         event
         for event in events
-        if event["cum_angle_deg"] >= TURN_CUM_ANGLE_MIN_DEG and event["stay_sec"] >= TURN_STAY_MIN_SEC
+        if event["abs_angle_deg"] >= TURN_CUM_ANGLE_MIN_DEG
     ]
-    if hit_events:
-        best_hit = max(hit_events, key=lambda x: (x["cum_angle_deg"], x["stay_sec"], x["point_count"]))
-        return (
-            True,
-            best_hit["stay_sec"],
-            best_hit["cum_angle_deg"],
-            best_hit["point_count"],
-            "TURN_CUMULATIVE_ANGLE_OK",
+    if threshold_events:
+        duration_hit_events = [
+            event for event in threshold_events if event["stay_sec"] >= TURN_STAY_MIN_SEC
+        ]
+        if duration_hit_events:
+            best_hit = max(
+                duration_hit_events,
+                key=lambda x: (
+                    1 if x["reason"] == "TURN_SIGNED_ROTATION_OK" else 0,
+                    x["abs_angle_deg"],
+                    x["stay_sec"],
+                    x["point_count"],
+                ),
+            )
+            return (
+                True,
+                best_hit["stay_sec"],
+                best_hit["rotation_deg"],
+                best_hit["point_count"],
+                best_hit["reason"],
+            )
+        best_threshold_event = max(
+            threshold_events,
+            key=lambda x: (x["stay_sec"], x["abs_angle_deg"], x["point_count"]),
         )
-    if best_event["cum_angle_deg"] < TURN_CUM_ANGLE_MIN_DEG:
         return (
             False,
-            best_event["stay_sec"],
-            best_event["cum_angle_deg"],
-            best_event["point_count"],
-            "TURN_CUMULATIVE_ANGLE_LT160DEG",
+            best_threshold_event["stay_sec"],
+            best_threshold_event["rotation_deg"],
+            best_threshold_event["point_count"],
+            "継続時間不足",
         )
     return (
         False,
         best_event["stay_sec"],
-        best_event["cum_angle_deg"],
+        best_event["rotation_deg"],
         best_event["point_count"],
-        "TURN_DURATION_LT120S",
+        "しきい値不足",
     )
 
 
@@ -662,6 +700,13 @@ class Crossroad:
 def angular_diff(a: float, b: float) -> float:
     diff = abs(a - b) % 360
     return diff if diff <= 180 else 360 - diff
+
+
+def signed_angular_diff(a: float, b: float) -> float:
+    diff = (b - a + 180.0) % 360.0 - 180.0
+    if diff == -180.0:
+        return 180.0
+    return diff
 
 
 def find_nearest_branch(angle: float, branches: Iterable[Branch]) -> str:
@@ -939,7 +984,8 @@ def main() -> None:
     print(
         "反転トリップ（遅れ時間算出対象外）判定条件：現在pass近傍"
         f"（算出中心基準 前{TURN_PASS_WINDOW_PRE_M:.0f}m〜後{TURN_PASS_WINDOW_POST_M:.0f}m）内で、"
-        "連続3点から計算される進行方向変化角の絶対値累積が160度以上、かつ2分以上続く"
+        "符号付き回転量として全体が反対方向へ160度以上反転する、または1点折り返しが検出され、"
+        "かつ2分以上続く"
     )
     print("遅れ時間(s)の表示優先順位: 店舗 > 反転 > 数値")
     print("--------------------------------------------------")
