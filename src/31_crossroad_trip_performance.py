@@ -67,6 +67,11 @@ WEEKDAY_KANJI_TO_ABBR = {
 # ============================================================
 MEASURE_PRE_M = 100.0
 MEASURE_POST_M = 20.0
+STORE_STAY_RADIUS_M = 100.0
+STORE_CLUSTER_DIAMETER_M = 20.0
+STORE_CLUSTER_RADIUS_M = STORE_CLUSTER_DIAMETER_M / 2.0
+STORE_CLUSTER_MIN_POINTS = 3
+STORE_STAY_MIN_SEC = 120.0
 
 # ============================================================
 # 交差点通過判定ロジック（31 / 16 と完全一致）
@@ -390,6 +395,61 @@ def parse_dt14(s):
         return None
 
 
+def judge_store_stop_trip(points, gps_times, center_lat, center_lon):
+    """交差点中心付近での店舗立寄トリップを判定する。"""
+    dt_list = [parse_dt14(t) for t in gps_times]
+    target_points = []
+    for idx, ((lat, lon), dt_val) in enumerate(zip(points, dt_list)):
+        if dt_val is None:
+            continue
+        if haversine_m(lat, lon, center_lat, center_lon) <= STORE_STAY_RADIUS_M:
+            target_points.append(
+                {
+                    "idx": idx,
+                    "lat": lat,
+                    "lon": lon,
+                    "dt": dt_val,
+                }
+            )
+
+    if len(target_points) < STORE_CLUSTER_MIN_POINTS:
+        return False, None, len(target_points), None, "CENTER_100M_POINTS_LT3"
+
+    best_count = 0
+    best_span_m = None
+    best_stay_sec = None
+
+    for i, base in enumerate(target_points):
+        cluster = []
+        for cand in target_points[i:]:
+            if haversine_m(base["lat"], base["lon"], cand["lat"], cand["lon"]) <= STORE_CLUSTER_RADIUS_M:
+                cluster.append(cand)
+
+        cluster_count = len(cluster)
+        best_count = max(best_count, cluster_count)
+        if cluster_count < STORE_CLUSTER_MIN_POINTS:
+            continue
+
+        stay_sec = (cluster[-1]["dt"] - cluster[0]["dt"]).total_seconds()
+        span_m = max(
+            haversine_m(a["lat"], a["lon"], b["lat"], b["lon"])
+            for a in cluster
+            for b in cluster
+        )
+
+        if best_span_m is None or span_m < best_span_m:
+            best_span_m = span_m
+        if best_stay_sec is None or stay_sec > best_stay_sec:
+            best_stay_sec = stay_sec
+
+        if stay_sec >= STORE_STAY_MIN_SEC:
+            return True, stay_sec, cluster_count, span_m, "CENTER_100M_CLUSTER_OK"
+
+    if best_count < STORE_CLUSTER_MIN_POINTS:
+        return False, None, best_count, None, "CLUSTER_POINTS_LT3"
+    return False, best_stay_sec, best_count, best_span_m, "CLUSTER_DURATION_LT120S"
+
+
 def weekday_abbr(date8):
     """YYYYMMDD → MON〜SUN（失敗時は空文字）"""
     from datetime import datetime
@@ -511,6 +571,11 @@ HEADER = [
     "所要時間(s)",
     "閑散時所要時間(s)",
     "遅れ時間(s)",
+    "店舗立寄トリップ",
+    "店舗立寄滞在時間(s)",
+    "店舗立寄クラスタ点数",
+    "店舗立寄クラスタ径(m)",
+    "店舗立寄判定理由",
     "所要時間算出可否",
     "所要時間算出不可理由",
     # ---- ここから診断用（補間区間・最近接情報）----
@@ -675,6 +740,7 @@ def main() -> None:
         f"（距離{MEASURE_PRE_M+MEASURE_POST_M:.0f}m固定）"
     )
     print("遅れ定義: 方向別(流入×流出)の所要時間 下位5%平均をT0とし、遅れ=所要時間-T0")
+    print("店舗立ち寄りトリップ（遅れ時間算出対象外）判定条件：交差点中心から100m以内＋この中に直径20m以内に点が3点以上存在する固まりがある＋その固まり状態の中で2分以上続く")
     print("--------------------------------------------------")
 
     # ==============================================================
@@ -714,6 +780,7 @@ def main() -> None:
             out_of_range_trips = 0
             time_ok_trips = 0
             time_ng_trips = 0
+            store_stop_trips = 0
             no_segment_trips = 0
             weekday_skip = 0
             bad_date = 0
@@ -744,6 +811,7 @@ def main() -> None:
 
             idx_t0 = HEADER.index("閑散時所要時間(s)")
             idx_delay = HEADER.index("遅れ時間(s)")
+            idx_store = HEADER.index("店舗立寄トリップ")
             elapsed_map = {}
 
             with out_csv.open("w", encoding="cp932", errors="ignore", newline="") as fw:
@@ -1048,6 +1116,21 @@ def main() -> None:
                             else:
                                 time_ng_trips += 1
 
+                            (
+                                is_store_stop,
+                                store_stay_sec,
+                                store_cluster_points,
+                                store_cluster_span_m,
+                                store_reason,
+                            ) = judge_store_stop_trip(
+                                points,
+                                gps_times,
+                                cross.center_lat,
+                                cross.center_lon,
+                            )
+                            if is_store_stop:
+                                store_stop_trips += 1
+
                             # 生プロット（中心付近の前後4点＋中央）
                             if seg_i is not None:
                                 # seg_tで中心に近い方の点を中央に採用（0.5未満→seg_i、0.5以上→seg_i+1）
@@ -1105,6 +1188,11 @@ def main() -> None:
                                 f"{elapsed:.3f}" if elapsed is not None else "",
                                 "",
                                 "",
+                                "1" if is_store_stop else "0",
+                                f"{store_stay_sec:.3f}" if store_stay_sec is not None else "",
+                                str(store_cluster_points) if store_cluster_points else "",
+                                f"{store_cluster_span_m:.3f}" if store_cluster_span_m is not None else "",
+                                store_reason,
                                 str(time_valid),
                                 time_reason,
                             ]
@@ -1135,7 +1223,7 @@ def main() -> None:
                             tmp_writer.writerow(row_out)
                             perf_rows += 1
 
-                            if elapsed is not None:
+                            if elapsed is not None and time_valid == 1 and not is_store_stop:
                                 key = (str(in_branch), str(out_branch))
                                 elapsed_map.setdefault(key, []).append(float(elapsed))
 
@@ -1187,7 +1275,10 @@ def main() -> None:
                         in_b = row[idx_in_b]
                         out_b = row[idx_out_b]
                         key = (in_b, out_b)
-                        if row[idx_elapsed] != "" and key in t0_map:
+                        if row[idx_store] == "1":
+                            row[idx_t0] = ""
+                            row[idx_delay] = "店舗"
+                        elif row[idx_elapsed] != "" and key in t0_map:
                             try:
                                 elapsed_val = float(row[idx_elapsed])
                                 t0 = float(t0_map[key])
@@ -1224,7 +1315,7 @@ def main() -> None:
             f"  完了: ファイル={total_files}, 曜日後={total_trips}, 行数={perf_rows}, "
             f"成功={branch_ok_trips}, 不明={branch_unknown_trips}, 不通過={cross_notpass_trips}, "
             f"中心抽出失敗={closest_fail_trips}, "
-            f"所要時間OK={time_ok_trips}, 所要時間NG={time_ng_trips}, "
+            f"所要時間OK={time_ok_trips}, 所要時間NG={time_ng_trips}, 店舗立寄={store_stop_trips}, "
             f"所要時間NG(時刻欠損)={bad_time_trips}, 所要時間NG(区間範囲外)={out_of_range_trips}, "
             f"所要時間NG(線分取得不可)={no_segment_trips}, "
             f"weekday_skip={weekday_skip}, bad_date={bad_date}, bad_points={bad_points}, "
@@ -1234,6 +1325,7 @@ def main() -> None:
             f"  [SUMMARY31] 対象トリップ={total_trips}, 枝判定成功={branch_ok_trips}, "
             f"枝不明={branch_unknown_trips}, 交差点不通過={cross_notpass_trips}, "
             f"中心抽出失敗={closest_fail_trips}, "
+            f"店舗立寄={store_stop_trips}, "
             f"所要時間NG(時刻欠損)={bad_time_trips}, 所要時間NG(区間範囲外)={out_of_range_trips}, "
             f"所要時間NG(線分取得不可)={no_segment_trips}, "
             f"weekday_skip={weekday_skip}, bad_date={bad_date}, bad_points={bad_points}"

@@ -41,6 +41,8 @@ COL_DIST = "計測距離(m)"
 COL_TIME = "所要時間(s)"
 COL_T0 = "閑散時所要時間(s)"
 COL_DELAY = "遅れ時間(s)"
+COL_STORE_STOP = "店舗立寄トリップ"
+COL_STORE_STOP_TIME = "店舗立寄滞在時間(s)"
 COL_TIME_VALID = "所要時間算出可否"
 COL_TIME_REASON = "所要時間算出不可理由"
 COL_TIME_PRIMARY = "計測開始_GPS時刻(補間)"
@@ -514,6 +516,7 @@ class _ExcelReportHelper:
         total_records = len(self.all_df)
         ok_records = int(self.all_df["time_valid"].sum()) if total_records else 0
         ng_records = total_records - ok_records
+        store_stop_records = int((self.all_df["store_stop"] == 1).sum()) if total_records else 0
         branch_ok = int((self.all_df["in_b"].notna() & self.all_df["out_b"].notna()).sum()) if total_records else 0
         branch_ng = total_records - branch_ok
         date_range = self._format_date_range(start_date, end_date)
@@ -526,6 +529,7 @@ class _ExcelReportHelper:
             ("総レコード数（通過）（台）", total_records, None),
             ("枝判定 OK/NG（台）", f"{branch_ok} / {branch_ng}", None),
             ("所要時間算出 OK/NG（台）", f"{ok_records} / {ng_records}", None),
+            ("店舗立寄トリップ（遅れ時間算出対象外）（台）", store_stop_records, None),
         ]
 
         for offset, (label, value, extra) in enumerate(info_pairs):
@@ -851,6 +855,10 @@ def create_excel_report_headless(
     t0_val = pd.to_numeric(df_perf[COL_T0], errors="coerce")
     delay_val = pd.to_numeric(df_perf[COL_DELAY], errors="coerce")
     time_valid = pd.to_numeric(df_perf[COL_TIME_VALID], errors="coerce")
+    if COL_STORE_STOP in df_perf.columns:
+        store_stop = pd.to_numeric(df_perf[COL_STORE_STOP], errors="coerce").fillna(0)
+    else:
+        store_stop = pd.Series(0, index=df_perf.index, dtype="int64")
 
     t_primary = df_perf[COL_TIME_FALLBACK].fillna("").astype(str).str.strip()
     t_fallback = df_perf[COL_TIME_PRIMARY].fillna("").astype(str).str.strip()
@@ -865,11 +873,13 @@ def create_excel_report_headless(
             "t0_s": t0_val,
             "delay_s": delay_val,
             "time_valid": time_valid,
+            "store_stop": store_stop,
             "time": time_series,
         }
     )
 
     data_all["time_valid"] = pd.to_numeric(data_all["time_valid"], errors="coerce").fillna(0).astype(int)
+    data_all["store_stop"] = pd.to_numeric(data_all["store_stop"], errors="coerce").fillna(0).astype(int)
 
     data_clean = data_all.dropna(subset=["date", "in_b", "out_b"]).copy()
     data_clean["in_b"] = data_clean["in_b"].astype(int)
