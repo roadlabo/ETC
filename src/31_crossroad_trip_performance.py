@@ -69,7 +69,7 @@ MEASURE_PRE_M = 100.0
 MEASURE_POST_M = 20.0
 STORE_PASS_WINDOW_PRE_M = MEASURE_PRE_M
 STORE_PASS_WINDOW_POST_M = MEASURE_POST_M
-STORE_CLUSTER_DIAMETER_M = 20.0
+STORE_CLUSTER_DIAMETER_M = 30.0
 STORE_CLUSTER_MIN_POINTS = 3
 STORE_STAY_MIN_SEC = 120.0
 
@@ -396,7 +396,7 @@ def parse_dt14(s):
 
 
 def _continuous_cluster_stays(target_points):
-    """連続した点列の中から、直径20m以内を保つ滞在区間を列挙する。"""
+    """連続した点列の中から、直径30m以内を保つ滞在区間を列挙する。"""
     sequences = []
     current = []
     prev_idx = None
@@ -796,7 +796,7 @@ def main() -> None:
     print(
         "店舗立ち寄りトリップ（遅れ時間算出対象外）判定条件：現在passの計測区間"
         f"（算出中心基準 前{STORE_PASS_WINDOW_PRE_M:.0f}m〜後{STORE_PASS_WINDOW_POST_M:.0f}m）内で、"
-        "直径20m以内に点が3点以上存在する固まり状態が連続して2分以上続く"
+        "直径30m以内に点が3点以上存在する固まり状態が連続して2分以上続く"
     )
     print("--------------------------------------------------")
 
