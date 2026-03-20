@@ -131,7 +131,12 @@ def read_csv_safely(path: str) -> pd.DataFrame:
     last_err = None
     for enc in encodings:
         try:
-            return pd.read_csv(path, encoding=enc)
+            return pd.read_csv(
+                path,
+                encoding=enc,
+                low_memory=False,
+                dtype={"遅れ時間(s)": "string"},
+            )
         except Exception as e:
             last_err = e
     raise RuntimeError(f"CSVの読み込みに失敗しました（encoding候補={encodings}）。最後のエラー: {last_err}")
