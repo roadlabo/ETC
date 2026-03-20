@@ -3,7 +3,7 @@
 route_sampler.py
 
 クリックでポイントを打ってサンプルルートを作成し、
-route_mapper_simple.py がそのまま読めるCSV（O列=経度, P列=緯度, M列=flag）を出力します。
+trip_viewer.py がそのまま読めるCSV（O列=経度, P列=緯度, M列=flag）を出力します。
 
 ・ブラウザで地図（Leaflet）を開き、クリックで点追加／右クリックで直前の点を削除。
 ・「保存」ボタンでCSVを出力（ヘッダなし、カンマ区切り）。

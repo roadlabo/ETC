@@ -464,9 +464,9 @@ class MainWindow(QMainWindow):
         ※リポジトリの実ファイル名に合わせて候補を増減してください。
         """
         candidates = [
+            os.path.join(root_dir, "src", "05_trip_viewer.py"),
             os.path.join(root_dir, "src", "05_route_mapper_simple.py"),
             os.path.join(root_dir, "src", "05_2nd_screening_trip_viewer.py"),
-            os.path.join(root_dir, "src", "05_trip_viewer.py"),
             os.path.join(root_dir, "src", "05_UI_second_screening_trip_viewer.py"),
         ]
         for p in candidates:

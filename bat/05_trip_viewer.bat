@@ -7,11 +7,11 @@ for %%I in ("%BAT_DIR%..") do set "ROOT_DIR=%%~fI"
 set "PYW=%ROOT_DIR%\runtime\python\pythonw.exe"
 set "PY=%ROOT_DIR%\runtime\python\python.exe"
 
-set "APP=%ROOT_DIR%\src\05_route_mapper_simple.py"
+set "APP=%ROOT_DIR%\src\05_trip_viewer.py"
 
 set "LOGDIR=%ROOT_DIR%\logs"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
-set "LOG=%LOGDIR%\05_route_mapper_simple_console.log"
+set "LOG=%LOGDIR%\05_trip_viewer_console.log"
 
 rem --- launch (NO start/cmd; direct pythonw/python) ---
 if exist "%PYW%" (

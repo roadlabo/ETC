@@ -34,5 +34,5 @@
 ## 関連スクリプト
 - 前段: [docs/01_split_by_opid_streaming.md](./01_split_by_opid_streaming.md)（OPID 分割）。
 - 後段: [docs/30_build_performance.md](./30_build_performance.md), [docs/40_trip_od_screening.md](./40_trip_od_screening.md)。
-- ビューア: [docs/05_route_mapper_simple.md](./05_route_mapper_simple.md), [docs/06_route_mapper_kp.md](./06_route_mapper_kp.md)。
+- ビューア: [docs/05_trip_viewer.md](./05_trip_viewer.md), [docs/06_route_mapper_kp.md](./06_route_mapper_kp.md)。
 - フロー全体: [docs/01_pipeline.md](./01_pipeline.md)

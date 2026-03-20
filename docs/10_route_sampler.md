@@ -20,7 +20,7 @@
 ## 判定ロジック（重要なものだけ）
 - クリックされた点を 20m 等間隔に再サンプリングし、30°以上の折れ点を必ず保持。
 - 線形補間は緯度経度の線形補間（短距離前提）、FLAG=2 で全行を揃え、時間は 10 秒刻みで連番付与。
-- 出力は route_mapper_simple / trip_extractor と列順互換に整形。
+- 出力は trip_viewer / trip_extractor と列順互換に整形。
 ## できること / できないこと（行政向けの注意）
 - できること: 目視でルート形状を定義し、後続の抽出で参照できる CSV を即時作成。FLAG/TYPE/USE を既定値で固定し、他ツールとの整合を担保。
 - できないこと: 実測データとの自動フィッティング、測位誤差を踏まえたスナップ、自動のルート短縮。あくまで人手定義の基準データであり、交通量の結論を示さない。
@@ -29,5 +29,5 @@
 - O/P 列を入れ替えた旧版 CSV を混在させる（本版は O=lon, P=lat が正）。
 - ポート競合で Flask が起動しない。
 ## 関連スクリプト
-- 後段: [docs/05_route_mapper_simple.md](./05_route_mapper_simple.md) / [docs/06_route_mapper_kp.md](./06_route_mapper_kp.md)（作図結果の確認）、[docs/20_route_trip_extractor.md](./20_route_trip_extractor.md)（抽出で参照）。
+- 後段: [docs/05_trip_viewer.md](./05_trip_viewer.md) / [docs/06_route_mapper_kp.md](./06_route_mapper_kp.md)（作図結果の確認）、[docs/20_route_trip_extractor.md](./20_route_trip_extractor.md)（抽出で参照）。
 - フロー全体: [docs/01_pipeline.md](./01_pipeline.md)
