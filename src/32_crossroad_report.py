@@ -68,6 +68,10 @@ TIME_LABELS = ["1-4時", "4-7時", "7-10時", "10-13時", "13-16時", "16-19時"
 MAP_SCALE = 0.26
 MAP_ANCHOR_CELL = "B11"
 TURNBACK_SINGLE_REASON = "TURN_SINGLE_POINT_REVERSAL_OK"
+EXCLUSION_LABEL_STORE = "店舗"
+EXCLUSION_LABEL_TURN = "反転"
+EXCLUSION_LABEL_FOLDBACK = "折り返し"
+EXCLUSION_LABEL_OUTLIER = "異常値"
 
 
 def _numeric_series_or_default(df: pd.DataFrame, col: str, default=0) -> pd.Series:
@@ -87,22 +91,27 @@ def _string_series_or_default(df: pd.DataFrame, col: str, default: str = "") -> 
 
 
 def classify_delay_exclusion_counts(df: pd.DataFrame) -> dict[str, int]:
-    counts = {"store": 0, "turn": 0, "foldback": 0}
+    counts = {"store": 0, "turn": 0, "foldback": 0, "outlier": 0}
     if df.empty:
         return counts
 
+    exclusion_type_series = _string_series_or_default(df, "遅れ除外種別", "")
     store_series = _numeric_series_or_default(df, COL_STORE_STOP, 0)
     turn_series = _numeric_series_or_default(df, COL_TURN_TRIP, 0)
     turn_reason_series = _string_series_or_default(df, COL_TURN_REASON, "")
 
-    for is_store, is_turn, turn_reason in zip(store_series, turn_series, turn_reason_series):
-        if int(is_store) == 1:
+    for exclusion_type, is_store, is_turn, turn_reason in zip(exclusion_type_series, store_series, turn_series, turn_reason_series):
+        label = str(exclusion_type).strip()
+        if label == EXCLUSION_LABEL_STORE or int(is_store) == 1:
             counts["store"] += 1
+        elif label == EXCLUSION_LABEL_TURN:
+            counts["turn"] += 1
+        elif label == EXCLUSION_LABEL_FOLDBACK or (int(is_turn) == 1 and turn_reason.strip() == TURNBACK_SINGLE_REASON):
+            counts["foldback"] += 1
+        elif label == EXCLUSION_LABEL_OUTLIER:
+            counts["outlier"] += 1
         elif int(is_turn) == 1:
-            if turn_reason.strip() == TURNBACK_SINGLE_REASON:
-                counts["foldback"] += 1
-            else:
-                counts["turn"] += 1
+            counts["turn"] += 1
     return counts
 
 
@@ -565,7 +574,7 @@ class _ExcelReportHelper:
         total_days_text = f"{len(self.unique_dates)}日（{date_range}）" if date_range else f"{len(self.unique_dates)}日"
         exclusion_text = (
             f"店舗,{exclusion_counts['store']}台 反転,{exclusion_counts['turn']}台 "
-            f"折り返し,{exclusion_counts['foldback']}台"
+            f"折り返し,{exclusion_counts['foldback']}台 異常値,{exclusion_counts['outlier']}台"
         )
         info_pairs = [
             ("交差点定義ファイル", self.crossroad_path.name, None),
@@ -889,6 +898,7 @@ def create_excel_report_headless(
         COL_TIME_REASON,
         COL_TIME_PRIMARY,
         COL_TIME_FALLBACK,
+        "遅れ除外種別",
     ]
     missing = [c for c in required_cols if c not in df_perf.columns]
     if missing:
@@ -907,6 +917,7 @@ def create_excel_report_headless(
     turn_angle = _numeric_series_or_default(df_perf, COL_TURN_ANGLE, 0)
     turn_points = _numeric_series_or_default(df_perf, COL_TURN_POINTS, 0)
     turn_reason = _string_series_or_default(df_perf, COL_TURN_REASON, "")
+    exclusion_type = _string_series_or_default(df_perf, "遅れ除外種別", "")
 
     t_primary = _string_series_or_default(df_perf, COL_TIME_FALLBACK, "").str.strip()
     t_fallback = _string_series_or_default(df_perf, COL_TIME_PRIMARY, "").str.strip()
@@ -927,6 +938,7 @@ def create_excel_report_headless(
             COL_TURN_ANGLE: turn_angle,
             COL_TURN_POINTS: turn_points,
             COL_TURN_REASON: turn_reason,
+            "遅れ除外種別": exclusion_type,
             "time": time_series,
         }
     )
@@ -938,6 +950,7 @@ def create_excel_report_headless(
     data_all[COL_TURN_ANGLE] = pd.to_numeric(data_all[COL_TURN_ANGLE], errors="coerce").fillna(0)
     data_all[COL_TURN_POINTS] = pd.to_numeric(data_all[COL_TURN_POINTS], errors="coerce").fillna(0)
     data_all[COL_TURN_REASON] = data_all[COL_TURN_REASON].fillna("").astype(str)
+    data_all["遅れ除外種別"] = data_all["遅れ除外種別"].fillna("").astype(str)
 
     data_clean = data_all.dropna(subset=["date", "in_b", "out_b"]).copy()
     data_clean["in_b"] = data_clean["in_b"].astype(int)

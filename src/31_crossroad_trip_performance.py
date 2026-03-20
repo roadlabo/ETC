@@ -73,9 +73,22 @@ STORE_CLUSTER_DIAMETER_M = 30.0
 STORE_CLUSTER_MIN_POINTS = 3
 STORE_STAY_MIN_SEC = 120.0
 TURN_PASS_WINDOW_PRE_M = 100.0
-TURN_PASS_WINDOW_POST_M = 100.0
+TURN_PASS_WINDOW_POST_M = MEASURE_POST_M
 TURN_CUM_ANGLE_MIN_DEG = 160.0
 TURN_STAY_MIN_SEC = 120.0
+TURN_SINGLE_POINT_MIN_SIDE_M = 10.0
+TURN_SINGLE_POINT_STAY_MIN_SEC = 0.0
+OUTLIER_IQR_MULTIPLIER = 3.0
+OUTLIER_MIN_SAMPLES = 4
+
+EXCLUSION_LABEL_STORE = "店舗"
+EXCLUSION_LABEL_TURN = "反転"
+EXCLUSION_LABEL_FOLDBACK = "折り返し"
+EXCLUSION_LABEL_OUTLIER = "異常値"
+STORE_REASON_OK = "STORE_CLUSTER_OK"
+TURN_REASON_OK = "TURN_SIGNED_ROTATION_OK"
+TURNBACK_SINGLE_REASON = "TURN_SINGLE_POINT_REVERSAL_OK"
+OUTLIER_REASON_OK = "OUTLIER_IQR_OK"
 
 # ============================================================
 # 交差点通過判定ロジック（31 / 16 と完全一致）
@@ -534,23 +547,53 @@ def _continuous_turn_events(target_points):
                         "rotation_deg": signed_rotation,
                         "abs_angle_deg": abs(signed_rotation),
                         "point_count": (end + 2) - start + 1,
-                        "reason": "TURN_SIGNED_ROTATION_OK",
+                        "reason": TURN_REASON_OK,
                     }
                 )
 
-        for pivot in range(1, len(seq) - 1):
-            signed_rotation = signed_angular_diff(
-                segment_bearings[pivot - 1],
-                segment_bearings[pivot],
+        seq_cumdist = [0.0]
+        for i in range(len(seq) - 1):
+            seq_cumdist.append(
+                seq_cumdist[-1]
+                + haversine_m(seq[i]["lat"], seq[i]["lon"], seq[i + 1]["lat"], seq[i + 1]["lon"])
             )
-            stay_sec = (seq[pivot + 1]["dt"] - seq[pivot - 1]["dt"]).total_seconds()
+
+        def _find_side_index(pivot_idx: int, direction: int) -> int | None:
+            idx = pivot_idx
+            while True:
+                next_idx = idx + direction
+                if next_idx < 0 or next_idx >= len(seq):
+                    break
+                travel_m = abs(seq_cumdist[next_idx] - seq_cumdist[pivot_idx])
+                idx = next_idx
+                if travel_m >= TURN_SINGLE_POINT_MIN_SIDE_M:
+                    return idx
+            fallback_idx = pivot_idx + direction
+            if 0 <= fallback_idx < len(seq):
+                return fallback_idx
+            return None
+
+        for pivot in range(1, len(seq) - 1):
+            prev_idx = _find_side_index(pivot, -1)
+            next_idx = _find_side_index(pivot, 1)
+            if prev_idx is None or next_idx is None:
+                continue
+
+            in_bearing = bearing_deg(
+                seq[prev_idx]["lat"], seq[prev_idx]["lon"], seq[pivot]["lat"], seq[pivot]["lon"]
+            )
+            out_bearing = bearing_deg(
+                seq[pivot]["lat"], seq[pivot]["lon"], seq[next_idx]["lat"], seq[next_idx]["lon"]
+            )
+            signed_rotation = signed_angular_diff(in_bearing, out_bearing)
+            stay_sec = (seq[next_idx]["dt"] - seq[prev_idx]["dt"]).total_seconds()
             events.append(
                 {
                     "stay_sec": stay_sec,
                     "rotation_deg": signed_rotation,
                     "abs_angle_deg": abs(signed_rotation),
-                    "point_count": 3,
-                    "reason": "TURN_SINGLE_POINT_REVERSAL_OK",
+                    "point_count": next_idx - prev_idx + 1,
+                    "reason": TURNBACK_SINGLE_REASON,
                 }
             )
     return events
@@ -588,17 +631,14 @@ def judge_turnback_trip(
     ]
     if threshold_events:
         duration_hit_events = [
-            event for event in threshold_events if event["stay_sec"] >= TURN_STAY_MIN_SEC
+            event
+            for event in threshold_events
+            if event["reason"] == TURN_REASON_OK and event["stay_sec"] >= TURN_STAY_MIN_SEC
         ]
         if duration_hit_events:
             best_hit = max(
                 duration_hit_events,
-                key=lambda x: (
-                    1 if x["reason"] == "TURN_SIGNED_ROTATION_OK" else 0,
-                    x["abs_angle_deg"],
-                    x["stay_sec"],
-                    x["point_count"],
-                ),
+                key=lambda x: (x["abs_angle_deg"], x["stay_sec"], x["point_count"]),
             )
             return (
                 True,
@@ -606,6 +646,24 @@ def judge_turnback_trip(
                 best_hit["rotation_deg"],
                 best_hit["point_count"],
                 best_hit["reason"],
+            )
+        immediate_foldbacks = [
+            event
+            for event in threshold_events
+            if event["reason"] == TURNBACK_SINGLE_REASON
+            and event["stay_sec"] >= TURN_SINGLE_POINT_STAY_MIN_SEC
+        ]
+        if immediate_foldbacks:
+            best_foldback = max(
+                immediate_foldbacks,
+                key=lambda x: (x["abs_angle_deg"], x["point_count"], x["stay_sec"]),
+            )
+            return (
+                True,
+                best_foldback["stay_sec"],
+                best_foldback["rotation_deg"],
+                best_foldback["point_count"],
+                best_foldback["reason"],
             )
         best_threshold_event = max(
             threshold_events,
@@ -647,11 +705,11 @@ def judge_store_stop_trip(
     )
 
     if len(target_points) < STORE_CLUSTER_MIN_POINTS:
-        return False, None, len(target_points), None, "PASS_MEASURE_WINDOW_POINTS_LT3"
+        return False, None, len(target_points), None, "しきい値不足"
 
     stays = _continuous_cluster_stays(target_points)
     if not stays:
-        return False, None, 0, None, "PASS_CLUSTER_POINTS_LT3"
+        return False, None, 0, None, "しきい値不足"
 
     best_stay = max(stays, key=lambda x: (x["stay_sec"], x["cluster_count"], -x["span_m"]))
     if best_stay["stay_sec"] >= STORE_STAY_MIN_SEC:
@@ -660,15 +718,61 @@ def judge_store_stop_trip(
             best_stay["stay_sec"],
             best_stay["cluster_count"],
             best_stay["span_m"],
-            "PASS_MEASURE_WINDOW_CONTIGUOUS_CLUSTER_OK",
+            STORE_REASON_OK,
         )
     return (
         False,
         best_stay["stay_sec"],
         best_stay["cluster_count"],
         best_stay["span_m"],
-        "PASS_CONTIGUOUS_CLUSTER_DURATION_LT120S",
+        "継続時間不足",
     )
+
+
+def compute_iqr_outlier_upper(elapsed_values: list[float]) -> float | None:
+    clean_vals = sorted(float(v) for v in elapsed_values if v is not None)
+    if len(clean_vals) < OUTLIER_MIN_SAMPLES:
+        return None
+    series = pd.Series(clean_vals, dtype="float64")
+    q1 = float(series.quantile(0.25))
+    q3 = float(series.quantile(0.75))
+    iqr = q3 - q1
+    return q3 + OUTLIER_IQR_MULTIPLIER * iqr
+
+
+def classify_delay_exclusion_label(*, is_store_stop: bool, is_turnback: bool, turnback_reason: str, is_outlier: bool) -> str:
+    if is_store_stop:
+        return EXCLUSION_LABEL_STORE
+    if is_turnback:
+        return EXCLUSION_LABEL_FOLDBACK if turnback_reason == TURNBACK_SINGLE_REASON else EXCLUSION_LABEL_TURN
+    if is_outlier:
+        return EXCLUSION_LABEL_OUTLIER
+    return ""
+
+
+def build_delay_exclusion_reason(*, store_reason: str, turnback_reason: str, is_outlier: bool) -> str:
+    reasons: list[str] = []
+    if store_reason:
+        reasons.append(store_reason)
+    if turnback_reason:
+        reasons.append(turnback_reason)
+    if is_outlier:
+        reasons.append(OUTLIER_REASON_OK)
+    return "|".join(reasons)
+
+
+def summarize_exclusion_counts(rows: list[dict]) -> dict[str, int]:
+    counts = {
+        EXCLUSION_LABEL_STORE: 0,
+        EXCLUSION_LABEL_TURN: 0,
+        EXCLUSION_LABEL_FOLDBACK: 0,
+        EXCLUSION_LABEL_OUTLIER: 0,
+    }
+    for row in rows:
+        label = row.get("delay_exclusion_label", "")
+        if label in counts:
+            counts[label] += 1
+    return counts
 
 
 def weekday_abbr(date8):
@@ -984,10 +1088,17 @@ def main() -> None:
     print(
         "反転トリップ（遅れ時間算出対象外）判定条件：現在pass近傍"
         f"（算出中心基準 前{TURN_PASS_WINDOW_PRE_M:.0f}m〜後{TURN_PASS_WINDOW_POST_M:.0f}m）内で、"
-        "符号付き回転量として全体が反対方向へ160度以上反転する、または1点折り返しが検出され、"
-        "かつ2分以上続く"
+        "符号付き回転量として全体が反対方向へ160度以上反転すること"
     )
-    print("遅れ時間(s)の表示優先順位: 店舗 > 反転 > 数値")
+    print(
+        "折り返しトリップ（遅れ時間算出対象外）判定条件：現在pass近傍"
+        f"（算出中心基準 前{TURN_PASS_WINDOW_PRE_M:.0f}m〜後{TURN_PASS_WINDOW_POST_M:.0f}m）内で、"
+        "1点を境に進行方向がほぼ反転すること"
+    )
+    print(
+        f"異常値トリップ（遅れ時間算出対象外）判定条件：方向別 elapsed に対し IQR 上限 = Q3 + {OUTLIER_IQR_MULTIPLIER:.0f}*IQR を超過"
+    )
+    print("遅れ時間(s)の表示優先順位: 店舗 > 反転 > 折り返し > 異常値 > 数値")
     print("--------------------------------------------------")
 
     # ==============================================================
@@ -1029,6 +1140,8 @@ def main() -> None:
             time_ng_trips = 0
             store_stop_trips = 0
             turnback_trips = 0
+            foldback_trips = 0
+            outlier_trips = 0
             both_stop_and_turn_trips = 0
             no_segment_trips = 0
             weekday_skip = 0
@@ -1061,7 +1174,11 @@ def main() -> None:
             idx_t0 = HEADER.index("閑散時所要時間(s)")
             idx_delay = HEADER.index("遅れ時間(s)")
             idx_store = HEADER.index("店舗立寄トリップ")
+            idx_turn_reason = HEADER.index("反転判定理由")
+            idx_delay_exclusion_type = HEADER.index("遅れ除外種別")
+            idx_delay_exclusion_reason = HEADER.index("遅れ除外判定理由")
             elapsed_map = {}
+            candidate_rows: list[dict] = []
 
             with out_csv.open("w", encoding="cp932", errors="ignore", newline="") as fw:
                 final_writer = csv.writer(fw)
@@ -1397,28 +1514,23 @@ def main() -> None:
                                 store_stop_trips += 1
                             if is_turnback:
                                 turnback_trips += 1
+                                if turnback_reason == TURNBACK_SINGLE_REASON:
+                                    foldback_trips += 1
                             if is_store_stop and is_turnback:
                                 both_stop_and_turn_trips += 1
 
-                            is_delay_excluded = is_store_stop or is_turnback
-                            if is_store_stop:
-                                delay_exclusion_type = "店舗"
-                            elif is_turnback:
-                                delay_exclusion_type = "反転"
-                            else:
-                                delay_exclusion_type = ""
-
-                            delay_reason_parts = []
-                            if is_store_stop:
-                                delay_reason_parts.append(f"STORE:{store_reason}")
-                            if is_turnback:
-                                delay_reason_parts.append(f"TURN:{turnback_reason}")
-                            if not delay_reason_parts:
-                                if store_reason:
-                                    delay_reason_parts.append(f"STORE:{store_reason}")
-                                if turnback_reason:
-                                    delay_reason_parts.append(f"TURN:{turnback_reason}")
-                            delay_exclusion_reason = "|".join(delay_reason_parts)
+                            delay_exclusion_type = classify_delay_exclusion_label(
+                                is_store_stop=is_store_stop,
+                                is_turnback=is_turnback,
+                                turnback_reason=turnback_reason,
+                                is_outlier=False,
+                            )
+                            is_delay_excluded = bool(delay_exclusion_type)
+                            delay_exclusion_reason = build_delay_exclusion_reason(
+                                store_reason=store_reason,
+                                turnback_reason=turnback_reason,
+                                is_outlier=False,
+                            )
 
                             # 生プロット（中心付近の前後4点＋中央）
                             if seg_i is not None:
@@ -1520,13 +1632,33 @@ def main() -> None:
                             tmp_writer.writerow(row_out)
                             perf_rows += 1
 
+                            key = (str(in_branch), str(out_branch))
                             if elapsed is not None and time_valid == 1 and not is_delay_excluded:
-                                key = (str(in_branch), str(out_branch))
                                 elapsed_map.setdefault(key, []).append(float(elapsed))
+                                candidate_rows.append({"key": key, "elapsed": float(elapsed), "delay_exclusion_label": ""})
+                            else:
+                                candidate_rows.append({
+                                    "key": key,
+                                    "elapsed": float(elapsed) if elapsed is not None else None,
+                                    "delay_exclusion_label": delay_exclusion_type,
+                                })
 
                     # ----------- 進捗表示（1行上書き） -----------
                     progress = file_idx / total_files * 100.0
                     elapsed_cfg = time.time() - cfg_start
+                    provisional_counts = summarize_exclusion_counts(candidate_rows)
+                    current_outlier_count = 0
+                    if elapsed_map:
+                        upper_map = {key: compute_iqr_outlier_upper(vals) for key, vals in elapsed_map.items()}
+                        for candidate in candidate_rows:
+                            if candidate["delay_exclusion_label"]:
+                                continue
+                            upper = upper_map.get(candidate["key"])
+                            if upper is None or candidate["elapsed"] is None:
+                                continue
+                            if candidate["elapsed"] > upper:
+                                current_outlier_count += 1
+                        provisional_counts[EXCLUSION_LABEL_OUTLIER] = current_outlier_count
 
                     progress_line = (
                         f"進捗: {file_idx:4d}/{total_files:4d} "
@@ -1536,6 +1668,10 @@ def main() -> None:
                         f"成功: {branch_ok_trips:6d}  "
                         f"不明: {branch_unknown_trips:6d}  "
                         f"不通過: {cross_notpass_trips:6d}  "
+                        f"店舗={provisional_counts[EXCLUSION_LABEL_STORE]:6d}  "
+                        f"反転={provisional_counts[EXCLUSION_LABEL_TURN]:6d}  "
+                        f"折り返し={provisional_counts[EXCLUSION_LABEL_FOLDBACK]:6d}  "
+                        f"異常値={provisional_counts[EXCLUSION_LABEL_OUTLIER]:6d}  "
                         f"中心失敗: {closest_fail_trips:6d}  "
                         f"経過時間: {elapsed_cfg/60:5.1f}分"
                     )
@@ -1549,12 +1685,20 @@ def main() -> None:
                 tmp_fh = None
 
                 t0_map = {}
+                outlier_upper_map = {}
                 for key, vals in elapsed_map.items():
                     if not vals:
                         continue
-                    vals.sort()
-                    k = max(1, int(len(vals) * 0.05))
-                    t0 = sum(vals[:k]) / k
+                    outlier_upper_map[key] = compute_iqr_outlier_upper(vals)
+                    filtered_vals = [
+                        val for val in vals
+                        if outlier_upper_map[key] is None or val <= outlier_upper_map[key]
+                    ]
+                    if not filtered_vals:
+                        continue
+                    filtered_vals.sort()
+                    k = max(1, int(len(filtered_vals) * 0.05))
+                    t0 = sum(filtered_vals[:k]) / k
                     t0_map[key] = t0
 
                 idx_in_b = HEADER.index("流入枝番")
@@ -1572,15 +1716,42 @@ def main() -> None:
                         in_b = row[idx_in_b]
                         out_b = row[idx_out_b]
                         key = (in_b, out_b)
-                        if row[idx_store] == "1":
-                            row[idx_t0] = ""
-                            row[idx_delay] = "店舗"
-                        elif row[HEADER.index("反転トリップ")] == "1":
-                            row[idx_t0] = ""
-                            row[idx_delay] = "反転"
-                        elif row[idx_elapsed] != "" and key in t0_map:
+                        existing_label = row[idx_delay_exclusion_type].strip()
+                        elapsed_val = None
+                        if row[idx_elapsed] != "":
                             try:
                                 elapsed_val = float(row[idx_elapsed])
+                            except Exception:
+                                elapsed_val = None
+
+                        is_outlier = (
+                            not existing_label
+                            and elapsed_val is not None
+                            and key in outlier_upper_map
+                            and outlier_upper_map[key] is not None
+                            and elapsed_val > outlier_upper_map[key]
+                        )
+                        if is_outlier:
+                            existing_label = EXCLUSION_LABEL_OUTLIER
+                            existing_reason = row[idx_delay_exclusion_reason].strip()
+                            row[idx_delay_exclusion_type] = existing_label
+                            row[idx_delay_exclusion_reason] = f"{existing_reason}|{OUTLIER_REASON_OK}" if existing_reason else OUTLIER_REASON_OK
+                            outlier_trips += 1
+
+                        if existing_label == EXCLUSION_LABEL_STORE or row[idx_store] == "1":
+                            row[idx_t0] = ""
+                            row[idx_delay] = EXCLUSION_LABEL_STORE
+                        elif existing_label == EXCLUSION_LABEL_TURN:
+                            row[idx_t0] = ""
+                            row[idx_delay] = EXCLUSION_LABEL_TURN
+                        elif existing_label == EXCLUSION_LABEL_FOLDBACK or row[idx_turn_reason] == TURNBACK_SINGLE_REASON:
+                            row[idx_t0] = ""
+                            row[idx_delay] = EXCLUSION_LABEL_FOLDBACK
+                        elif existing_label == EXCLUSION_LABEL_OUTLIER:
+                            row[idx_t0] = ""
+                            row[idx_delay] = EXCLUSION_LABEL_OUTLIER
+                        elif elapsed_val is not None and key in t0_map:
+                            try:
                                 t0 = float(t0_map[key])
                                 row[idx_t0] = f"{t0:.3f}"
                                 row[idx_delay] = f"{(elapsed_val - t0):.3f}"
@@ -1616,7 +1787,7 @@ def main() -> None:
             f"成功={branch_ok_trips}, 不明={branch_unknown_trips}, 不通過={cross_notpass_trips}, "
             f"中心抽出失敗={closest_fail_trips}, "
             f"所要時間OK={time_ok_trips}, 所要時間NG={time_ng_trips}, 店舗立寄={store_stop_trips}, "
-            f"反転={turnback_trips}, 両方ヒット={both_stop_and_turn_trips}, "
+            f"反転={turnback_trips - foldback_trips}, 折り返し={foldback_trips}, 異常値={outlier_trips}, 両方ヒット={both_stop_and_turn_trips}, "
             f"所要時間NG(時刻欠損)={bad_time_trips}, 所要時間NG(区間範囲外)={out_of_range_trips}, "
             f"所要時間NG(線分取得不可)={no_segment_trips}, "
             f"weekday_skip={weekday_skip}, bad_date={bad_date}, bad_points={bad_points}, "
@@ -1626,7 +1797,7 @@ def main() -> None:
             f"  [SUMMARY31] 対象トリップ={total_trips}, 枝判定成功={branch_ok_trips}, "
             f"枝不明={branch_unknown_trips}, 交差点不通過={cross_notpass_trips}, "
             f"中心抽出失敗={closest_fail_trips}, "
-            f"店舗立寄={store_stop_trips}, 反転={turnback_trips}, 両方ヒット={both_stop_and_turn_trips}, "
+            f"店舗立寄={store_stop_trips}, 反転={turnback_trips - foldback_trips}, 折り返し={foldback_trips}, 異常値={outlier_trips}, 両方ヒット={both_stop_and_turn_trips}, "
             f"所要時間NG(時刻欠損)={bad_time_trips}, 所要時間NG(区間範囲外)={out_of_range_trips}, "
             f"所要時間NG(線分取得不可)={no_segment_trips}, "
             f"weekday_skip={weekday_skip}, bad_date={bad_date}, bad_points={bad_points}"
