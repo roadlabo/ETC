@@ -62,6 +62,27 @@ DELAY_LABELS = ["0-5", "5-10", "10-20", "20-30", "30-60", "60-120", "120-180", "
 TIME_LABELS = ["1-4時", "4-7時", "7-10時", "10-13時", "13-16時", "16-19時", "19-22時", "22-1時"]
 MAP_SCALE = 0.26
 MAP_ANCHOR_CELL = "B11"
+TURNBACK_SINGLE_REASON = "TURN_SINGLE_POINT_REVERSAL_OK"
+
+
+def classify_delay_exclusion_counts(df: pd.DataFrame) -> dict[str, int]:
+    counts = {"store": 0, "turn": 0, "foldback": 0}
+    if df.empty:
+        return counts
+
+    store_series = pd.to_numeric(df.get(COL_STORE_STOP, 0), errors="coerce").fillna(0)
+    turn_series = pd.to_numeric(df.get("反転トリップ", 0), errors="coerce").fillna(0)
+    turn_reason_series = df.get("反転判定理由", "").fillna("").astype(str)
+
+    for is_store, is_turn, turn_reason in zip(store_series, turn_series, turn_reason_series):
+        if int(is_store) == 1:
+            counts["store"] += 1
+        elif int(is_turn) == 1:
+            if turn_reason.strip() == TURNBACK_SINGLE_REASON:
+                counts["foldback"] += 1
+            else:
+                counts["turn"] += 1
+    return counts
 
 
 def parse_center_datetime(val) -> datetime | None:
@@ -516,11 +537,15 @@ class _ExcelReportHelper:
         total_records = len(self.all_df)
         ok_records = int(self.all_df["time_valid"].sum()) if total_records else 0
         ng_records = total_records - ok_records
-        store_stop_records = int((self.all_df["store_stop"] == 1).sum()) if total_records else 0
+        exclusion_counts = classify_delay_exclusion_counts(self.all_df)
         branch_ok = int((self.all_df["in_b"].notna() & self.all_df["out_b"].notna()).sum()) if total_records else 0
         branch_ng = total_records - branch_ok
         date_range = self._format_date_range(start_date, end_date)
         total_days_text = f"{len(self.unique_dates)}日（{date_range}）" if date_range else f"{len(self.unique_dates)}日"
+        exclusion_text = (
+            f"店舗,{exclusion_counts['store']}台 反転,{exclusion_counts['turn']}台 "
+            f"折り返し,{exclusion_counts['foldback']}台"
+        )
         info_pairs = [
             ("交差点定義ファイル", self.crossroad_path.name, None),
             ("パフォーマンスCSV", self.performance_path.name, None),
@@ -529,7 +554,7 @@ class _ExcelReportHelper:
             ("総レコード数（通過）（台）", total_records, None),
             ("枝判定 OK/NG（台）", f"{branch_ok} / {branch_ng}", None),
             ("所要時間算出 OK/NG（台）", f"{ok_records} / {ng_records}", None),
-            ("店舗立ち寄り（遅れ時間算出対象外）（台）", store_stop_records, None),
+            ("遅れ時間算出対象外（台）", exclusion_text, None),
         ]
 
         for offset, (label, value, extra) in enumerate(info_pairs):

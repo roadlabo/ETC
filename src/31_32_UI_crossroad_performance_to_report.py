@@ -1,3 +1,4 @@
+import csv
 import os
 import re
 import sys
@@ -53,6 +54,38 @@ RE_PROGRESS = re.compile(r"進捗:\s*(\d+)\s*/\s*(\d+)")
 RE_STATS = re.compile(r"曜日後:\s*(\d+).*?行数:\s*(\d+).*?成功:\s*(\d+).*?不明:\s*(\d+).*?不通過:\s*(\d+)")
 RE_DONE = re.compile(r"完了:\s*ファイル=(\d+).*?曜日後=(\d+).*?行数=(\d+).*?成功=(\d+).*?不明=(\d+).*?不通過=(\d+)")
 RE_LEVEL = re.compile(r"\[(INFO|WARN|WARNING|ERROR|DEBUG)\]")
+
+TURNBACK_SINGLE_REASON = "TURN_SINGLE_POINT_REVERSAL_OK"
+
+
+def summarize_exclusion_counts_from_csv(csv_path: str | Path) -> dict[str, int]:
+    counts = {"store": 0, "turn": 0, "foldback": 0}
+    path_obj = Path(csv_path)
+    if not path_obj.exists():
+        return counts
+
+    last_error = None
+    for enc in ("utf-8-sig", "cp932", "shift_jis", "utf-8"):
+        try:
+            with path_obj.open("r", encoding=enc, newline="") as fh:
+                reader = csv.DictReader(fh)
+                for row in reader:
+                    store_flag = str(row.get("店舗立寄トリップ", "")).strip()
+                    turn_flag = str(row.get("反転トリップ", "")).strip()
+                    turn_reason = str(row.get("反転判定理由", "")).strip()
+                    if store_flag == "1":
+                        counts["store"] += 1
+                    elif turn_flag == "1":
+                        if turn_reason == TURNBACK_SINGLE_REASON:
+                            counts["foldback"] += 1
+                        else:
+                            counts["turn"] += 1
+            return counts
+        except Exception as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    return counts
 
 
 class StepBox(QFrame):
@@ -234,7 +267,7 @@ class CrossCardPerf(QFrame):
         self._launch_33_handler = launch_33_handler
         self.selected = True
         self.locked = False
-        self.data = {"done": 0, "total": 0, "weekday": 0, "split": 0, "target": 0, "ok": 0, "unk": 0, "notpass": 0}
+        self.data = {"done": 0, "total": 0, "weekday": 0, "split": 0, "target": 0, "ok": 0, "unk": 0, "notpass": 0, "store": 0, "turn": 0, "foldback": 0}
         self.flags = {"has_csv": False, "has_jpg": False, "has_s2_dir": False, "s2_csv": 0, "has_out31": False, "has_out32": False}
         self.paths: dict[str, str] = {}
         self.state = "待機"
@@ -309,7 +342,18 @@ class CrossCardPerf(QFrame):
         pct = (done / total * 100.0) if total else 0.0
         self.lbl_progress.setText(f"進捗ファイル: {done:,}/{total:,} ({pct:.1f}%)")
 
-    def set_stats(self, weekday: int, split: int, target: int, ok: int, unk: int, notpass: int):
+    def set_stats(
+        self,
+        weekday: int,
+        split: int,
+        target: int,
+        ok: int,
+        unk: int,
+        notpass: int,
+        store: int = 0,
+        turn: int = 0,
+        foldback: int = 0,
+    ):
         self.data.update({
             "weekday": weekday,
             "split": split,
@@ -317,13 +361,17 @@ class CrossCardPerf(QFrame):
             "ok": ok,
             "unk": unk,
             "notpass": notpass,
+            "store": store,
+            "turn": turn,
+            "foldback": foldback,
         })
 
         line1 = f"対象曜日のファイル数{weekday:,}／分割{split:,}"
         line2 = f"分析対象総トリップ数{target:,}"
         line3 = f"成功{ok:,}／枝不明{unk:,}／不通過{notpass:,}"
+        line4 = f"店舗{store:,}／反転{turn:,}／折り返し{foldback:,}"
 
-        self.lbl_stats.setText(line1 + "\n" + line2 + "\n" + line3)
+        self.lbl_stats.setText(line1 + "\n" + line2 + "\n" + line3 + "\n" + line4)
 
     def _launch_branch_viewer(self):
         # card.paths["out31"] は「*_performance.csv（ファイル）」を格納している
@@ -1272,6 +1320,27 @@ class MainWindow(QMainWindow):
         self._scan_worker = worker
         thread.start()
 
+    def _read_exclusion_counts(self, perf_path: str | Path) -> dict[str, int]:
+        try:
+            return summarize_exclusion_counts_from_csv(perf_path)
+        except Exception as exc:
+            self.log_warn(f"店舗/反転/折り返し集計に失敗: {Path(perf_path).name} / {exc}")
+            return {"store": 0, "turn": 0, "foldback": 0}
+
+    def _sync_card_exclusion_counts(self, card: CrossCardPerf) -> None:
+        counts = self._read_exclusion_counts(card.paths.get("out31", ""))
+        card.set_stats(
+            card.data["weekday"],
+            card.data["split"],
+            card.data["target"],
+            card.data["ok"],
+            card.data["unk"],
+            card.data["notpass"],
+            counts["store"],
+            counts["turn"],
+            counts["foldback"],
+        )
+
     def _apply_scan_result(self, items: list[dict], sum_s2: int) -> None:
         self._clear_cards()
         if not items:
@@ -1300,6 +1369,8 @@ class MainWindow(QMainWindow):
             card.set_buttons_enabled(True)
             card.set_progress(0, it["s2_csv"])
             card.set_stats(0, 0, 0, 0, 0, 0)
+            if it["has_out31"]:
+                self._sync_card_exclusion_counts(card)
 
             self.cards[name] = card
             self.cross_flow.addWidget(card)
@@ -1514,6 +1585,8 @@ class MainWindow(QMainWindow):
             return
         out31 = Path(card.paths["out31"]); out32 = Path(card.paths["out32"])
         card.set_flags(has_csv=Path(card.paths["cross_csv"]).exists(), has_jpg=Path(card.paths["cross_jpg"]).exists(), has_s2_dir=Path(card.paths["s2_dir"]).exists(), s2_csv=card.flags.get("s2_csv", 0), has_out31=out31.exists(), has_out32=out32.exists())
+        if out31.exists():
+            self._sync_card_exclusion_counts(card)
 
     def _extract_last_error_line(self) -> str:
         for line in reversed(self._recent_process_lines):
@@ -1567,7 +1640,7 @@ class MainWindow(QMainWindow):
             split = rows + notpass - weekday
             if ok + unk != rows:
                 self.log_warn(f"rows mismatch: ok({ok}) + unk({unk}) != rows({rows}) for {self.current_name}")
-            card.set_stats(weekday, split, target, ok, unk, notpass)
+            card.set_stats(weekday, split, target, ok, unk, notpass, card.data["store"], card.data["turn"], card.data["foldback"])
         self._refresh_telemetry()
 
     def _maybe_update_realtime_from_buffer(self, buf: str) -> None:
@@ -1589,14 +1662,14 @@ class MainWindow(QMainWindow):
         split = rows + notpass - weekday
         card = self.cards[self.current_name]
         card.set_progress(total, total)
-        card.set_stats(weekday, split, target, ok, unk, notpass)
+        card.set_stats(weekday, split, target, ok, unk, notpass, card.data["store"], card.data["turn"], card.data["foldback"])
         self._refresh_telemetry()
 
     def _card_dump_lines(self) -> list[str]:
-        lines = ["name	selected	status	done/total	weekday_after	split	target	ok	unk	notpass	has_out31	has_out32"]
+        lines = ["name	selected	status	done/total	weekday_after	split	target	ok	unk	notpass	store	turn	foldback	has_out31	has_out32"]
         for n, c in self.cards.items():
             d = c.data
-            lines.append(f"{n}	{int(c.selected)}	{c.state}	{d['done']}/{d['total']}	{d['weekday']}	{d['split']}	{d['target']}	{d['ok']}	{d['unk']}	{d['notpass']}	{int(c.flags.get('has_out31', False))}	{int(c.flags.get('has_out32', False))}")
+            lines.append(f"{n}	{int(c.selected)}	{c.state}	{d['done']}/{d['total']}	{d['weekday']}	{d['split']}	{d['target']}	{d['ok']}	{d['unk']}	{d['notpass']}	{d['store']}	{d['turn']}	{d['foldback']}	{int(c.flags.get('has_out31', False))}	{int(c.flags.get('has_out32', False))}")
         return lines
 
     def _write_batch_log_files(self, total_sec: float) -> None:
