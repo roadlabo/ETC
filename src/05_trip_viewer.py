@@ -498,9 +498,9 @@ LEAFLET_HTML = r"""
     try { if (base) map.removeLayer(base); } catch(e) {}
     base = null;
 
-    const layer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    const layer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
       maxZoom: 20,
-      attribution: '&copy; OpenStreetMap contributors',
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
       crossOrigin: true,
       updateWhenIdle: true,
       keepBuffer: 2,
@@ -1178,7 +1178,12 @@ def run_without_gui(folder_path: str) -> Optional[str]:
 
     lat0 = float(df.iloc[0]["lat"])
     lon0 = float(df.iloc[0]["lon"])
-    fmap = folium.Map(location=[lat0, lon0], zoom_start=12, tiles="OpenStreetMap")
+    fmap = folium.Map(
+        location=[lat0, lon0],
+        zoom_start=12,
+        tiles="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+        attr="&copy; OpenStreetMap contributors &copy; CARTO",
+    )
 
     points: List[Tuple[float, float, int]] = []
     for r in df.itertuples(index=False):
