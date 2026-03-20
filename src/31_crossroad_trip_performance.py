@@ -72,6 +72,10 @@ STORE_PASS_WINDOW_POST_M = MEASURE_POST_M
 STORE_CLUSTER_DIAMETER_M = 30.0
 STORE_CLUSTER_MIN_POINTS = 3
 STORE_STAY_MIN_SEC = 120.0
+TURN_PASS_WINDOW_PRE_M = 150.0
+TURN_PASS_WINDOW_POST_M = 150.0
+TURN_CUM_ANGLE_MIN_DEG = 160.0
+TURN_STAY_MIN_SEC = 120.0
 
 # ============================================================
 # 交差点通過判定ロジック（31 / 16 と完全一致）
@@ -437,17 +441,16 @@ def _continuous_cluster_stays(target_points):
     return stays
 
 
-
-def judge_store_stop_trip(
+def _extract_pass_window_points(
     points,
     gps_times,
-    center_lat,
-    center_lon,
     pass_center_pos,
+    window_pre_m,
+    window_post_m,
     prev_pass_center_pos=None,
     next_pass_center_pos=None,
 ):
-    """現在のpass計測区間内だけを対象に、連続クラスタ滞在による店舗立寄を判定する。"""
+    """現在passの有効範囲に含まれる連続判定用ポイントを抽出する。"""
     dt_list = [parse_dt14(t) for t in gps_times]
     cumdist = build_cumdist(points)
 
@@ -458,8 +461,8 @@ def judge_store_stop_trip(
     if next_pass_center_pos is not None:
         upper_bound = (pass_center_pos + next_pass_center_pos) / 2.0
 
-    window_start_pos = pass_center_pos - STORE_PASS_WINDOW_PRE_M
-    window_end_pos = pass_center_pos + STORE_PASS_WINDOW_POST_M
+    window_start_pos = pass_center_pos - window_pre_m
+    window_end_pos = pass_center_pos + window_post_m
 
     target_points = []
     for idx, ((lat, lon), dt_val, pos_m) in enumerate(zip(points, dt_list, cumdist)):
@@ -475,8 +478,135 @@ def judge_store_stop_trip(
                 "lat": lat,
                 "lon": lon,
                 "dt": dt_val,
+                "pos_m": pos_m,
             }
         )
+    return target_points
+
+
+def _continuous_sequences(target_points):
+    """idxが連続する点列ごとに分割して返す。"""
+    sequences = []
+    current = []
+    prev_idx = None
+    for point in target_points:
+        if prev_idx is not None and point["idx"] != prev_idx + 1:
+            if current:
+                sequences.append(current)
+            current = []
+        current.append(point)
+        prev_idx = point["idx"]
+    if current:
+        sequences.append(current)
+    return sequences
+
+
+def _continuous_turn_events(target_points):
+    """連続3点の進行方向変化角の絶対値累積による反転候補を列挙する。"""
+    events = []
+    for seq in _continuous_sequences(target_points):
+        if len(seq) < 3:
+            continue
+        turn_diffs = []
+        for i in range(1, len(seq) - 1):
+            prev_pt = seq[i - 1]
+            curr_pt = seq[i]
+            next_pt = seq[i + 1]
+            bearing1 = bearing_deg(prev_pt["lat"], prev_pt["lon"], curr_pt["lat"], curr_pt["lon"])
+            bearing2 = bearing_deg(curr_pt["lat"], curr_pt["lon"], next_pt["lat"], next_pt["lon"])
+            turn_diffs.append(angular_diff(bearing1, bearing2))
+
+        for start in range(len(turn_diffs)):
+            cum_angle = 0.0
+            for end in range(start, len(turn_diffs)):
+                cum_angle += abs(turn_diffs[end])
+                start_point = seq[start]
+                end_point = seq[end + 2]
+                stay_sec = (end_point["dt"] - start_point["dt"]).total_seconds()
+                events.append(
+                    {
+                        "stay_sec": stay_sec,
+                        "cum_angle_deg": cum_angle,
+                        "point_count": (end + 2) - start + 1,
+                    }
+                )
+    return events
+
+
+def judge_turnback_trip(
+    points,
+    gps_times,
+    pass_center_pos,
+    prev_pass_center_pos=None,
+    next_pass_center_pos=None,
+):
+    """現在pass近傍の累積回転角で反転トリップを判定する。"""
+    target_points = _extract_pass_window_points(
+        points,
+        gps_times,
+        pass_center_pos,
+        TURN_PASS_WINDOW_PRE_M,
+        TURN_PASS_WINDOW_POST_M,
+        prev_pass_center_pos,
+        next_pass_center_pos,
+    )
+    if len(target_points) < 3:
+        return False, None, None, len(target_points), "TURN_WINDOW_POINTS_LT3"
+
+    events = _continuous_turn_events(target_points)
+    if not events:
+        return False, None, None, 0, "TURN_SEQUENCE_POINTS_LT3"
+
+    best_event = max(events, key=lambda x: (x["cum_angle_deg"], x["stay_sec"], x["point_count"]))
+    hit_events = [
+        event
+        for event in events
+        if event["cum_angle_deg"] >= TURN_CUM_ANGLE_MIN_DEG and event["stay_sec"] >= TURN_STAY_MIN_SEC
+    ]
+    if hit_events:
+        best_hit = max(hit_events, key=lambda x: (x["cum_angle_deg"], x["stay_sec"], x["point_count"]))
+        return (
+            True,
+            best_hit["stay_sec"],
+            best_hit["cum_angle_deg"],
+            best_hit["point_count"],
+            "TURN_CUMULATIVE_ANGLE_OK",
+        )
+    if best_event["cum_angle_deg"] < TURN_CUM_ANGLE_MIN_DEG:
+        return (
+            False,
+            best_event["stay_sec"],
+            best_event["cum_angle_deg"],
+            best_event["point_count"],
+            "TURN_CUMULATIVE_ANGLE_LT160DEG",
+        )
+    return (
+        False,
+        best_event["stay_sec"],
+        best_event["cum_angle_deg"],
+        best_event["point_count"],
+        "TURN_DURATION_LT120S",
+    )
+
+
+
+def judge_store_stop_trip(
+    points,
+    gps_times,
+    pass_center_pos,
+    prev_pass_center_pos=None,
+    next_pass_center_pos=None,
+):
+    """現在のpass計測区間内だけを対象に、連続クラスタ滞在による店舗立寄を判定する。"""
+    target_points = _extract_pass_window_points(
+        points,
+        gps_times,
+        pass_center_pos,
+        STORE_PASS_WINDOW_PRE_M,
+        STORE_PASS_WINDOW_POST_M,
+        prev_pass_center_pos,
+        next_pass_center_pos,
+    )
 
     if len(target_points) < STORE_CLUSTER_MIN_POINTS:
         return False, None, len(target_points), None, "PASS_MEASURE_WINDOW_POINTS_LT3"
@@ -629,6 +759,14 @@ HEADER = [
     "店舗立寄クラスタ点数",
     "店舗立寄クラスタ径(m)",
     "店舗立寄判定理由",
+    "反転トリップ",
+    "反転継続時間(s)",
+    "反転累積回転角(deg)",
+    "反転判定点数",
+    "反転判定理由",
+    "遅れ除外フラグ",
+    "遅れ除外種別",
+    "遅れ除外判定理由",
     "所要時間算出可否",
     "所要時間算出不可理由",
     # ---- ここから診断用（補間区間・最近接情報）----
@@ -798,6 +936,12 @@ def main() -> None:
         f"（算出中心基準 前{STORE_PASS_WINDOW_PRE_M:.0f}m〜後{STORE_PASS_WINDOW_POST_M:.0f}m）内で、"
         "直径30m以内に点が3点以上存在する固まり状態が連続して2分以上続く"
     )
+    print(
+        "反転トリップ（遅れ時間算出対象外）判定条件：現在pass近傍"
+        f"（算出中心基準 前{TURN_PASS_WINDOW_PRE_M:.0f}m〜後{TURN_PASS_WINDOW_POST_M:.0f}m）内で、"
+        "連続3点から計算される進行方向変化角の絶対値累積が160度以上、かつ2分以上続く"
+    )
+    print("遅れ時間(s)の表示優先順位: 店舗 > 反転 > 数値")
     print("--------------------------------------------------")
 
     # ==============================================================
@@ -838,6 +982,8 @@ def main() -> None:
             time_ok_trips = 0
             time_ng_trips = 0
             store_stop_trips = 0
+            turnback_trips = 0
+            both_stop_and_turn_trips = 0
             no_segment_trips = 0
             weekday_skip = 0
             bad_date = 0
@@ -1184,14 +1330,49 @@ def main() -> None:
                             ) = judge_store_stop_trip(
                                 points,
                                 gps_times,
-                                cross.center_lat,
-                                cross.center_lon,
+                                center_pos_for_branch,
+                                prev_pass_center_pos,
+                                next_pass_center_pos,
+                            )
+                            (
+                                is_turnback,
+                                turnback_stay_sec,
+                                turnback_cum_angle_deg,
+                                turnback_point_count,
+                                turnback_reason,
+                            ) = judge_turnback_trip(
+                                points,
+                                gps_times,
                                 center_pos_for_branch,
                                 prev_pass_center_pos,
                                 next_pass_center_pos,
                             )
                             if is_store_stop:
                                 store_stop_trips += 1
+                            if is_turnback:
+                                turnback_trips += 1
+                            if is_store_stop and is_turnback:
+                                both_stop_and_turn_trips += 1
+
+                            is_delay_excluded = is_store_stop or is_turnback
+                            if is_store_stop:
+                                delay_exclusion_type = "店舗"
+                            elif is_turnback:
+                                delay_exclusion_type = "反転"
+                            else:
+                                delay_exclusion_type = ""
+
+                            delay_reason_parts = []
+                            if is_store_stop:
+                                delay_reason_parts.append(f"STORE:{store_reason}")
+                            if is_turnback:
+                                delay_reason_parts.append(f"TURN:{turnback_reason}")
+                            if not delay_reason_parts:
+                                if store_reason:
+                                    delay_reason_parts.append(f"STORE:{store_reason}")
+                                if turnback_reason:
+                                    delay_reason_parts.append(f"TURN:{turnback_reason}")
+                            delay_exclusion_reason = "|".join(delay_reason_parts)
 
                             # 生プロット（中心付近の前後4点＋中央）
                             if seg_i is not None:
@@ -1255,6 +1436,14 @@ def main() -> None:
                                 str(store_cluster_points) if store_cluster_points else "",
                                 f"{store_cluster_span_m:.3f}" if store_cluster_span_m is not None else "",
                                 store_reason,
+                                "1" if is_turnback else "0",
+                                f"{turnback_stay_sec:.3f}" if turnback_stay_sec is not None else "",
+                                f"{turnback_cum_angle_deg:.3f}" if turnback_cum_angle_deg is not None else "",
+                                str(turnback_point_count) if turnback_point_count else "",
+                                turnback_reason,
+                                "1" if is_delay_excluded else "0",
+                                delay_exclusion_type,
+                                delay_exclusion_reason,
                                 str(time_valid),
                                 time_reason,
                             ]
@@ -1285,7 +1474,7 @@ def main() -> None:
                             tmp_writer.writerow(row_out)
                             perf_rows += 1
 
-                            if elapsed is not None and time_valid == 1 and not is_store_stop:
+                            if elapsed is not None and time_valid == 1 and not is_delay_excluded:
                                 key = (str(in_branch), str(out_branch))
                                 elapsed_map.setdefault(key, []).append(float(elapsed))
 
@@ -1340,6 +1529,9 @@ def main() -> None:
                         if row[idx_store] == "1":
                             row[idx_t0] = ""
                             row[idx_delay] = "店舗"
+                        elif row[HEADER.index("反転トリップ")] == "1":
+                            row[idx_t0] = ""
+                            row[idx_delay] = "反転"
                         elif row[idx_elapsed] != "" and key in t0_map:
                             try:
                                 elapsed_val = float(row[idx_elapsed])
@@ -1378,6 +1570,7 @@ def main() -> None:
             f"成功={branch_ok_trips}, 不明={branch_unknown_trips}, 不通過={cross_notpass_trips}, "
             f"中心抽出失敗={closest_fail_trips}, "
             f"所要時間OK={time_ok_trips}, 所要時間NG={time_ng_trips}, 店舗立寄={store_stop_trips}, "
+            f"反転={turnback_trips}, 両方ヒット={both_stop_and_turn_trips}, "
             f"所要時間NG(時刻欠損)={bad_time_trips}, 所要時間NG(区間範囲外)={out_of_range_trips}, "
             f"所要時間NG(線分取得不可)={no_segment_trips}, "
             f"weekday_skip={weekday_skip}, bad_date={bad_date}, bad_points={bad_points}, "
@@ -1387,7 +1580,7 @@ def main() -> None:
             f"  [SUMMARY31] 対象トリップ={total_trips}, 枝判定成功={branch_ok_trips}, "
             f"枝不明={branch_unknown_trips}, 交差点不通過={cross_notpass_trips}, "
             f"中心抽出失敗={closest_fail_trips}, "
-            f"店舗立寄={store_stop_trips}, "
+            f"店舗立寄={store_stop_trips}, 反転={turnback_trips}, 両方ヒット={both_stop_and_turn_trips}, "
             f"所要時間NG(時刻欠損)={bad_time_trips}, 所要時間NG(区間範囲外)={out_of_range_trips}, "
             f"所要時間NG(線分取得不可)={no_segment_trips}, "
             f"weekday_skip={weekday_skip}, bad_date={bad_date}, bad_points={bad_points}"
