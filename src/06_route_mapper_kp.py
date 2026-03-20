@@ -7,7 +7,7 @@ is rendered to a Folium map (OpenStreetMap background) and saved as
 the first render to avoid duplicate tabs.
 
 Usage:
-    python route_mapper_simple.py [pattern]
+    python trip_viewer.py [pattern]
 
 * A folder selection dialog will prompt for the CSV directory.
 * ``pattern`` defaults to ``*.csv``.

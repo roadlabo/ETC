@@ -31,6 +31,6 @@
 - 文字コードを UTF-8 のまま開いて文字化け（出力は cp932）。
 ## 関連スクリプト
 - 前段: [docs/20_route_trip_extractor.md](./20_route_trip_extractor.md)。
-- 後段: レポート化・可視化は [docs/05_route_mapper_simple.md](./05_route_mapper_simple.md) などで補助。
+- 後段: レポート化・可視化は [docs/05_trip_viewer.md](./05_trip_viewer.md) などで補助。
 - 兄弟: 交差点性能は [docs/31_crossroad_trip_performance.md](./31_crossroad_trip_performance.md)。
 - フロー全体: [docs/01_pipeline.md](./01_pipeline.md)

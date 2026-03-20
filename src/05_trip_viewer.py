@@ -48,13 +48,15 @@ else:
 
 
 # ============================================================
-# 05: route mapper (33-like UI)
+# 05: trip viewer (33-like UI)
 #  - embedded Leaflet map (NO browser tabs)
 #  - raw data plot (speed vs time/index)
 # ============================================================
 
 # CSV column indices (0-based)  ※05の既存仕様を維持
-UI_LOGO_FILENAME = "logo_05_route_mapper_simple.png"
+UI_LOGO_FILENAME = "logo_05_trip_viewer.png"
+UI_LOGO_FALLBACK_FILENAMES = ("logo_05_route_mapper_simple.png",)
+EMPTY_DIRECTORY_GUIDE = "左上のフォルダ選択ボタンからフォルダを指定してください。"
 LON_COL = 15    # 16列目（経度）
 LAT_COL = 14    # 15列目（緯度）
 FLAG_COL = 12   # 13列目（フラグ）
@@ -538,10 +540,17 @@ LEAFLET_HTML = r"""
     // { center:{lat,lon}, points:[{lat,lon,flag,time_text,speed}], segments:[[[lat,lon],...],...], bounds:[[s,w],[n,e]] }
     ensureLayer();
     if (!map){
-      initMap(payload.center.lat, payload.center.lon, 12);
+      const center = payload.center || { lat: 35.681236, lon: 139.767125 };
+      initMap(center.lat, center.lon, 12);
     }
 
     clearLayer();
+
+    if (!payload.points || !payload.points.length){
+      const center = payload.center || { lat: 35.681236, lon: 139.767125 };
+      map.setView([center.lat, center.lon], 5);
+      return;
+    }
 
     // segments (black line)
     const lineStyle = {color:'black', weight:2, opacity:1.0, dashArray:'6 6'};
@@ -596,13 +605,21 @@ LEAFLET_HTML = r"""
     } catch(e) {}
   }
 
+  function clearView(){
+    ensureLayer();
+    clearLayer();
+    if (map){
+      map.setView([35.681236, 139.767125], 5);
+    }
+  }
+
   function bootstrap(){
     if (!window.L){
       document.getElementById('map').innerHTML = 'Leafletの読み込みに失敗しました（leaflet/配置 or セキュリティ設定）';
-      window._routeMapper = { initMap: ()=>{}, showRoute: ()=>{} };
+      window._routeMapper = { initMap: ()=>{}, showRoute: ()=>{}, clearView: ()=>{} };
       return;
     }
-    window._routeMapper = { initMap, showRoute };
+    window._routeMapper = { initMap, showRoute, clearView };
   }
 
   bootstrap();
@@ -669,9 +686,9 @@ class SpeedPlot(QWidget):
 
 
 class RouteMapperWindow(QMainWindow):
-    def __init__(self, directory: Path, pattern: str) -> None:
+    def __init__(self, directory: Optional[Path], pattern: str) -> None:
         super().__init__()
-        self.setWindowTitle("第２スクリーニング　トリップビューアー")
+        self.setWindowTitle("第1・2スクリーニング　トリップビューアー")
         self.resize(1500, 900)
 
         self.directory = directory
@@ -711,7 +728,7 @@ class RouteMapperWindow(QMainWindow):
         left_layout.addLayout(bar)
 
         dir_row = QHBoxLayout()
-        self.lbl_dir = QLabel(f"DIR: {self.directory}")
+        self.lbl_dir = QLabel(self._directory_label_text())
         self.lbl_dir.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.lbl_nfiles = QLabel("ファイル数：0")
         self.lbl_nfiles.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -771,12 +788,40 @@ class RouteMapperWindow(QMainWindow):
 
     def _resolve_logo_path(self) -> Path | None:
         base = Path(__file__).resolve().parent
-        cand1 = base / "assets" / "logos" / UI_LOGO_FILENAME
-        cand2 = base / "logo.png"
-        for p in (cand1, cand2):
+        candidates = [
+            base / "assets" / "logos" / UI_LOGO_FILENAME,
+            *[base / "assets" / "logos" / name for name in UI_LOGO_FALLBACK_FILENAMES],
+            base / "logo.png",
+        ]
+        for p in candidates:
             if p.exists():
                 return p
         return None
+
+    def _directory_label_text(self) -> str:
+        return f"DIR: {self.directory}" if self.directory else "DIR: 未選択"
+
+    def _show_empty_state(self, status_text: str) -> None:
+        self.files = []
+        self.list.clear()
+        self.lbl_dir.setText(self._directory_label_text())
+        self.lbl_nfiles.setText("ファイル数：0")
+        self.status.setText(status_text)
+        self._set_info_defaults()
+        self.plot.update_plot(pd.DataFrame())
+        self._clear_map()
+
+    def _clear_map(self) -> None:
+        payload = {
+            "center": {"lat": 35.681236, "lon": 139.767125},
+            "points": [],
+            "segments": [],
+            "bounds": [],
+        }
+        self._run_js(
+            f"window._routeMapper.showRoute({json.dumps(payload)});",
+            on_ready=lambda: self._run_js("window._routeMapper.clearView();"),
+        )
 
     def _init_logo_overlay(self) -> None:
         logo_path = self._resolve_logo_path()
@@ -884,10 +929,11 @@ class RouteMapperWindow(QMainWindow):
             self.splash.move(x, y)
 
     def _pick_directory(self) -> None:
+        initial_dir = str(self.directory) if self.directory else str(Path.cwd())
         d = QFileDialog.getExistingDirectory(
             self,
             "第1・2スクリーニングデータ格納フォルダの選択",
-            str(self.directory)
+            initial_dir
         )
         if not d:
             return
@@ -896,33 +942,33 @@ class RouteMapperWindow(QMainWindow):
         self._msg_loading = make_busy_dialog("処理中", "データ読込中…")
 
         self.directory = Path(d)
-        self.lbl_dir.setText(f"DIR: {self.directory}")
+        self.lbl_dir.setText(self._directory_label_text())
         self._refresh_file_list()
 
     def _refresh_file_list(self) -> None:
         self.pattern = "*.csv"
+        if self.directory is None:
+            close_busy_dialog(self._msg_loading)
+            self._msg_loading = None
+            self._show_empty_state(EMPTY_DIRECTORY_GUIDE)
+            return
+
         if not self.directory.exists():
             close_busy_dialog(self._msg_loading)
             self._msg_loading = None
-            self.files = []
-            self.list.clear()
-            self.lbl_nfiles.setText("ファイル数：0")
-            self.status.setText("No CSV files found.")
-            self._set_info_defaults()
-            self.plot.update_plot(pd.DataFrame())
+            self._show_empty_state("指定されたフォルダが見つかりません。")
             QMessageBox.warning(self, "Directory not found", f"Directory does not exist:\n{self.directory}")
             return
 
         self.files = sorted([p for p in self.directory.glob(self.pattern) if p.is_file()])
+        self.lbl_dir.setText(self._directory_label_text())
         self.lbl_nfiles.setText(f"ファイル数：{len(self.files)}")
         self.list.clear()
         for p in self.files:
             self.list.addItem(QListWidgetItem(p.name))
 
         if not self.files:
-            self.status.setText("No CSV files found.")
-            self._set_info_defaults()
-            self.plot.update_plot(pd.DataFrame())
+            self._show_empty_state("CSVファイルが見つかりません。")
             close_busy_dialog(self._msg_loading)
             self._msg_loading = None
             return
@@ -950,6 +996,8 @@ class RouteMapperWindow(QMainWindow):
                     self._render_current()
             except Exception:
                 pass
+        else:
+            self._clear_map()
 
         # 地図準備完了 → 処理中メッセージを閉じる
         close_busy_dialog(self._msg_loading)
@@ -1090,22 +1138,6 @@ def main(argv: Sequence[str]) -> None:
 
     busy = make_busy_dialog("起動中", "Qt初期化中…（初回は時間がかかることがあります）")
 
-    initial = r"D:\01仕事\05 ETC2.0分析\生データ"
-
-    close_busy_dialog(busy)
-    busy = None
-
-    d = folder_arg or QFileDialog.getExistingDirectory(
-        None,
-        "第1・2スクリーニングデータ格納フォルダの選択",
-        initial
-    )
-
-    if not d:
-        return
-
-    busy = make_busy_dialog("起動中", "データ読込中…")
-
     # インターネット未接続通知（既存白背景ロジックは変更しない）
     if not is_internet_available():
         QMessageBox.information(
@@ -1114,7 +1146,14 @@ def main(argv: Sequence[str]) -> None:
             "インターネット接続が無いため白背景で表示します。"
         )
 
-    w = RouteMapperWindow(directory=Path(d), pattern=pattern)
+    initial_directory = Path(folder_arg) if folder_arg else None
+    if initial_directory is not None:
+        busy.setLabelText("データ読込中…")
+    else:
+        close_busy_dialog(busy)
+        busy = None
+
+    w = RouteMapperWindow(directory=initial_directory, pattern=pattern)
 
     # ウィンドウ側でも閉じられるよう参照渡し
     w._msg_loading = busy
