@@ -10,13 +10,15 @@ from pathlib import Path
 import logging
 from html import escape
 
-from PyQt6.QtCore import QPointF, QProcess, QProcessEnvironment, QTimer, Qt, QUrl
-from PyQt6.QtGui import QPainter, QPen, QColor, QPolygonF
+from PyQt6.QtCore import QPointF, QProcess, QProcessEnvironment, QPropertyAnimation, QTimer, Qt, QUrl
+from PyQt6.QtGui import QPainter, QPen, QColor, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QFileDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
@@ -40,6 +42,10 @@ except Exception:
     QWebEngineView = None
 
 APP_TITLE = "03_運行ID別 推定拠点ゾーン対応表 作成"
+UI_LOGO_FILENAME = "logo_03_UI_base_zone_estimator.png"
+CORNER_LOGO_MARGIN = 18
+CORNER_LOGO_OFFSET_TOP = -4
+CORNER_LOGO_OFFSET_RIGHT = -10
 RE_PROGRESS = re.compile(r"\[PROGRESS\]\s+done=(\d+)\s+total=(\d+)(?:\s+file=(.+))?")
 RE_TOTAL = re.compile(r"\[TOTAL\]\s+total=(\d+)")
 RE_HIT = re.compile(r"\[HIT\]\s+op_id=(\S+)\s+zone=(.+?)\s+hit_count=(\d+)")
@@ -380,6 +386,10 @@ class MainWindow(QMainWindow):
         self.center_name = DEFAULT_CENTER_NAME
 
         self._build_ui()
+        self._corner_logo_visible = False
+        self.splash_logo: QLabel | None = None
+        self._pix_small = None
+        QTimer.singleShot(0, self._init_logo_overlay)
         self._update_center_labels()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
@@ -567,6 +577,96 @@ class MainWindow(QMainWindow):
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
             """
         )
+
+    def _center_splash_logo(self) -> None:
+        if not self.splash_logo:
+            return
+        parent_rect = self.rect()
+        logo_rect = self.splash_logo.rect()
+        self.splash_logo.move((parent_rect.width() - logo_rect.width()) // 2, (parent_rect.height() - logo_rect.height()) // 2)
+
+    def _resolve_logo_path(self) -> Path | None:
+        base = Path(__file__).resolve().parent
+        cand1 = base / "assets" / "logos" / UI_LOGO_FILENAME
+        cand2 = base / "logo.png"
+        for p in (cand1, cand2):
+            if p.exists():
+                return p
+        return None
+
+    def _init_logo_overlay(self) -> None:
+        logo_path = self._resolve_logo_path()
+        if not logo_path:
+            return
+        pixmap = QPixmap(str(logo_path))
+        if pixmap.isNull():
+            return
+        pix_big = pixmap.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
+        self._pix_small = pixmap.scaledToHeight(110, Qt.TransformationMode.SmoothTransformation)
+        self.splash_logo = QLabel(self)
+        self.splash_logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash_logo.setStyleSheet("background: transparent;")
+        self.splash_logo.setPixmap(pix_big)
+        self.splash_logo.adjustSize()
+        self._center_splash_logo()
+        self.splash_logo.show()
+        effect = QGraphicsOpacityEffect(self.splash_logo)
+        self.splash_logo.setGraphicsEffect(effect)
+        fade_in = QPropertyAnimation(effect, b"opacity", self)
+        fade_in.setDuration(500)
+        fade_in.setStartValue(0.0)
+        fade_in.setEndValue(1.0)
+
+        def start_fade_out():
+            fade_out = QPropertyAnimation(effect, b"opacity", self)
+            fade_out.setDuration(500)
+            fade_out.setStartValue(1.0)
+            fade_out.setEndValue(0.0)
+
+            def show_corner_logo():
+                if self.splash_logo:
+                    self.splash_logo.deleteLater()
+                    self.splash_logo = None
+                self._show_corner_logo()
+
+            fade_out.finished.connect(show_corner_logo)
+            fade_out.start()
+
+        fade_in.finished.connect(lambda: QTimer.singleShot(3000, start_fade_out))
+        fade_in.start()
+
+    def _show_corner_logo(self) -> None:
+        if not self._pix_small:
+            return
+        self.splash = QLabel(self)
+        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash.setStyleSheet(f"background: transparent; margin-top: {CORNER_LOGO_OFFSET_TOP}px; margin-right: {CORNER_LOGO_OFFSET_RIGHT}px;")
+        self.splash.setPixmap(self._pix_small)
+        self.splash.adjustSize()
+        x = self.width() - self.splash.width() - CORNER_LOGO_MARGIN + abs(CORNER_LOGO_OFFSET_RIGHT)
+        y = CORNER_LOGO_MARGIN + CORNER_LOGO_OFFSET_TOP
+        self.splash.move(x, y)
+        self.splash.show()
+        self._corner_logo_visible = True
+        effect = QGraphicsDropShadowEffect(self)
+        effect.setBlurRadius(26)
+        effect.setOffset(0, 0)
+        effect.setColor(QColor(0, 255, 180, 150))
+        self.splash.setGraphicsEffect(effect)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.splash_logo and self.splash_logo.isVisible():
+            self._center_splash_logo()
+        if getattr(self, "_corner_logo_visible", False):
+            x = self.width() - self.splash.width() - CORNER_LOGO_MARGIN + abs(CORNER_LOGO_OFFSET_RIGHT)
+            y = CORNER_LOGO_MARGIN + CORNER_LOGO_OFFSET_TOP
+            self.splash.move(x, y)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.splash_logo:
+            self._center_splash_logo()
 
     def append_log_line(self, text: str) -> None:
         line = _normalize_log_line(text)
