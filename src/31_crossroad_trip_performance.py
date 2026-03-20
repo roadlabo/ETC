@@ -807,10 +807,8 @@ def angular_diff(a: float, b: float) -> float:
 
 
 def signed_angular_diff(a: float, b: float) -> float:
-    diff = (b - a + 180.0) % 360.0 - 180.0
-    if diff == -180.0:
-        return 180.0
-    return diff
+    """Return the signed shortest angular difference while preserving exact 180° sign."""
+    return (b - a + 180.0) % 360.0 - 180.0
 
 
 def find_nearest_branch(angle: float, branches: Iterable[Branch]) -> str:
@@ -1596,7 +1594,7 @@ def main() -> None:
                                 store_reason,
                                 "1" if is_turnback else "0",
                                 f"{turnback_stay_sec:.3f}" if turnback_stay_sec is not None else "",
-                                f"{turnback_cum_angle_deg:.3f}" if turnback_cum_angle_deg is not None else "",
+                                f"{abs(turnback_cum_angle_deg):.3f}" if turnback_cum_angle_deg is not None else "",
                                 str(turnback_point_count) if turnback_point_count else "",
                                 turnback_reason,
                                 "1" if is_delay_excluded else "0",
