@@ -507,18 +507,21 @@ LEAFLET_HTML = r"""
     });
 
     let okOnce = false;
-    layer.on('tileload', () => { okOnce = true; });
+    layer.on('tileload', () => {
+      okOnce = true;
+    });
+    layer.on('tileerror', (ev) => {
+      console.warn('Positron tile load error', ev);
+    });
 
     layer.addTo(map);
+    base = layer;
 
     setTimeout(() => {
       if (!okOnce) {
-        try { map.removeLayer(layer); } catch(e) {}
-        base = null;
-      } else {
-        base = layer;
+        console.warn('Positron tile load is slow; keeping base layer mounted and waiting for tiles.');
       }
-    }, 6000);
+    }, 15000);
   }
 
   function initMap(lat, lon, zoom){
