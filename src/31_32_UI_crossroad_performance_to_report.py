@@ -512,6 +512,7 @@ class MainWindow(QMainWindow):
         # ---- UI更新 間引き（安定化） ----
         self.TELEMETRY_INTERVAL_SEC = 10.0  # telemetry（done/total等）は10秒に1回
         self.ETA_INTERVAL_SEC = 10.0        # ETA（残り時間）は10秒に1回だけ再計算
+        self.EXCLUSION_SYNC_INTERVAL_SEC = 2.0  # 31実行中の店舗/反転/折り返し再読込は2秒に1回まで
         self._telemetry_last_update_t = 0.0
         self._eta_last_calc_t = 0.0
         self._eta_last_text = "残り --:--:--"
@@ -529,6 +530,7 @@ class MainWindow(QMainWindow):
         self._project_loading_bar: QProgressBar | None = None
         self._scan_thread: QThread | None = None
         self._scan_worker: ScanWorker | None = None
+        self._last_exclusion_sync_t: dict[str, float] = {}
         self.splash_logo = None
         self.corner_logo = None
         self._logo_phase = "none"
@@ -1320,15 +1322,51 @@ class MainWindow(QMainWindow):
         self._scan_worker = worker
         thread.start()
 
-    def _read_exclusion_counts(self, perf_path: str | Path) -> dict[str, int]:
+    def _read_exclusion_counts(self, perf_path: str | Path, *, quiet: bool = False) -> dict[str, int]:
         try:
             return summarize_exclusion_counts_from_csv(perf_path)
         except Exception as exc:
-            self.log_warn(f"店舗/反転/折り返し集計に失敗: {Path(perf_path).name} / {exc}")
+            if not quiet:
+                self.log_warn(f"店舗/反転/折り返し集計に失敗: {Path(perf_path).name} / {exc}")
             return {"store": 0, "turn": 0, "foldback": 0}
 
     def _sync_card_exclusion_counts(self, card: CrossCardPerf) -> None:
         counts = self._read_exclusion_counts(card.paths.get("out31", ""))
+        card.set_stats(
+            card.data["weekday"],
+            card.data["split"],
+            card.data["target"],
+            card.data["ok"],
+            card.data["unk"],
+            card.data["notpass"],
+            counts["store"],
+            counts["turn"],
+            counts["foldback"],
+        )
+
+    def _reset_card_runtime_stats(self, card: CrossCardPerf) -> None:
+        card.set_progress(0, card.flags.get("s2_csv", 0))
+        card.set_stats(0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+    def _maybe_refresh_realtime_exclusion_counts(self, *, force: bool = False) -> None:
+        if self.current_step != "31" or not self.current_name:
+            return
+        card = self.cards.get(self.current_name)
+        if not card:
+            return
+
+        now = perf_counter()
+        last_sync = self._last_exclusion_sync_t.get(self.current_name, 0.0)
+        if not force and (now - last_sync) < self.EXCLUSION_SYNC_INTERVAL_SEC:
+            return
+
+        perf_path = Path(card.paths.get("out31", ""))
+        if not perf_path.exists():
+            self._last_exclusion_sync_t[self.current_name] = now
+            return
+
+        counts = self._read_exclusion_counts(perf_path, quiet=True)
+        self._last_exclusion_sync_t[self.current_name] = now
         card.set_stats(
             card.data["weekday"],
             card.data["split"],
@@ -1458,11 +1496,13 @@ class MainWindow(QMainWindow):
         self.started_at = time.time()
         self._elapsed_frozen_text = "経過 00:00:00"
         self._telemetry_running = True
+        self._last_exclusion_sync_t = {}
         self.tele["status"].setText("状態: RUNNING")
         for card in self.cards.values():
             card.set_locked(True)
             card.set_buttons_enabled(False)
             if card.selected:
+                self._reset_card_runtime_stats(card)
                 card.set_state("待機")
         self._refresh_telemetry(force=True)
         self._start_next_crossroad()
@@ -1474,6 +1514,7 @@ class MainWindow(QMainWindow):
         self.current_name = self.queue.pop(0)
         self.current_step = "31"
         self.cross_start_perf[self.current_name] = perf_counter()
+        self._last_exclusion_sync_t[self.current_name] = 0.0
         self.log_info(f"交差点開始: {self.current_name}")
         self._set_status_for_current_card("31 実行中")
         self._start_step31(self.current_name)
@@ -1607,6 +1648,7 @@ class MainWindow(QMainWindow):
             if reason: msg = f"{msg} / {reason}"
             self._set_status_for_current_card(msg); self.log_error(msg); self._start_next_crossroad(); return
         if self.current_step == "31":
+            self._maybe_refresh_realtime_exclusion_counts(force=True)
             self._update_card_outputs(self.current_name)
             self._set_status_for_current_card("32 実行中")
             self.current_step = "32"
@@ -1641,6 +1683,8 @@ class MainWindow(QMainWindow):
             if ok + unk != rows:
                 self.log_warn(f"rows mismatch: ok({ok}) + unk({unk}) != rows({rows}) for {self.current_name}")
             card.set_stats(weekday, split, target, ok, unk, notpass, card.data["store"], card.data["turn"], card.data["foldback"])
+        if m or m2:
+            self._maybe_refresh_realtime_exclusion_counts()
         self._refresh_telemetry()
 
     def _maybe_update_realtime_from_buffer(self, buf: str) -> None:
@@ -1663,6 +1707,7 @@ class MainWindow(QMainWindow):
         card = self.cards[self.current_name]
         card.set_progress(total, total)
         card.set_stats(weekday, split, target, ok, unk, notpass, card.data["store"], card.data["turn"], card.data["foldback"])
+        self._maybe_refresh_realtime_exclusion_counts(force=True)
         self._refresh_telemetry()
 
     def _card_dump_lines(self) -> list[str]:
