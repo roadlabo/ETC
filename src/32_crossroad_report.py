@@ -529,7 +529,7 @@ class _ExcelReportHelper:
             ("総レコード数（通過）（台）", total_records, None),
             ("枝判定 OK/NG（台）", f"{branch_ok} / {branch_ng}", None),
             ("所要時間算出 OK/NG（台）", f"{ok_records} / {ng_records}", None),
-            ("店舗立寄トリップ（遅れ時間算出対象外）（台）", store_stop_records, None),
+            ("店舗立ち寄り（遅れ時間算出対象外）（台）", store_stop_records, None),
         ]
 
         for offset, (label, value, extra) in enumerate(info_pairs):
