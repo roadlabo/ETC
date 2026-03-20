@@ -498,7 +498,7 @@ LEAFLET_HTML = r"""
     try { if (base) map.removeLayer(base); } catch(e) {}
     base = null;
 
-    const layer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    const layer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/positron/{z}/{x}/{y}{r}.png', {
       maxZoom: 20,
       attribution: '© OpenStreetMap contributors © CARTO',
       crossOrigin: true,
@@ -1181,7 +1181,7 @@ def run_without_gui(folder_path: str) -> Optional[str]:
     fmap = folium.Map(
         location=[lat0, lon0],
         zoom_start=12,
-        tiles="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+        tiles="https://{s}.basemaps.cartocdn.com/rastertiles/positron/{z}/{x}/{y}{r}.png",
         attr="© OpenStreetMap contributors © CARTO",
     )
 
