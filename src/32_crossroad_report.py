@@ -43,6 +43,11 @@ COL_T0 = "閑散時所要時間(s)"
 COL_DELAY = "遅れ時間(s)"
 COL_STORE_STOP = "店舗立寄トリップ"
 COL_STORE_STOP_TIME = "店舗立寄滞在時間(s)"
+COL_TURN_TRIP = "反転トリップ"
+COL_TURN_DURATION = "反転継続時間(s)"
+COL_TURN_ANGLE = "反転累積回転角(deg)"
+COL_TURN_POINTS = "反転判定点数"
+COL_TURN_REASON = "反転判定理由"
 COL_TIME_VALID = "所要時間算出可否"
 COL_TIME_REASON = "所要時間算出不可理由"
 COL_TIME_PRIMARY = "計測開始_GPS時刻(補間)"
@@ -65,14 +70,30 @@ MAP_ANCHOR_CELL = "B11"
 TURNBACK_SINGLE_REASON = "TURN_SINGLE_POINT_REVERSAL_OK"
 
 
+def _numeric_series_or_default(df: pd.DataFrame, col: str, default=0) -> pd.Series:
+    if col in df.columns:
+        series = df[col]
+    else:
+        series = pd.Series(default, index=df.index)
+    return pd.to_numeric(series, errors="coerce").fillna(default)
+
+
+def _string_series_or_default(df: pd.DataFrame, col: str, default: str = "") -> pd.Series:
+    if col in df.columns:
+        series = df[col]
+    else:
+        series = pd.Series(default, index=df.index, dtype="string")
+    return series.fillna(default).astype(str)
+
+
 def classify_delay_exclusion_counts(df: pd.DataFrame) -> dict[str, int]:
     counts = {"store": 0, "turn": 0, "foldback": 0}
     if df.empty:
         return counts
 
-    store_series = pd.to_numeric(df.get(COL_STORE_STOP, 0), errors="coerce").fillna(0)
-    turn_series = pd.to_numeric(df.get("反転トリップ", 0), errors="coerce").fillna(0)
-    turn_reason_series = df.get("反転判定理由", "").fillna("").astype(str)
+    store_series = _numeric_series_or_default(df, COL_STORE_STOP, 0)
+    turn_series = _numeric_series_or_default(df, COL_TURN_TRIP, 0)
+    turn_reason_series = _string_series_or_default(df, COL_TURN_REASON, "")
 
     for is_store, is_turn, turn_reason in zip(store_series, turn_series, turn_reason_series):
         if int(is_store) == 1:
@@ -880,13 +901,15 @@ def create_excel_report_headless(
     t0_val = pd.to_numeric(df_perf[COL_T0], errors="coerce")
     delay_val = pd.to_numeric(df_perf[COL_DELAY], errors="coerce")
     time_valid = pd.to_numeric(df_perf[COL_TIME_VALID], errors="coerce")
-    if COL_STORE_STOP in df_perf.columns:
-        store_stop = pd.to_numeric(df_perf[COL_STORE_STOP], errors="coerce").fillna(0)
-    else:
-        store_stop = pd.Series(0, index=df_perf.index, dtype="int64")
+    store_stop = _numeric_series_or_default(df_perf, COL_STORE_STOP, 0)
+    turn_trip = _numeric_series_or_default(df_perf, COL_TURN_TRIP, 0)
+    turn_duration = _numeric_series_or_default(df_perf, COL_TURN_DURATION, 0)
+    turn_angle = _numeric_series_or_default(df_perf, COL_TURN_ANGLE, 0)
+    turn_points = _numeric_series_or_default(df_perf, COL_TURN_POINTS, 0)
+    turn_reason = _string_series_or_default(df_perf, COL_TURN_REASON, "")
 
-    t_primary = df_perf[COL_TIME_FALLBACK].fillna("").astype(str).str.strip()
-    t_fallback = df_perf[COL_TIME_PRIMARY].fillna("").astype(str).str.strip()
+    t_primary = _string_series_or_default(df_perf, COL_TIME_FALLBACK, "").str.strip()
+    t_fallback = _string_series_or_default(df_perf, COL_TIME_PRIMARY, "").str.strip()
     time_series = t_primary.where(t_primary != "", t_fallback)
 
     data_all = pd.DataFrame(
@@ -899,12 +922,22 @@ def create_excel_report_headless(
             "delay_s": delay_val,
             "time_valid": time_valid,
             "store_stop": store_stop,
+            COL_TURN_TRIP: turn_trip,
+            COL_TURN_DURATION: turn_duration,
+            COL_TURN_ANGLE: turn_angle,
+            COL_TURN_POINTS: turn_points,
+            COL_TURN_REASON: turn_reason,
             "time": time_series,
         }
     )
 
     data_all["time_valid"] = pd.to_numeric(data_all["time_valid"], errors="coerce").fillna(0).astype(int)
     data_all["store_stop"] = pd.to_numeric(data_all["store_stop"], errors="coerce").fillna(0).astype(int)
+    data_all[COL_TURN_TRIP] = pd.to_numeric(data_all[COL_TURN_TRIP], errors="coerce").fillna(0).astype(int)
+    data_all[COL_TURN_DURATION] = pd.to_numeric(data_all[COL_TURN_DURATION], errors="coerce").fillna(0)
+    data_all[COL_TURN_ANGLE] = pd.to_numeric(data_all[COL_TURN_ANGLE], errors="coerce").fillna(0)
+    data_all[COL_TURN_POINTS] = pd.to_numeric(data_all[COL_TURN_POINTS], errors="coerce").fillna(0)
+    data_all[COL_TURN_REASON] = data_all[COL_TURN_REASON].fillna("").astype(str)
 
     data_clean = data_all.dropna(subset=["date", "in_b", "out_b"]).copy()
     data_clean["in_b"] = data_clean["in_b"].astype(int)
@@ -967,8 +1000,11 @@ def run_batch(jobs: list[dict]) -> int:
             ok += 1
 
         except Exception as exc:
-            print(f"  [ERROR] batch job failed: {exc}")
-            print(traceback.format_exc())
+            err_type = type(exc).__name__
+            print(f"  [ERROR] batch job failed: {err_type}: {exc}")
+            tb_text = traceback.format_exc().rstrip()
+            for line in tb_text.splitlines():
+                print(f"  [ERROR] {line}")
             failed += 1
             continue
 
@@ -1052,6 +1088,7 @@ if __name__ == "__main__":
         main()
     except Exception as exc:
         print("[ERROR] unhandled exception in 32_crossroad_report.py")
-        print(f"[ERROR] {exc}")
-        traceback.print_exc()
+        print(f"[ERROR] {type(exc).__name__}: {exc}")
+        for line in traceback.format_exc().rstrip().splitlines():
+            print(f"[ERROR] {line}")
         raise
