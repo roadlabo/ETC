@@ -69,7 +69,6 @@ MEASURE_PRE_M = 100.0
 MEASURE_POST_M = 20.0
 STORE_STAY_RADIUS_M = 100.0
 STORE_CLUSTER_DIAMETER_M = 20.0
-STORE_CLUSTER_RADIUS_M = STORE_CLUSTER_DIAMETER_M / 2.0
 STORE_CLUSTER_MIN_POINTS = 3
 STORE_STAY_MIN_SEC = 120.0
 
@@ -395,12 +394,74 @@ def parse_dt14(s):
         return None
 
 
-def judge_store_stop_trip(points, gps_times, center_lat, center_lon):
-    """交差点中心付近での店舗立寄トリップを判定する。"""
+def _continuous_cluster_stays(target_points):
+    """連続した点列の中から、直径20m以内を保つ滞在区間を列挙する。"""
+    sequences = []
+    current = []
+    prev_idx = None
+    for point in target_points:
+        if prev_idx is not None and point["idx"] != prev_idx + 1:
+            if current:
+                sequences.append(current)
+            current = []
+        current.append(point)
+        prev_idx = point["idx"]
+    if current:
+        sequences.append(current)
+
+    stays = []
+    for seq in sequences:
+        for start in range(len(seq)):
+            span_m = 0.0
+            for end in range(start, len(seq)):
+                window = seq[start:end + 1]
+                if len(window) >= 2:
+                    span_m = max(
+                        haversine_m(a["lat"], a["lon"], b["lat"], b["lon"])
+                        for a in window
+                        for b in window
+                    )
+                if span_m > STORE_CLUSTER_DIAMETER_M:
+                    break
+                if len(window) < STORE_CLUSTER_MIN_POINTS:
+                    continue
+                stay_sec = (window[-1]["dt"] - window[0]["dt"]).total_seconds()
+                stays.append(
+                    {
+                        "stay_sec": stay_sec,
+                        "cluster_count": len(window),
+                        "span_m": span_m,
+                    }
+                )
+    return stays
+
+
+
+def judge_store_stop_trip(
+    points,
+    gps_times,
+    center_lat,
+    center_lon,
+    pass_center_pos,
+    prev_pass_center_pos=None,
+    next_pass_center_pos=None,
+):
+    """現在のpass近傍だけを対象に、連続クラスタ滞在による店舗立寄を判定する。"""
     dt_list = [parse_dt14(t) for t in gps_times]
+    cumdist = build_cumdist(points)
+
+    lower_bound = float("-inf")
+    upper_bound = float("inf")
+    if prev_pass_center_pos is not None:
+        lower_bound = (prev_pass_center_pos + pass_center_pos) / 2.0
+    if next_pass_center_pos is not None:
+        upper_bound = (pass_center_pos + next_pass_center_pos) / 2.0
+
     target_points = []
-    for idx, ((lat, lon), dt_val) in enumerate(zip(points, dt_list)):
+    for idx, ((lat, lon), dt_val, pos_m) in enumerate(zip(points, dt_list, cumdist)):
         if dt_val is None:
+            continue
+        if pos_m < lower_bound or pos_m > upper_bound:
             continue
         if haversine_m(lat, lon, center_lat, center_lon) <= STORE_STAY_RADIUS_M:
             target_points.append(
@@ -413,41 +474,28 @@ def judge_store_stop_trip(points, gps_times, center_lat, center_lon):
             )
 
     if len(target_points) < STORE_CLUSTER_MIN_POINTS:
-        return False, None, len(target_points), None, "CENTER_100M_POINTS_LT3"
+        return False, None, len(target_points), None, "PASS_CENTER_100M_POINTS_LT3"
 
-    best_count = 0
-    best_span_m = None
-    best_stay_sec = None
+    stays = _continuous_cluster_stays(target_points)
+    if not stays:
+        return False, None, 0, None, "PASS_CLUSTER_POINTS_LT3"
 
-    for i, base in enumerate(target_points):
-        cluster = []
-        for cand in target_points[i:]:
-            if haversine_m(base["lat"], base["lon"], cand["lat"], cand["lon"]) <= STORE_CLUSTER_RADIUS_M:
-                cluster.append(cand)
-
-        cluster_count = len(cluster)
-        best_count = max(best_count, cluster_count)
-        if cluster_count < STORE_CLUSTER_MIN_POINTS:
-            continue
-
-        stay_sec = (cluster[-1]["dt"] - cluster[0]["dt"]).total_seconds()
-        span_m = max(
-            haversine_m(a["lat"], a["lon"], b["lat"], b["lon"])
-            for a in cluster
-            for b in cluster
+    best_stay = max(stays, key=lambda x: (x["stay_sec"], x["cluster_count"], -x["span_m"]))
+    if best_stay["stay_sec"] >= STORE_STAY_MIN_SEC:
+        return (
+            True,
+            best_stay["stay_sec"],
+            best_stay["cluster_count"],
+            best_stay["span_m"],
+            "PASS_CENTER_100M_CONTIGUOUS_CLUSTER_OK",
         )
-
-        if best_span_m is None or span_m < best_span_m:
-            best_span_m = span_m
-        if best_stay_sec is None or stay_sec > best_stay_sec:
-            best_stay_sec = stay_sec
-
-        if stay_sec >= STORE_STAY_MIN_SEC:
-            return True, stay_sec, cluster_count, span_m, "CENTER_100M_CLUSTER_OK"
-
-    if best_count < STORE_CLUSTER_MIN_POINTS:
-        return False, None, best_count, None, "CLUSTER_POINTS_LT3"
-    return False, best_stay_sec, best_count, best_span_m, "CLUSTER_DURATION_LT120S"
+    return (
+        False,
+        best_stay["stay_sec"],
+        best_stay["cluster_count"],
+        best_stay["span_m"],
+        "PASS_CONTIGUOUS_CLUSTER_DURATION_LT120S",
+    )
 
 
 def weekday_abbr(date8):
@@ -740,7 +788,7 @@ def main() -> None:
         f"（距離{MEASURE_PRE_M+MEASURE_POST_M:.0f}m固定）"
     )
     print("遅れ定義: 方向別(流入×流出)の所要時間 下位5%平均をT0とし、遅れ=所要時間-T0")
-    print("店舗立ち寄りトリップ（遅れ時間算出対象外）判定条件：交差点中心から100m以内＋この中に直径20m以内に点が3点以上存在する固まりがある＋その固まり状態の中で2分以上続く")
+    print("店舗立ち寄りトリップ（遅れ時間算出対象外）判定条件：現在pass近傍で、交差点中心から100m以内＋直径20m以内に点が3点以上存在する固まり状態が連続して2分以上続く")
     print("--------------------------------------------------")
 
     # ==============================================================
@@ -1116,6 +1164,8 @@ def main() -> None:
                             else:
                                 time_ng_trips += 1
 
+                            prev_pass_center_pos = closest_points[pass_no - 2]["center_pos"] if pass_no > 1 else None
+                            next_pass_center_pos = closest_points[pass_no]["center_pos"] if pass_no < len(closest_points) else None
                             (
                                 is_store_stop,
                                 store_stay_sec,
@@ -1127,6 +1177,9 @@ def main() -> None:
                                 gps_times,
                                 cross.center_lat,
                                 cross.center_lon,
+                                center_pos_for_branch,
+                                prev_pass_center_pos,
+                                next_pass_center_pos,
                             )
                             if is_store_stop:
                                 store_stop_trips += 1
