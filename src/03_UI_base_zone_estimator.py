@@ -943,7 +943,7 @@ html, body, #map {{ height:100%; margin:0; background:#fff; }}
 <div id="map"></div>
 <script>
 const map = L.map('map').setView([{lat_center}, {lon_center}], 13);
-L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/positron/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/voyager/{{z}}/{{x}}/{{y}}{{r}}.png', {{
   maxZoom: 19,
   attribution: '© OpenStreetMap contributors © CARTO'
 }}).addTo(map);
@@ -1015,7 +1015,7 @@ html, body, #map {{ height:100%; margin:0; background:#fff; }}
 <div id=\"map\"></div>
 <script>
 const map = L.map('map').setView([{center_point[1]}, {center_point[0]}], 12);
-L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/positron/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/voyager/{{z}}/{{x}}/{{y}}{{r}}.png', {{
   maxZoom: 19,
   attribution: '© OpenStreetMap contributors © CARTO'
 }}).addTo(map);
