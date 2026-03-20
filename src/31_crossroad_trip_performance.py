@@ -78,8 +78,7 @@ TURN_CUM_ANGLE_MIN_DEG = 160.0
 TURN_STAY_MIN_SEC = 120.0
 TURN_SINGLE_POINT_MIN_SIDE_M = 10.0
 TURN_SINGLE_POINT_STAY_MIN_SEC = 0.0
-OUTLIER_IQR_MULTIPLIER = 3.0
-OUTLIER_MIN_SAMPLES = 4
+OUTLIER_GAP_THRESHOLD_SEC = 60.0
 
 EXCLUSION_LABEL_STORE = "店舗"
 EXCLUSION_LABEL_TURN = "反転"
@@ -88,7 +87,7 @@ EXCLUSION_LABEL_OUTLIER = "異常値"
 STORE_REASON_OK = "STORE_CLUSTER_OK"
 TURN_REASON_OK = "TURN_SIGNED_ROTATION_OK"
 TURNBACK_SINGLE_REASON = "TURN_SINGLE_POINT_REVERSAL_OK"
-OUTLIER_REASON_OK = "OUTLIER_IQR_OK"
+OUTLIER_REASON_OK = "OUTLIER_GAP_60SEC_OK"
 
 # ============================================================
 # 交差点通過判定ロジック（31 / 16 と完全一致）
@@ -729,15 +728,34 @@ def judge_store_stop_trip(
     )
 
 
-def compute_iqr_outlier_upper(elapsed_values: list[float]) -> float | None:
-    clean_vals = sorted(float(v) for v in elapsed_values if v is not None)
-    if len(clean_vals) < OUTLIER_MIN_SAMPLES:
+def compute_gap_outlier_delay_threshold(delay_values: list[float]) -> float | None:
+    clean_vals = sorted((float(v) for v in delay_values if v is not None), reverse=True)
+    if len(clean_vals) < 2:
         return None
-    series = pd.Series(clean_vals, dtype="float64")
-    q1 = float(series.quantile(0.25))
-    q3 = float(series.quantile(0.75))
-    iqr = q3 - q1
-    return q3 + OUTLIER_IQR_MULTIPLIER * iqr
+
+    boundary_value = None
+    for upper_val, lower_val in zip(clean_vals, clean_vals[1:]):
+        if upper_val - lower_val >= OUTLIER_GAP_THRESHOLD_SEC:
+            boundary_value = upper_val
+    return boundary_value
+
+
+def count_gap_outliers(candidate_rows: list[dict], t0_map: dict[tuple[str, str], float]) -> int:
+    delay_values: list[float] = []
+    for candidate in candidate_rows:
+        if candidate["delay_exclusion_label"]:
+            continue
+        elapsed = candidate["elapsed"]
+        key = candidate["key"]
+        if elapsed is None or key not in t0_map:
+            continue
+        delay_values.append(float(elapsed) - float(t0_map[key]))
+
+    outlier_threshold = compute_gap_outlier_delay_threshold(delay_values)
+    if outlier_threshold is None:
+        return 0
+
+    return sum(1 for delay in delay_values if delay >= outlier_threshold)
 
 
 def classify_delay_exclusion_label(*, is_store_stop: bool, is_turnback: bool, turnback_reason: str, is_outlier: bool) -> str:
@@ -1094,7 +1112,8 @@ def main() -> None:
         "1点を境に進行方向がほぼ反転すること"
     )
     print(
-        f"異常値トリップ（遅れ時間算出対象外）判定条件：方向別 elapsed に対し IQR 上限 = Q3 + {OUTLIER_IQR_MULTIPLIER:.0f}*IQR を超過"
+        f"異常値トリップ（遅れ時間算出対象外）判定条件：店舗/反転/折り返し以外の全トリップの遅れ時間を大きい順に並べ、"
+        f"隣接差{OUTLIER_GAP_THRESHOLD_SEC:.0f}秒以上のうち最も下側の段差以上を異常値とする"
     )
     print("遅れ時間(s)の表示優先順位: 店舗 > 反転 > 折り返し > 異常値 > 数値")
     print("--------------------------------------------------")
@@ -1173,6 +1192,7 @@ def main() -> None:
             idx_delay = HEADER.index("遅れ時間(s)")
             idx_store = HEADER.index("店舗立寄トリップ")
             idx_turn_reason = HEADER.index("反転判定理由")
+            idx_delay_exclusion_flag = HEADER.index("遅れ除外フラグ")
             idx_delay_exclusion_type = HEADER.index("遅れ除外種別")
             idx_delay_exclusion_reason = HEADER.index("遅れ除外判定理由")
             elapsed_map = {}
@@ -1645,18 +1665,14 @@ def main() -> None:
                     progress = file_idx / total_files * 100.0
                     elapsed_cfg = time.time() - cfg_start
                     provisional_counts = summarize_exclusion_counts(candidate_rows)
-                    current_outlier_count = 0
-                    if elapsed_map:
-                        upper_map = {key: compute_iqr_outlier_upper(vals) for key, vals in elapsed_map.items()}
-                        for candidate in candidate_rows:
-                            if candidate["delay_exclusion_label"]:
-                                continue
-                            upper = upper_map.get(candidate["key"])
-                            if upper is None or candidate["elapsed"] is None:
-                                continue
-                            if candidate["elapsed"] > upper:
-                                current_outlier_count += 1
-                        provisional_counts[EXCLUSION_LABEL_OUTLIER] = current_outlier_count
+                    provisional_t0_map = {}
+                    for key, vals in elapsed_map.items():
+                        if not vals:
+                            continue
+                        sorted_vals = sorted(vals)
+                        k = max(1, int(len(sorted_vals) * 0.05))
+                        provisional_t0_map[key] = sum(sorted_vals[:k]) / k
+                    provisional_counts[EXCLUSION_LABEL_OUTLIER] = count_gap_outliers(candidate_rows, provisional_t0_map)
 
                     progress_line = (
                         f"進捗: {file_idx:4d}/{total_files:4d} "
@@ -1683,21 +1699,24 @@ def main() -> None:
                 tmp_fh = None
 
                 t0_map = {}
-                outlier_upper_map = {}
                 for key, vals in elapsed_map.items():
                     if not vals:
                         continue
-                    outlier_upper_map[key] = compute_iqr_outlier_upper(vals)
-                    filtered_vals = [
-                        val for val in vals
-                        if outlier_upper_map[key] is None or val <= outlier_upper_map[key]
-                    ]
-                    if not filtered_vals:
-                        continue
-                    filtered_vals.sort()
-                    k = max(1, int(len(filtered_vals) * 0.05))
-                    t0 = sum(filtered_vals[:k]) / k
+                    sorted_vals = sorted(vals)
+                    k = max(1, int(len(sorted_vals) * 0.05))
+                    t0 = sum(sorted_vals[:k]) / k
                     t0_map[key] = t0
+
+                delay_values_for_outlier: list[float] = []
+                for candidate in candidate_rows:
+                    if candidate["delay_exclusion_label"]:
+                        continue
+                    elapsed = candidate["elapsed"]
+                    key = candidate["key"]
+                    if elapsed is None or key not in t0_map:
+                        continue
+                    delay_values_for_outlier.append(float(elapsed) - float(t0_map[key]))
+                outlier_delay_threshold = compute_gap_outlier_delay_threshold(delay_values_for_outlier)
 
                 idx_in_b = HEADER.index("流入枝番")
                 idx_out_b = HEADER.index("流出枝番")
@@ -1722,16 +1741,20 @@ def main() -> None:
                             except Exception:
                                 elapsed_val = None
 
+                        delay_val = None
+                        if elapsed_val is not None and key in t0_map:
+                            delay_val = elapsed_val - float(t0_map[key])
+
                         is_outlier = (
                             not existing_label
-                            and elapsed_val is not None
-                            and key in outlier_upper_map
-                            and outlier_upper_map[key] is not None
-                            and elapsed_val > outlier_upper_map[key]
+                            and delay_val is not None
+                            and outlier_delay_threshold is not None
+                            and delay_val >= outlier_delay_threshold
                         )
                         if is_outlier:
                             existing_label = EXCLUSION_LABEL_OUTLIER
                             existing_reason = row[idx_delay_exclusion_reason].strip()
+                            row[idx_delay_exclusion_flag] = "1"
                             row[idx_delay_exclusion_type] = existing_label
                             row[idx_delay_exclusion_reason] = f"{existing_reason}|{OUTLIER_REASON_OK}" if existing_reason else OUTLIER_REASON_OK
                             outlier_trips += 1
