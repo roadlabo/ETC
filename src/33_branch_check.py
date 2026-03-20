@@ -1005,6 +1005,12 @@ class BranchCheckWindow(QMainWindow):
         )
 
         ensure_columns(self.df, REQUIRED_COLS)
+        if "遅れ時間(s)" in self.df.columns:
+            self.df["遅れ時間_表示"] = self.df["遅れ時間(s)"].fillna("").astype(str).str.strip()
+            self.df["遅れ時間_数値"] = pd.to_numeric(self.df["遅れ時間(s)"], errors="coerce")
+        else:
+            self.df["遅れ時間_表示"] = ""
+            self.df["遅れ時間_数値"] = np.nan
         n = len(self.df)
         if n >= WARN_ROWS:
             self._report_progress(f"CSV読み込み中…（{n:,}行。少しお待ちください）")
@@ -1028,7 +1034,6 @@ class BranchCheckWindow(QMainWindow):
             "所要時間(s)",
             "交差点通過速度(km/h)",
             "閑散時所要時間(s)",
-            "遅れ時間(s)",
             "計測開始_経度(補間)",
             "計測開始_緯度(補間)",
             "計測終了_経度(補間)",
@@ -1405,11 +1410,13 @@ class BranchCheckWindow(QMainWindow):
             row = self.df.iloc[r]
             for c_idx, c_name in enumerate(DISPLAY_COLS_IN_TABLE):
                 val = row.get(c_name, "")
+                if c_name == "遅れ時間(s)":
+                    val = row.get("遅れ時間_表示", val)
                 text = "" if pd.isna(val) else str(val)
                 item = SortableItem(text)
 
                 if c_name in NUMERIC_SORT_COLS:
-                    vnum = pd.to_numeric(val, errors="coerce")
+                    vnum = row.get("遅れ時間_数値") if c_name == "遅れ時間(s)" else pd.to_numeric(val, errors="coerce")
                     if pd.isna(vnum):
                         item.setData(ROLE_SORTKEY, None)
                     else:
@@ -1538,7 +1545,7 @@ class BranchCheckWindow(QMainWindow):
             self.df["_ok_sort"] = (self.df[ok_col] == "OK").astype(int)
 
         if delay_col in self.df.columns:
-            delay_vals = pd.to_numeric(self.df[delay_col], errors="coerce")
+            delay_vals = self.df.get("遅れ時間_数値", pd.to_numeric(self.df[delay_col], errors="coerce"))
             delay_vals = delay_vals.fillna(-np.inf)
         else:
             delay_vals = pd.Series([-np.inf] * len(self.df), index=self.df.index)
@@ -1637,6 +1644,8 @@ class BranchCheckWindow(QMainWindow):
         # details
         for _, key in DETAIL_FIELDS:
             v = row.get(key, "")
+            if key == "遅れ時間(s)":
+                v = row.get("遅れ時間_表示", v)
             text = "" if pd.isna(v) else str(v)
             if key == "運行日":
                 text = self._format_day(v)
