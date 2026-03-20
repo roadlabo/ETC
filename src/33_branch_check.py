@@ -578,9 +578,9 @@ LEAFLET_HTML = r"""
     try { if (base) map.removeLayer(base); } catch(e) {}
     base = null;
 
-    const layer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    const layer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       maxZoom: 20,
-      attribution: '&copy; OpenStreetMap contributors',
+      attribution: '© OpenStreetMap contributors © CARTO',
       crossOrigin: true,
       updateWhenIdle: true,
       keepBuffer: 2,
@@ -1861,7 +1861,12 @@ def run_without_gui(args: List[str]) -> Optional[str]:
     center_lat = float(pd.to_numeric(df[lat_col], errors="coerce").dropna().median())
     center_lon = float(pd.to_numeric(df[lon_col], errors="coerce").dropna().median())
 
-    fmap = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="OpenStreetMap")
+    fmap = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=17,
+        tiles="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+        attr="© OpenStreetMap contributors © CARTO",
+    )
 
     for _, row in df.head(300).iterrows():
         try:

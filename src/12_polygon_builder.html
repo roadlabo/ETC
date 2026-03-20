@@ -127,9 +127,9 @@
 
   // ==== Leaflet マップ ====
   var map = L.map('map').setView([35.069095, 134.004512], 12);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
     maxZoom: 19,
-    attribution: '&copy; OpenStreetMap contributors'
+    attribution: '© OpenStreetMap contributors © CARTO'
   }).addTo(map);
 
   // ==== レイヤ & 状態管理 ====

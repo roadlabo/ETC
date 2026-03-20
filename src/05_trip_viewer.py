@@ -498,9 +498,9 @@ LEAFLET_HTML = r"""
     try { if (base) map.removeLayer(base); } catch(e) {}
     base = null;
 
-    const layer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    const layer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       maxZoom: 20,
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+      attribution: '© OpenStreetMap contributors © CARTO',
       crossOrigin: true,
       updateWhenIdle: true,
       keepBuffer: 2,
@@ -1181,8 +1181,8 @@ def run_without_gui(folder_path: str) -> Optional[str]:
     fmap = folium.Map(
         location=[lat0, lon0],
         zoom_start=12,
-        tiles="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-        attr="&copy; OpenStreetMap contributors &copy; CARTO",
+        tiles="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+        attr="© OpenStreetMap contributors © CARTO",
     )
 
     points: List[Tuple[float, float, int]] = []
