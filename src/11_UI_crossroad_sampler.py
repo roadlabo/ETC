@@ -3,6 +3,10 @@ import json
 import sys
 from pathlib import Path
 
+SRC_DIR = Path(__file__).resolve().parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 from PyQt6.QtCore import QObject, QPropertyAnimation, Qt, QTimer, QUrl, QUrlQuery, pyqtSignal, pyqtSlot
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWebEngineCore import QWebEngineSettings
@@ -30,6 +34,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
 )
+from common.news.news_dialog import show_news_dialogs
 
 APP_TITLE = "11 交差点ファイル作成ツール"
 UI_LOGO_FILENAME = "logo_11_crossroad_sampler.png"
@@ -709,6 +714,12 @@ class MainWindow(QMainWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
+    skip_news_check = "--skip-news-check" in sys.argv
+    if not skip_news_check:
+        try:
+            show_news_dialogs()
+        except Exception as e:
+            print(f"[news] お知らせ表示をスキップしました: {e}")
     app.setStyleSheet(CYBER_QSS)
     win = MainWindow()
     win.showMaximized()

@@ -13,6 +13,10 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
+SRC_DIR = Path(__file__).resolve().parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 from PyQt6.QtCore import QObject, QProcess, QProcessEnvironment, QPropertyAnimation, QRect, Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
@@ -39,6 +43,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from common.news.news_dialog import show_news_dialogs
 
 APP_TITLE = "02_時間帯存在トリップ集計＋ピーク30分OD抽出"
 UI_LOGO_FILENAME = "logo_02_UI_existence_trip_counter.png"
@@ -1218,6 +1223,12 @@ class MainWindow(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
+    skip_news_check = "--skip-news-check" in sys.argv
+    if not skip_news_check:
+        try:
+            show_news_dialogs()
+        except Exception as e:
+            print(f"[news] お知らせ表示をスキップしました: {e}")
     try:
         w = MainWindow(); w.show()
         return app.exec()

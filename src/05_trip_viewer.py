@@ -9,6 +9,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+SRC_DIR = Path(__file__).resolve().parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 import folium
 import numpy as np
 import pandas as pd
@@ -16,6 +20,7 @@ import pandas as pd
 NOGUI_MODE = "--nogui" in sys.argv[1:]
 
 if not NOGUI_MODE:
+    from common.news.news_dialog import show_news_dialogs
     from PyQt6.QtCore import QObject, QPropertyAnimation, QThread, Qt, QTimer, QUrl, pyqtSignal
     from PyQt6.QtWebEngineCore import QWebEngineSettings
     from PyQt6.QtGui import QPixmap
@@ -1138,6 +1143,12 @@ def main(argv: Sequence[str]) -> None:
     pattern = "*.csv"
 
     app = QApplication(sys.argv)
+    skip_news_check = "--skip-news-check" in sys.argv
+    if not skip_news_check:
+        try:
+            show_news_dialogs()
+        except Exception as e:
+            print(f"[news] お知らせ表示をスキップしました: {e}")
 
     busy = make_busy_dialog("起動中", "Qt初期化中…（初回は時間がかかることがあります）")
 
