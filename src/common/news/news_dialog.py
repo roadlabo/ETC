@@ -134,6 +134,9 @@ def show_news_dialogs(parent: Optional[QWidget] = None) -> int:
     if not unseen_news:
         return 0
 
+    # 古い順に並べ替えてから表示
+    unseen_news = sorted(unseen_news, key=lambda x: x.get("modified", ""))
+
     seen_count = 0
 
     for news_item in unseen_news:
