@@ -9,6 +9,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+SRC_DIR = Path(__file__).resolve().parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 from PyQt6.QtCore import QMargins, QPoint, QRect, QSize, Qt, QThread, QTimer, QPropertyAnimation, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
@@ -34,6 +38,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from common.news.news_dialog import show_news_dialogs
 
 MODULE_PATH = Path(__file__).with_name("01_split_by_opid_streaming.py")
 spec = importlib.util.spec_from_file_location("split_mod", MODULE_PATH)
@@ -841,6 +846,12 @@ class MainWindow(QMainWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
+    skip_news_check = "--skip-news-check" in sys.argv
+    if not skip_news_check:
+        try:
+            show_news_dialogs()
+        except Exception as e:
+            print(f"[news] お知らせ表示をスキップしました: {e}")
     w = MainWindow()
     w.showMaximized()
     sys.exit(app.exec())

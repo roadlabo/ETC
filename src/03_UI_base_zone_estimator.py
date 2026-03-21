@@ -10,6 +10,10 @@ from pathlib import Path
 import logging
 from html import escape
 
+SRC_DIR = Path(__file__).resolve().parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 from PyQt6.QtCore import QPointF, QProcess, QProcessEnvironment, QPropertyAnimation, QTimer, Qt, QUrl
 from PyQt6.QtGui import QPainter, QPen, QColor, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
@@ -33,6 +37,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from common.news.news_dialog import show_news_dialogs
 
 WEBENGINE_AVAILABLE = False
 try:
@@ -1298,6 +1303,12 @@ if (zonesGroup.getLayers().length > 0) {{
 
 def main() -> int:
     app = QApplication(sys.argv)
+    skip_news_check = "--skip-news-check" in sys.argv
+    if not skip_news_check:
+        try:
+            show_news_dialogs()
+        except Exception as e:
+            print(f"[news] お知らせ表示をスキップしました: {e}")
     w = MainWindow()
     w.showMaximized()
     return app.exec()

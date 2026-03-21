@@ -6,6 +6,10 @@ import webbrowser
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Callable
 
+SRC_DIR = Path(__file__).resolve().parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 import numpy as np
 import pandas as pd
 import folium
@@ -15,6 +19,7 @@ NOGUI_MODE = "--nogui" in sys.argv[1:]
 UI_LOGO_FILENAME = "logo_33_branch_check.png"
 
 if not NOGUI_MODE:
+    from common.news.news_dialog import show_news_dialogs
     from PyQt6.QtCore import Qt, QSize, QRect
     from PyQt6.QtCore import QTimer, QPropertyAnimation
     from PyQt6.QtCore import QUrl
@@ -1805,6 +1810,12 @@ def main():
     parsed = parser.parse_args()
 
     app = QApplication(sys.argv)
+    skip_news_check = "--skip-news-check" in sys.argv
+    if not skip_news_check:
+        try:
+            show_news_dialogs()
+        except Exception as e:
+            print(f"[news] お知らせ表示をスキップしました: {e}")
     busy = make_busy_dialog("起動中", "Qt初期化中…（初回は時間がかかることがあります）")
 
     csv_path = parsed.csv or parsed.csv_pos

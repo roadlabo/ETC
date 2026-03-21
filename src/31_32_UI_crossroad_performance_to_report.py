@@ -8,6 +8,10 @@ from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
+SRC_DIR = Path(__file__).resolve().parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 os.environ.setdefault("QT_LOGGING_RULES", "qt.text.font.db=false")
 
 from PyQt6.QtCore import QObject, QProcess, QPropertyAnimation, QPoint, QRect, QSize, QThread, Qt, QTimer, pyqtSignal
@@ -36,6 +40,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from common.news.news_dialog import show_news_dialogs
 
 APP_TITLE = "31_交差点パフォーマンス分析／32_レポート作成／33_IN-OUT枝判定ビューアー（一括実行）"
 UI_LOGO_FILENAME = "logo_31_32_crossroad_performance_to_report.png"
@@ -1773,6 +1778,12 @@ class MainWindow(QMainWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
+    skip_news_check = "--skip-news-check" in sys.argv
+    if not skip_news_check:
+        try:
+            show_news_dialogs()
+        except Exception as e:
+            print(f"[news] お知らせ表示をスキップしました: {e}")
     w = MainWindow()
 
     # いきなり showMaximized() しない。まず show() して polish/サイズヒント/レイアウトを確定させる
