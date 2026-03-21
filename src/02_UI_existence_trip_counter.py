@@ -44,6 +44,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from common.news.news_dialog import show_news_dialogs
+from common.ui.logo_link import ClickableLogoLabel
 
 APP_TITLE = "02_時間帯存在トリップ集計＋ピーク30分OD抽出"
 UI_LOGO_FILENAME = "logo_02_UI_existence_trip_counter.png"
@@ -672,8 +673,7 @@ class MainWindow(QMainWindow):
     def _show_corner_logo(self) -> None:
         if not self._pix_small:
             return
-        self.splash = QLabel(self)
-        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash = ClickableLogoLabel(self)
         self.splash.setStyleSheet(f"background: transparent; margin-top: {CORNER_LOGO_OFFSET_TOP}px; margin-right: {CORNER_LOGO_OFFSET_RIGHT}px;")
         self.splash.setPixmap(self._pix_small)
         self.splash.adjustSize()

@@ -39,6 +39,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from common.news.news_dialog import show_news_dialogs
+from common.ui.logo_link import ClickableLogoLabel
 
 try:
     from PyQt6.QtWebChannel import QWebChannel
@@ -341,7 +342,7 @@ class MainWindow(QMainWindow):
 
         logo_path = Path(__file__).resolve().parent / "assets" / "logos" / UI_LOGO_FILENAME
         if logo_path.exists():
-            self.logo = QLabel(self)
+            self.logo = ClickableLogoLabel(self)
             self.logo.setPixmap(QPixmap(str(logo_path)).scaledToHeight(76, Qt.TransformationMode.SmoothTransformation))
             self.logo.move(30, 26)
             self.logo.show()

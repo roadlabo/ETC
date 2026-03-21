@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from common.news.news_dialog import show_news_dialogs
+from common.ui.logo_link import ClickableLogoLabel
 
 APP_TITLE = "31_交差点パフォーマンス分析／32_レポート作成／33_IN-OUT枝判定ビューアー（一括実行）"
 UI_LOGO_FILENAME = "logo_31_32_crossroad_performance_to_report.png"
@@ -685,8 +686,7 @@ class MainWindow(QMainWindow):
             self._refresh_about_text()
             return
 
-        self.corner_logo = QLabel(self)
-        self.corner_logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.corner_logo = ClickableLogoLabel(self)
         self.corner_logo.setStyleSheet("background: transparent;")
         self.corner_logo.setPixmap(self._pix_small)
         self.corner_logo.adjustSize()

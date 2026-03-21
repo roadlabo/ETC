@@ -39,6 +39,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from common.news.news_dialog import show_news_dialogs
+from common.ui.logo_link import ClickableLogoLabel
 
 MODULE_PATH = Path(__file__).with_name("01_split_by_opid_streaming.py")
 spec = importlib.util.spec_from_file_location("split_mod", MODULE_PATH)
@@ -474,8 +475,7 @@ class MainWindow(QMainWindow):
         if not self._pix_small:
             return
 
-        self.splash = QLabel(self)
-        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash = ClickableLogoLabel(self)
         self.splash.setStyleSheet("background: transparent;")
         self.splash.setPixmap(self._pix_small)
         self.splash.adjustSize()
