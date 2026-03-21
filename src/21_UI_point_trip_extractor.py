@@ -9,6 +9,8 @@ from time import perf_counter
 
 from PyQt6.QtCore import QPoint, QProcess, QPropertyAnimation, QRect, QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
+from common.news.news_dialog import show_news_dialogs
+
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -1318,6 +1320,14 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+
+    skip_news_check = "--skip-news-check" in sys.argv
+    if not skip_news_check:
+        try:
+            show_news_dialogs()
+        except Exception as e:
+            print(f"[news] お知らせ表示をスキップしました: {e}")
+
     w = MainWindow()
     w.show()
     QTimer.singleShot(0, w.showMaximized)
