@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
 )
 from common.news.news_dialog import show_news_dialogs
+from common.ui.logo_link import ClickableLogoLabel
 
 APP_TITLE = "11 交差点ファイル作成ツール"
 UI_LOGO_FILENAME = "logo_11_crossroad_sampler.png"
@@ -300,8 +301,7 @@ class MainWindow(QMainWindow):
         if not self._pix_small:
             return
 
-        self.splash = QLabel(self)
-        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash = ClickableLogoLabel(self)
         self.splash.setStyleSheet("background: transparent;")
         self.splash.setPixmap(self._pix_small)
         self.splash.adjustSize()

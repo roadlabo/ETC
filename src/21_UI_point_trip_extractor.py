@@ -14,6 +14,7 @@ if str(SRC_DIR) not in sys.path:
 from PyQt6.QtCore import QPoint, QProcess, QPropertyAnimation, QRect, QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from common.news.news_dialog import show_news_dialogs
+from common.ui.logo_link import ClickableLogoLabel
 
 from PyQt6.QtWidgets import (
     QApplication,
@@ -1300,7 +1301,7 @@ class MainWindow(QMainWindow):
 
     def _show_corner_logo(self) -> None:
         if not self._pix_small: return
-        self.splash = QLabel(self); self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash = ClickableLogoLabel(self)
         self.splash.setStyleSheet(f"background: transparent; margin-top: {CORNER_LOGO_OFFSET_TOP}px; margin-right: {CORNER_LOGO_OFFSET_RIGHT}px;")
         self.splash.setPixmap(self._pix_small); self.splash.adjustSize()
         x = self.width() - self.splash.width() - CORNER_LOGO_MARGIN + abs(CORNER_LOGO_OFFSET_RIGHT)

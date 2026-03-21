@@ -20,6 +20,7 @@ UI_LOGO_FILENAME = "logo_33_branch_check.png"
 
 if not NOGUI_MODE:
     from common.news.news_dialog import show_news_dialogs
+    from common.ui.logo_link import ClickableLogoLabel
     from PyQt6.QtCore import Qt, QSize, QRect
     from PyQt6.QtCore import QTimer, QPropertyAnimation
     from PyQt6.QtCore import QUrl
@@ -1129,8 +1130,7 @@ class BranchCheckWindow(QMainWindow):
         if not self._pix_small:
             return
 
-        self.corner_logo = QLabel(self)
-        self.corner_logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.corner_logo = ClickableLogoLabel(self)
         self.corner_logo.setStyleSheet("background: transparent;")
         self.corner_logo.setPixmap(self._pix_small)
         self.corner_logo.adjustSize()

@@ -21,6 +21,7 @@ NOGUI_MODE = "--nogui" in sys.argv[1:]
 
 if not NOGUI_MODE:
     from common.news.news_dialog import show_news_dialogs
+    from common.ui.logo_link import ClickableLogoLabel
     from PyQt6.QtCore import QObject, QPropertyAnimation, QThread, Qt, QTimer, QUrl, pyqtSignal
     from PyQt6.QtWebEngineCore import QWebEngineSettings
     from PyQt6.QtGui import QPixmap
@@ -49,6 +50,7 @@ else:
     QApplication = QFileDialog = QGraphicsOpacityEffect = QHBoxLayout = QLabel = QMainWindow = object
     QMessageBox = QPixmap = QPushButton = QSplitter = QVBoxLayout = QWidget = object
     QListWidget = QListWidgetItem = QProgressDialog = object
+    ClickableLogoLabel = QLabel
     pyqtSignal = lambda *args, **kwargs: None
 
 
@@ -885,8 +887,7 @@ class RouteMapperWindow(QMainWindow):
         if hasattr(self, "splash") and self.splash:
             self.splash.deleteLater()
 
-        self.splash = QLabel(self)
-        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash = ClickableLogoLabel(self)
         self.splash.setStyleSheet("background: transparent;")
         self.splash.setPixmap(self._pix_small)
         self.splash.adjustSize()
