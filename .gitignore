@@ -9,12 +9,10 @@ dist/
 
 # Logs, temp files
 __pycache__/
+*.pyc
 _sort_tmp/
 *.tmp
-src/map_kp.html
-*.csv
-src/map_kp.html
-*.csv
+userdata/
 
 # =========================================
 # Runtime (embeddable python / deployed files)
