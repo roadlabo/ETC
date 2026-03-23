@@ -6,6 +6,7 @@ API_URL = "https://etc.roadlabo.com/wp-json/wp/v2/posts?categories=16"
 
 APP_BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 STATE_PATH = APP_BASE_DIR / "userdata" / "news" / "news_state.json"
+CERT_PATH = APP_BASE_DIR / "runtime" / "certs" / "cacert.pem"
 
 
 def load_state():
@@ -40,10 +41,25 @@ def make_seen_key(news_item):
 
 
 def fetch_news():
+    if not CERT_PATH.exists():
+        print(f"[news] 証明書ファイルが見つかりません: {CERT_PATH}")
+        return []
+
+    print(f"[news] verify path: {CERT_PATH}")
+
     try:
-        response = requests.get(API_URL, timeout=3)
+        response = requests.get(
+            API_URL,
+            timeout=15,
+            verify=str(CERT_PATH),
+            headers={"User-Agent": "ETCAnalyzer-NewsFetcher/1.0"},
+        )
         response.raise_for_status()
         data = response.json()
+
+        if not isinstance(data, list):
+            print("[news] API response is not a list")
+            return []
 
         news_list = []
 
@@ -59,8 +75,16 @@ def fetch_news():
 
         return news_list
 
+    except requests.exceptions.SSLError as e:
+        print(f"[news] SSL error: {e}")
+        return []
+
+    except requests.exceptions.RequestException as e:
+        print(f"[news] request error: {e}")
+        return []
+
     except Exception as e:
-        print("ニュース取得失敗:", e)
+        print(f"[news] unexpected error: {e}")
         return []
 
 
@@ -93,6 +117,7 @@ def reset_seen_state():
 if __name__ == "__main__":
     print("news_fetcher.py 開始")
     print(f"既読管理ファイル: {STATE_PATH}")
+    print(f"証明書ファイル: {CERT_PATH}")
     print("-" * 60)
 
     unseen_news = get_unseen_news()

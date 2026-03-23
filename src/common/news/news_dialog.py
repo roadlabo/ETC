@@ -128,7 +128,8 @@ def show_news_dialogs(parent: Optional[QWidget] = None) -> int:
     """
     try:
         unseen_news = get_unseen_news()
-    except Exception:
+    except Exception as e:
+        print(f"[news_dialog] get_unseen_news failed: {e}")
         return 0
 
     if not unseen_news:
