@@ -17,5 +17,11 @@ userdata/
 # =========================================
 # Runtime (embeddable python / deployed files)
 # =========================================
-runtime/
+runtime/*
+!runtime/certs/
+runtime/certs/*
+!runtime/certs/cacert.pem
+!runtime/python/
+runtime/python/*
+!runtime/python/.gitkeep
 logs/

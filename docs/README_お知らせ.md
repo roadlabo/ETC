@@ -122,12 +122,32 @@ UIお知らせ機能は、共通モジュールとしてまとめています。
 - 未読記事を抽出
 - 既読情報の読み書き
 - 既読キーの生成
+- `runtime/certs/cacert.pem` を `requests.get(..., verify=...)` に明示指定してSSL検証する
 
 #### news_dialog.py
 担当:
 - PyQt6 のダイアログ表示
 - 「記事へ」「後で見る」ボタン処理
 - 未読記事を順番に表示
+- ニュース取得失敗時もUI本体を止めず、ログだけ残してfail-safe動作する
+
+### 5-3. 配布版の証明書配置
+配布版では、SSL検証用の証明書ファイルを次の固定パスに置きます。
+
+```text
+EtcAnalyzer_release_v1.00/
+  runtime/
+    python/
+    certs/
+      cacert.pem
+```
+
+注意点:
+
+- `cacert.pem` は **必ず** `runtime/certs/cacert.pem` に置く
+- `runtime/python` の中へ紛れ込ませない
+- 実行時は `certifi.where()` に頼らず、この固定パスを `verify=` に指定する
+- `verify=False` は使わない
 
 ---
 
@@ -309,8 +329,13 @@ UIお知らせ機能とは別に、右上ロゴクリックで道路ラボを開
 - `userdata/`
 - `__pycache__/`
 - `*.pyc`
-- `runtime/`
+- `runtime/` の大半
 - `logs/`
+
+例外として、配布版のSSL検証に必要な次のファイルは管理対象にします。
+
+- `runtime/certs/cacert.pem`
+- `runtime/python/.gitkeep`
 
 ### 13-3. .gitignore の考え方
 `userdata/` を除外している理由は、
@@ -351,8 +376,9 @@ PCごとに既読状態が違うからです。
 1. WordPress 記事が `ui-news` カテゴリに入っているか
 2. 公開状態になっているか
 3. APIで取得できるか
-4. その記事が既読になっていないか
-5. `--skip-news-check` が付いていないか
+4. `runtime/certs/cacert.pem` が存在するか
+5. その記事が既読になっていないか
+6. `--skip-news-check` が付いていないか
 
 ### 15-2. import エラーが出る
 確認すること:
@@ -402,7 +428,18 @@ PCごとに既読状態が違うからです。
 
 ---
 
-## 18. 最後に
+## 18. 配布時チェックリスト
+配布版を作るときは、ZIP化前に最低限次を確認します。
+
+1. `runtime/certs/cacert.pem` が存在する
+2. `cacert.pem` が `runtime/python` 配下へ紛れ込んでいない
+3. `src/common/news/news_fetcher.py` が `verify=str(CERT_PATH)` を使っている
+4. UI側は共通 `show_news_dialogs()` を呼んでいる
+5. ニュース取得失敗時もUI起動が継続する
+
+---
+
+## 19. 最後に
 この仕組みは、単なるポップアップではなく、
 
 - WordPress 連携
