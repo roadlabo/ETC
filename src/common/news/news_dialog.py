@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from common.news.news_fetcher import get_unseen_news, is_allowed_news_url, mark_as_seen
+from common.news.news_fetcher import get_unseen_news, mark_as_seen
 
 
 class NewsDialog(QDialog):
@@ -94,7 +94,6 @@ class NewsDialog(QDialog):
 
         self.open_button = QPushButton("記事へ")
         self.open_button.setDefault(True)
-        self.open_button.setToolTip("公式ブログ記事（etc.roadlabo.com）のみ開けます")
         if not self.news_item.get("link", "").strip():
             self.open_button.setEnabled(False)
         self.open_button.clicked.connect(self._on_open_clicked)
@@ -105,11 +104,6 @@ class NewsDialog(QDialog):
     def _on_open_clicked(self) -> None:
         url = self.news_item.get("link", "").strip()
         if not url:
-            print("[news_dialog] blocked empty or invalid url")
-            return
-
-        if not is_allowed_news_url(url):
-            print(f"[news_dialog] blocked non-allowed url: {url}")
             return
 
         try:
