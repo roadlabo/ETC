@@ -1,12 +1,14 @@
 import json
 from pathlib import Path
 import requests
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 API_URL = "https://etc.roadlabo.com/wp-json/wp/v2/posts?categories=16"
 
 APP_BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 STATE_PATH = APP_BASE_DIR / "userdata" / "news" / "news_state.json"
-CERT_PATH = APP_BASE_DIR / "runtime" / "certs" / "cacert.pem"
 
 
 def load_state():
@@ -39,19 +41,18 @@ def save_state(state):
 def make_seen_key(news_item):
     return f'{news_item["id"]}:{news_item["modified"]}'
 
-
+# ニュース取得は公開情報（バージョン情報・ブログ案内）のみを対象とする。
+# 一部職場PCでは社内SSL検査により証明書エラーが発生するため、
+# 運用性を優先して verify=False を使用する。
+# 認証情報・個人情報を扱う通信にはこの方式を使用しないこと。
 def fetch_news():
-    if not CERT_PATH.exists():
-        print(f"[news] 証明書ファイルが見つかりません: {CERT_PATH}")
-        return []
-
-    print(f"[news] verify path: {CERT_PATH}")
+    print("[news] SSL verification disabled (public info only)")
 
     try:
         response = requests.get(
             API_URL,
             timeout=15,
-            verify=str(CERT_PATH),
+            verify=False,
             headers={"User-Agent": "ETCAnalyzer-NewsFetcher/1.0"},
         )
         response.raise_for_status()
@@ -74,10 +75,6 @@ def fetch_news():
             news_list.append(news)
 
         return news_list
-
-    except requests.exceptions.SSLError as e:
-        print(f"[news] SSL error: {e}")
-        return []
 
     except requests.exceptions.RequestException as e:
         print(f"[news] request error: {e}")
@@ -117,7 +114,6 @@ def reset_seen_state():
 if __name__ == "__main__":
     print("news_fetcher.py 開始")
     print(f"既読管理ファイル: {STATE_PATH}")
-    print(f"証明書ファイル: {CERT_PATH}")
     print("-" * 60)
 
     unseen_news = get_unseen_news()
