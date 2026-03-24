@@ -1,11 +1,13 @@
 import json
 from pathlib import Path
+from urllib.parse import urlparse
 import requests
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 API_URL = "https://etc.roadlabo.com/wp-json/wp/v2/posts?categories=16"
+ALLOWED_NEWS_HOSTS = {"etc.roadlabo.com"}
 
 APP_BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 STATE_PATH = APP_BASE_DIR / "userdata" / "news" / "news_state.json"
@@ -41,9 +43,22 @@ def save_state(state):
 def make_seen_key(news_item):
     return f'{news_item["id"]}:{news_item["modified"]}'
 
+
+def is_allowed_news_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return False
+        host = (parsed.hostname or "").lower()
+        return host in ALLOWED_NEWS_HOSTS
+    except Exception:
+        return False
+
 # ニュース取得は公開情報（バージョン情報・ブログ案内）のみを対象とする。
 # 一部職場PCでは社内SSL検査により証明書エラーが発生するため、
 # 運用性を優先して verify=False を使用する。
+# その代わり、JSON中のリンク先は etc.roadlabo.com のみ許可し、
+# 許可外URLは開けないようにして安全性を補う。
 # 認証情報・個人情報を扱う通信にはこの方式を使用しないこと。
 def fetch_news():
     print("[news] SSL verification disabled (public info only)")
@@ -65,10 +80,16 @@ def fetch_news():
         news_list = []
 
         for post in data:
+            raw_link = post.get("link", "")
+            safe_link = raw_link if is_allowed_news_url(raw_link) else ""
+
+            if raw_link and not safe_link:
+                print(f"[news] blocked non-allowed url: {raw_link}")
+
             news = {
                 "id": post["id"],
                 "title": post["title"]["rendered"],
-                "link": post["link"],
+                "link": safe_link,
                 "modified": post["modified"],
             }
             news["seen_key"] = make_seen_key(news)
