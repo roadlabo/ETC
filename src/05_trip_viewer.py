@@ -21,6 +21,7 @@ NOGUI_MODE = "--nogui" in sys.argv[1:]
 
 if not NOGUI_MODE:
     from common.news.news_dialog import show_news_dialogs
+    from common.news.news_fetcher import news_debug
     from common.ui.logo_link import ClickableLogoLabel
     from PyQt6.QtCore import QObject, QPropertyAnimation, QThread, Qt, QTimer, QUrl, pyqtSignal
     from PyQt6.QtWebEngineCore import QWebEngineSettings
@@ -1149,7 +1150,7 @@ def main(argv: Sequence[str]) -> None:
         try:
             show_news_dialogs()
         except Exception as e:
-            print(f"[news] お知らせ表示をスキップしました: {e}")
+            news_debug(f"お知らせ表示をスキップしました: {e!r}")
 
     busy = make_busy_dialog("起動中", "Qt初期化中…（初回は時間がかかることがあります）")
 

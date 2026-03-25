@@ -39,6 +39,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from common.news.news_dialog import show_news_dialogs
+from common.news.news_fetcher import news_debug
 from common.ui.logo_link import ClickableLogoLabel
 
 MODULE_PATH = Path(__file__).with_name("01_split_by_opid_streaming.py")
@@ -851,7 +852,7 @@ def main() -> None:
         try:
             show_news_dialogs()
         except Exception as e:
-            print(f"[news] お知らせ表示をスキップしました: {e}")
+            news_debug(f"お知らせ表示をスキップしました: {e!r}")
     w = MainWindow()
     w.showMaximized()
     sys.exit(app.exec())

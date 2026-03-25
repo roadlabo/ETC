@@ -14,6 +14,7 @@ if str(SRC_DIR) not in sys.path:
 from PyQt6.QtCore import QPoint, QProcess, QPropertyAnimation, QRect, QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from common.news.news_dialog import show_news_dialogs
+from common.news.news_fetcher import news_debug
 from common.ui.logo_link import ClickableLogoLabel
 
 from PyQt6.QtWidgets import (
@@ -1331,7 +1332,7 @@ def main():
         try:
             show_news_dialogs()
         except Exception as e:
-            print(f"[news] お知らせ表示をスキップしました: {e}")
+            news_debug(f"お知らせ表示をスキップしました: {e!r}")
 
     w = MainWindow()
     w.show()
