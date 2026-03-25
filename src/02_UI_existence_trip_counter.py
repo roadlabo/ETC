@@ -44,6 +44,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from common.news.news_dialog import show_news_dialogs
+from common.news.news_fetcher import news_debug
 from common.ui.logo_link import ClickableLogoLabel
 
 APP_TITLE = "02_時間帯存在トリップ集計＋ピーク30分OD抽出"
@@ -1228,7 +1229,7 @@ def main() -> int:
         try:
             show_news_dialogs()
         except Exception as e:
-            print(f"[news] お知らせ表示をスキップしました: {e}")
+            news_debug(f"お知らせ表示をスキップしました: {e!r}")
     try:
         w = MainWindow(); w.show()
         return app.exec()

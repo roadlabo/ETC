@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from common.news.news_dialog import show_news_dialogs
+from common.news.news_fetcher import news_debug
 from common.ui.logo_link import ClickableLogoLabel
 
 APP_TITLE = "31_交差点パフォーマンス分析／32_レポート作成／33_IN-OUT枝判定ビューアー（一括実行）"
@@ -1783,7 +1784,7 @@ def main() -> None:
         try:
             show_news_dialogs()
         except Exception as e:
-            print(f"[news] お知らせ表示をスキップしました: {e}")
+            news_debug(f"お知らせ表示をスキップしました: {e!r}")
     w = MainWindow()
 
     # いきなり showMaximized() しない。まず show() して polish/サイズヒント/レイアウトを確定させる

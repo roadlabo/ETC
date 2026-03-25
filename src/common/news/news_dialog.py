@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from common.news.news_fetcher import get_unseen_news, mark_as_seen
+from common.news.news_fetcher import get_unseen_news, mark_as_seen, news_debug
 
 
 class NewsDialog(QDialog):
@@ -133,7 +133,7 @@ def show_news_dialogs(parent: Optional[QWidget] = None) -> int:
     try:
         unseen_news = get_unseen_news()
     except Exception as e:
-        print(f"[news_dialog] get_unseen_news failed: {e}")
+        news_debug(f"get_unseen_news failed: {e!r}")
         return 0
 
     if not unseen_news:

@@ -20,6 +20,7 @@ UI_LOGO_FILENAME = "logo_33_branch_check.png"
 
 if not NOGUI_MODE:
     from common.news.news_dialog import show_news_dialogs
+    from common.news.news_fetcher import news_debug
     from common.ui.logo_link import ClickableLogoLabel
     from PyQt6.QtCore import Qt, QSize, QRect
     from PyQt6.QtCore import QTimer, QPropertyAnimation
@@ -1815,7 +1816,7 @@ def main():
         try:
             show_news_dialogs()
         except Exception as e:
-            print(f"[news] お知らせ表示をスキップしました: {e}")
+            news_debug(f"お知らせ表示をスキップしました: {e!r}")
     busy = make_busy_dialog("起動中", "Qt初期化中…（初回は時間がかかることがあります）")
 
     csv_path = parsed.csv or parsed.csv_pos

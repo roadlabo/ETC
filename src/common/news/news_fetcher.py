@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import requests
 import urllib3
@@ -9,6 +10,15 @@ API_URL = "https://etc.roadlabo.com/wp-json/wp/v2/posts?categories=16"
 
 APP_BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 STATE_PATH = APP_BASE_DIR / "userdata" / "news" / "news_state.json"
+
+
+def _is_news_debug() -> bool:
+    return os.environ.get("ETC_NEWS_DEBUG", "").strip() == "1"
+
+
+def news_debug(msg: str) -> None:
+    if _is_news_debug():
+        print(f"[news][DEBUG] {msg}")
 
 
 def load_state():
@@ -42,12 +52,12 @@ def make_seen_key(news_item):
     return f'{news_item["id"]}:{news_item["modified"]}'
 
 
-# ニュース取得は公開情報（バージョン情報・ブログ案内）のみを対象とする。
-# 一部職場PCでは社内SSL検査により証明書エラーが発生するため、
-# 運用性を優先して verify=False を使用する。
-# 認証情報・個人情報を扱う通信にはこの方式を使用しないこと。
+# Public news only. No authentication or personal data involved.
+# SSL verification is intentionally relaxed here for distribution simplicity.
+# Do not reuse this approach for authenticated or personal-data traffic.
 def fetch_news():
-    print("[news] SSL verification disabled (public info only)")
+    news_debug("news fetch started")
+    news_debug("SSL verification disabled (public info only)")
 
     try:
         response = requests.get(
@@ -60,7 +70,7 @@ def fetch_news():
         data = response.json()
 
         if not isinstance(data, list):
-            print("[news] API response is not a list")
+            news_debug("API response is not a list")
             return []
 
         news_list = []
@@ -75,14 +85,15 @@ def fetch_news():
             news["seen_key"] = make_seen_key(news)
             news_list.append(news)
 
+        news_debug(f"news fetch succeeded: count={len(news_list)}")
         return news_list
 
     except requests.exceptions.RequestException as e:
-        print(f"[news] request error: {e}")
+        news_debug(f"request error: {e!r}")
         return []
 
     except Exception as e:
-        print(f"[news] unexpected error: {e}")
+        news_debug(f"unexpected error: {e!r}")
         return []
 
 
