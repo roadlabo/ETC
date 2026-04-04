@@ -19,6 +19,7 @@ from PyQt6.QtGui import QPainter, QPen, QColor, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
@@ -58,6 +59,8 @@ RE_TOTAL = re.compile(r"\[TOTAL\]\s+total=(\d+)")
 RE_HIT = re.compile(r"\[HIT\]\s+op_id=(\S+)\s+zone=(.+?)\s+hit_count=(\d+)")
 RE_HIT_AUX = re.compile(r"\[HIT_AUX\]\s+op_id=(\S+)\s+zone=(.+?)\s+aux_count=(\d+)")
 RE_ZONE_COUNT = re.compile(r"\[INFO\]\s+有効ゾーン数:\s*(\d+)")
+RE_WAIT_SAVE = re.compile(r"\[WAIT_SAVE\](?:\s+.+)?")
+RE_WAIT_SAVE_OK = re.compile(r"\[WAIT_SAVE_OK\](?:\s+.+)?")
 AUX_ZONE_NAMES = ("北方面", "南方面", "東方面", "西方面")
 
 DEFAULT_CENTER_LON = 134.003809
@@ -361,6 +364,23 @@ class ZoneCard(QPushButton):
         self.lbl_count.setText(f"HIT運行ID数: {self.count:,}")
 
 
+class SaveWaitDialog(QDialog):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("保存待機中")
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
+        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+        self.setModal(True)
+        self.setMinimumWidth(420)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 16, 18, 16)
+        label = QLabel("出力ファイルが開かれています。\n閉じるまで待機しています…")
+        label.setWordWrap(True)
+        lay.addWidget(label)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -384,6 +404,8 @@ class MainWindow(QMainWindow):
         self._last_log = ""
         self._stdout_buffer = ""
         self._last_progress_milestone = 0
+        self._save_wait_dialog: SaveWaitDialog | None = None
+        self._wait_save_active = False
         self.is_running = False
         self.selected_zone_name = ""
         self._debug_logger = logging.getLogger("zone_estimator_ui")
@@ -1146,6 +1168,8 @@ if (zonesGroup.getLayers().length > 0) {{
         self.hit_count = 0
         self._counted_ops.clear()
         self._last_progress_milestone = 0
+        self._wait_save_active = False
+        self._hide_save_wait_dialog()
         for n in self.zone_hit_counts:
             self.update_zone_card(n, 0)
         self._refresh_progress()
@@ -1179,6 +1203,16 @@ if (zonesGroup.getLayers().length > 0) {{
         self._update_run_state()
         self.append_uiinfo(f"解析開始 / 対象CSV数={self.total_files:,} / ゾーン数={len(self.zone_shapes):,}")
 
+    def _show_save_wait_dialog(self) -> None:
+        if self._save_wait_dialog is None:
+            self._save_wait_dialog = SaveWaitDialog(self)
+        if not self._save_wait_dialog.isVisible():
+            self._save_wait_dialog.show()
+
+    def _hide_save_wait_dialog(self) -> None:
+        if self._save_wait_dialog and self._save_wait_dialog.isVisible():
+            self._save_wait_dialog.hide()
+
     def _process_log_line(self, line: str) -> None:
         if m := RE_TOTAL.search(line):
             self.total_files = int(m.group(1))
@@ -1209,6 +1243,16 @@ if (zonesGroup.getLayers().length > 0) {{
             self.lbl_hit.setText(f"正常HIT: {self.hit_count:,}")
         if m := RE_ZONE_COUNT.search(line):
             self.lbl_zone_count.setText(f"ゾーン数: {int(m.group(1)):,}")
+        if RE_WAIT_SAVE.search(line):
+            self._wait_save_active = True
+            self.lbl_status.setText("状態: WAIT_SAVE")
+            self._show_save_wait_dialog()
+            self.append_uiwarn("出力ファイルが開かれているため待機中")
+        if RE_WAIT_SAVE_OK.search(line):
+            self._wait_save_active = False
+            self._hide_save_wait_dialog()
+            self.lbl_status.setText("状態: RUNNING")
+            self.append_uiinfo("出力ファイルを書き込みました")
 
     def on_output(self) -> None:
         if not self.proc:
@@ -1277,6 +1321,8 @@ if (zonesGroup.getLayers().length > 0) {{
 
     def on_finished(self, code: int, _status) -> None:
         self.is_running = False
+        self._wait_save_active = False
+        self._hide_save_wait_dialog()
         if self._stdout_buffer:
             line = _normalize_log_line(self._stdout_buffer)
             self._process_log_line(line)

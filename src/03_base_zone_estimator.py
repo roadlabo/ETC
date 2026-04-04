@@ -5,6 +5,7 @@ import csv
 import math
 import re
 import sys
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, time
@@ -412,6 +413,24 @@ def iter_csv_files(folder: Path, recursive: bool) -> list[Path]:
     )
 
 
+def write_output_csv_with_retry(out_csv: Path, out_rows: list[tuple[str, str, str]]) -> None:
+    notified = False
+    while True:
+        try:
+            with out_csv.open("w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["op_id", "base_zone", "判定メモ"])
+                w.writerows(out_rows)
+            if notified:
+                log(f"[WAIT_SAVE_OK] 出力CSVへの書き込みを再開しました: {out_csv}")
+            return
+        except PermissionError:
+            if not notified:
+                log(f"[WAIT_SAVE] 出力CSVが開かれています。閉じてください: {out_csv}")
+                notified = True
+            time.sleep(1.0)
+
+
 def run(args: argparse.Namespace) -> int:
     input_dir = Path(args.input)
     zone_path = Path(args.zoning)
@@ -460,10 +479,7 @@ def run(args: argparse.Namespace) -> int:
             ng_count += 1
         log(f"[PROGRESS] done={i} total={total}")
 
-    with out_csv.open("w", encoding="utf-8-sig", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["op_id", "base_zone", "判定メモ"])
-        w.writerows(out_rows)
+    write_output_csv_with_retry(out_csv, out_rows)
 
     log(f"[INFO] 解析完了 / 正常HIT={hit_count} / 判定不可={ng_count} / 出力CSV={out_csv}")
     return 0
