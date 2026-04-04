@@ -321,7 +321,7 @@ class ZoneMapWidget(QWidget):
             p.setPen(QPen(QColor("#cc1f1f"), 1))
             p.drawText(self.width() - 230, 30, "赤線: 指定ゾーニング")
             p.setPen(QPen(QColor("#1d4ed8"), 1))
-            p.drawText(self.width() - 230, 50, "青塗: 指定ゾーン外の方面補助分類")
+            p.drawText(self.width() - 230, 50, "青塗: 東西南北の補助ゾーン")
 
         p.setPen(QPen(QColor("#333333"), 1))
         font = p.font()
@@ -518,8 +518,8 @@ class MainWindow(QMainWindow):
             "③ その代表点をゾーンに当てはめ、同じゾーンが複数回出れば、そのゾーンを拠点と判定します。\n"
             "④ 夜越し地点が見つからない場合は、CSV内で最も深夜3:00に近い点を使ってゾーン判定します。\n"
             "⑤ それでもゾーンに入らない場合は判定不可とします。\n\n"
-            "【補助分類】\n"
-            "通常ゾーンに入らない場合は、全体位置関係から東西南北の補助分類を行います。"
+            "【補助ゾーン】\n"
+            "通常ゾーンに入らない場合は、全体位置関係から東西南北の補助ゾーンへ分類します。"
         )
         self.logic_scroll = QScrollArea()
         self.logic_scroll.setWidgetResizable(True)
@@ -1017,7 +1017,7 @@ html, body, #map {{ height:100%; margin:0; background:#fff; }}
 </head>
 <body>
 <div class=\"ttl\">{safe_zone_name}</div>
-<div class=\"lg\">赤線: 指定ゾーニング<br/>青塗: 指定ゾーン外の方面補助分類</div>
+<div class=\"lg\">赤線: 指定ゾーニング<br/>青塗: 東西南北の補助ゾーン</div>
 <div id=\"map\"></div>
 <script>
 const map = L.map('map').setView([{center_point[1]}, {center_point[0]}], 12);
