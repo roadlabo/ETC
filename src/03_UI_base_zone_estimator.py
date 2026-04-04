@@ -383,7 +383,6 @@ class MainWindow(QMainWindow):
         self._counted_ops: set[str] = set()
         self._last_log = ""
         self._stdout_buffer = ""
-        self._last_hit_milestone = 0
         self._last_progress_milestone = 0
         self.is_running = False
         self.selected_zone_name = ""
@@ -554,6 +553,8 @@ class MainWindow(QMainWindow):
         bottom = QFrame(); bottom.setObjectName("card")
         bf = QVBoxLayout(bottom); bf.setContentsMargins(8, 8, 8, 8)
         self.progress = QProgressBar(); self.progress.setRange(0, 100)
+        # このログ欄は詳細ログではなく、最新状態を1行で示すための表示領域。
+        # HITの逐次状況など細かい情報は出さず、進行が把握できる最小限メッセージのみ表示する。
         self.log = QPlainTextEdit(); self.log.setReadOnly(True); self.log.setMaximumHeight(44)
         self.log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         bf.addWidget(self.progress); bf.addWidget(self.log)
@@ -1121,6 +1122,7 @@ if (zonesGroup.getLayers().length > 0) {{
         self.zone_shapes = parse_zone_shapes(self.zoning_file)
         self._build_zone_aliases()
         self.build_zone_cards()
+        self.append_uiinfo(f"ゾーニング読込完了 / ゾーン数={len(self.zone_shapes):,}")
         if self.zone_shapes:
             self.on_zone_card_clicked(next(iter(self.zone_shapes.keys())))
         else:
@@ -1143,7 +1145,6 @@ if (zonesGroup.getLayers().length > 0) {{
         self.done_files = 0
         self.hit_count = 0
         self._counted_ops.clear()
-        self._last_hit_milestone = 0
         self._last_progress_milestone = 0
         for n in self.zone_hit_counts:
             self.update_zone_card(n, 0)
@@ -1199,10 +1200,6 @@ if (zonesGroup.getLayers().length > 0) {{
                 self.hit_count += 1
                 self.increment_zone_hit_count(zone)
             self.lbl_hit.setText(f"正常HIT: {self.hit_count:,}")
-            milestone = (self.hit_count // 100) * 100
-            if milestone >= 100 and milestone > self._last_hit_milestone:
-                self._last_hit_milestone = milestone
-                self.append_uiinfo(f"HIT累積={milestone:,}")
         if m := RE_HIT_AUX.search(line):
             op_id, zone = m.group(1), _normalize_log_line(m.group(2))
             if op_id not in self._counted_ops:
