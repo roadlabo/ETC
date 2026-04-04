@@ -522,7 +522,7 @@ class MainWindow(QMainWindow):
         self.lbl_map_mode = QLabel("地図表示: SIMPLE")
         self.lbl_elapsed = QLabel("経過 00:00:00", objectName="big")
         self.lbl_remaining = QLabel("残り --:--:--", objectName="big")
-        for w in [self.lbl_zone_count, self.lbl_status, self.lbl_progress, self.lbl_hit, self.lbl_map_mode, self.lbl_elapsed, self.lbl_remaining]:
+        for w in [self.lbl_zone_count, self.lbl_map_mode, self.lbl_elapsed, self.lbl_remaining]:
             rf.addWidget(w)
         self.radar = RadarWidget(); rf.addWidget(self.radar)
 
@@ -573,13 +573,32 @@ class MainWindow(QMainWindow):
         middle.setStretch(2, 14)
 
         bottom = QFrame(); bottom.setObjectName("card")
-        bf = QVBoxLayout(bottom); bf.setContentsMargins(8, 8, 8, 8)
-        self.progress = QProgressBar(); self.progress.setRange(0, 100)
-        # このログ欄は詳細ログではなく、最新状態を1行で示すための表示領域。
-        # HITの逐次状況など細かい情報は出さず、進行が把握できる最小限メッセージのみ表示する。
-        self.log = QPlainTextEdit(); self.log.setReadOnly(True); self.log.setMaximumHeight(44)
+        bf = QHBoxLayout(bottom); bf.setContentsMargins(8, 8, 8, 8); bf.setSpacing(10)
+
+        bottom_left = QFrame()
+        blf = QVBoxLayout(bottom_left); blf.setContentsMargins(0, 0, 0, 0); blf.setSpacing(6)
+        blf.addWidget(QLabel("実行ログ", objectName="panelTitle"))
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(1000)
         self.log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        bf.addWidget(self.progress); bf.addWidget(self.log)
+        self.log.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        blf.addWidget(self.log, 1)
+
+        bottom_right = QFrame()
+        brf = QVBoxLayout(bottom_right); brf.setContentsMargins(0, 0, 0, 0); brf.setSpacing(6)
+        brf.addWidget(QLabel("進捗", objectName="panelTitle"))
+        self.progress = QProgressBar(); self.progress.setRange(0, 100)
+        brf.addWidget(self.progress)
+        brf.addWidget(self.lbl_progress)
+        brf.addWidget(self.lbl_status)
+        brf.addWidget(self.lbl_hit)
+        brf.addStretch(1)
+
+        bf.addWidget(bottom_left)
+        bf.addWidget(bottom_right)
+        bf.setStretch(0, 6)
+        bf.setStretch(1, 4)
         root.addWidget(bottom)
 
         self.setStyleSheet(
@@ -702,7 +721,9 @@ class MainWindow(QMainWindow):
         if not line or line == self._last_log:
             return
         self._last_log = line
-        self.log.setPlainText(line)
+        self.log.appendPlainText(line)
+        sb = self.log.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     def append_uiinfo(self, text: str) -> None:
         self.append_log_line(f"[UIINFO] {text}")
