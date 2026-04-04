@@ -190,6 +190,13 @@ def assign_aux_direction(lat: float | None, lon: float | None, zone_def: Sequenc
     return "東方面" if dx >= 0 else "西方面"
 
 
+def assign_point_to_zone_with_aux(lat: float | None, lon: float | None, zone_def: Sequence[PolygonZone]) -> str | None:
+    zone = assign_point_to_zone(lat, lon, zone_def)
+    if zone:
+        return zone
+    return assign_aux_direction(lat, lon, zone_def)
+
+
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371000.0
     p1 = math.radians(lat1)
@@ -235,7 +242,7 @@ def find_night_cross_candidates(
             continue
         rep_lat = (last_of_day.lat + first_of_next_day.lat) / 2.0
         rep_lon = (last_of_day.lon + first_of_next_day.lon) / 2.0
-        zone = assign_point_to_zone(rep_lat, rep_lon, zones)
+        zone = assign_point_to_zone_with_aux(rep_lat, rep_lon, zones)
         if not zone:
             continue
         candidates.append(
@@ -278,7 +285,7 @@ def estimate_base_zone_with_fallback(records: list[Record], zones: Sequence[Poly
         return fallback_zone, "深夜3時近傍点で判定"
     aux = assign_aux_direction(near_3.lat, near_3.lon, zones)
     if aux:
-        return aux, f"通常ゾーン外のため{aux}補助分類"
+        return aux, "深夜3時近傍点で判定"
     return "判定不可", "判定不可"
 
 
