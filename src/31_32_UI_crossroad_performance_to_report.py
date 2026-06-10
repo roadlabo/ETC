@@ -1248,9 +1248,10 @@ class MainWindow(QMainWindow):
         self._weekday_updating = False
 
     def _selected_weekdays_for_cli(self) -> list[str]:
-        if self.chk_all.isChecked():
-            return []
-        return [WEEKDAY_KANJI_TO_ABBR[wd] for wd, chk in self.weekday_checks.items() if chk.isChecked()]
+        selected = [WEEKDAY_KANJI_TO_ABBR[wd] for wd, chk in self.weekday_checks.items() if chk.isChecked()]
+        if len(selected) == len(WEEKDAY_KANJI):
+            return ["ALL"]
+        return selected
 
     def _selected_weekdays_for_log(self) -> str:
         selected = self._selected_weekdays_for_cli()
@@ -1453,6 +1454,9 @@ class MainWindow(QMainWindow):
         targets = self._collect_targets()
         if not targets:
             QMessageBox.information(self, "対象なし", "実行対象の交差点が選択されていません。")
+            return
+        if not self._selected_weekdays_for_cli():
+            QMessageBox.warning(self, "未設定", "②分析対象とする曜日を1つ以上選択してください。")
             return
 
         locked_reports: list[str] = []
