@@ -6,3 +6,4 @@ tqdm>=4.66
 matplotlib>=3.8
 PyQt6>=6.6
 PyQt6-WebEngine>=6.6
+openpyxl>=3.1
