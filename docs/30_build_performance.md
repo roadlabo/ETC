@@ -20,6 +20,7 @@
 ## 実行方法
 - コマンド例: `python src/unreleased/30_build_performance.py --input-dir ./20_第２スクリーニング --route ./10_ルートデータ/route.csv --output ./30_ルートパフォーマンス/route_performance_directional.xlsx`
 - UI版: `python src/unreleased/30_UI_route_performance.py`
+- embedded配布環境では `bat/30_UI_route_performance.bat` から起動する。
 - UIでは「第2スクリーニング後データフォルダ」「ルートファイル」を選択し、「解析開始」を押す。解析後は区分（平日/休日/月〜日）、時間帯、方向を選択して、KP別の速度・トリップ数グラフを確認する。
 ## 判定ロジック（重要なものだけ）
 - ルートCSVを読み込み、各行の累積距離 KP[m] を算出する。
