@@ -1,424 +1,462 @@
-import os, csv, glob, math, argparse
-from datetime import datetime
-import random
+import argparse
+import csv
+import glob
+import math
+import os
 import re
-from typing import Optional
-from statistics import median
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
+from statistics import median
+from typing import Callable, Iterable, Optional
 
-# =========================
-# ★ スクリプト冒頭で固定指定 ★
-# =========================
-# trip_extractor.py の出力CSV群フォルダ
+try:
+    import pandas as pd
+except Exception:  # pragma: no cover
+    pd = None
+
 INPUT_DIR = r"D:\\path\\to\\trip_extractor_outputs"
-
-# 自動運転ルート.csv のフルパス
 ROUTE_PATH = r"D:\\path\\to\\自動運転ルート.csv"
+OUTPUT_PATH = r"D:\\path\\to\\route_performance_directional.xlsx"
 
-# 出力 paformance001.csv のフルパス
-OUTPUT_PATH = r"D:\\path\\to\\paformance001.csv"
-
-# マッチ半径[m]（例：20）
-RADIUS_M = 20.0
-
-# ルートCSVの列index（ヘッダー無し）
-#   経度O=14／緯度P=15 から⊿L[m]を積算してKP[km]を自動算出
 ROUTE_LON_COL = 14
 ROUTE_LAT_COL = 15
+COL_DATE = 2
+COL_TIME = 6
+COL_TRIP_NO = 8
+COL_LON = 14
+COL_LAT = 15
 
-# 解析対象CSV（trip_extractor出力）の列index
-COL_TIME  = 6   # G
-COL_LON   = 14  # O
-COL_LAT   = 15  # P
-COL_SPEED = 18  # S
-
-# 出力の丸め（平均速度の小数桁）
-ROUND_DIGITS = 1
-KP_DECIMALS  = 2   # キロポストの表示小数桁（例：0.00）
-
-# サブフォルダも探索するなら True
 RECURSIVE = True
-
-# 地球半径[m]
+MAX_OFF_ROUTE_M = 30.0
+MAX_SEGMENT_DISTANCE_M = 250.0
+MAX_SEGMENT_TIME_S = 300.0
+MIN_SEGMENT_DISTANCE_M = 1.0
+KP_DECIMALS = 2
+ROUND_DIGITS = 1
 EARTH_R = 6_371_000.0
-# =========================
+
+PERIODS = ["平日", "休日", "月", "火", "水", "木", "金", "土", "日"]
+WEEKDAY_JA = ["月", "火", "水", "木", "金", "土", "日"]
+SHEET_NAMES = {
+    "forward_speed": "速度（順方向）",
+    "forward_count": "トリップ数（順方向）",
+    "forward_time": "GPS時刻（順方向）",
+    "reverse_speed": "速度（逆方向）",
+    "reverse_count": "トリップ数（逆方向）",
+    "reverse_time": "GPS時刻（逆方向）",
+}
 
 
-def deg2rad(d): return d * math.pi / 180.0
+def deg2rad(d: float) -> float:
+    return d * math.pi / 180.0
 
-def haversine_m(lat1, lon1, lat2, lon2):
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = math.sin(dlat/2.0)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlon/2.0)**2
-    return 2.0 * EARTH_R * math.asin(math.sqrt(a))
 
-def parse_hour(s: str) -> Optional[int]:
-    """
-    文字列から“時(0–23)”のみ抽出（年月日無視）。
-    対応例:
-      2025-01-02 9:03, 2025/01/02T09:03:00.123+09:00, 09:03, 9:03:5, 12時34分 など
-    """
-    if not s:
-        return None
-    t = s.strip()
-    # 1) 標準: H:MM[:SS[.mmm]][+TZ]
-    m = re.search(r'(\d{1,2}):\d{1,2}(?::\d{1,2}(?:\.\d+)?)?', t)
-    if m:
-        try:
-            hh = int(m.group(1))
-            return hh if 0 <= hh <= 23 else None
-        except Exception:
-            return None
+def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    lat1r, lon1r, lat2r, lon2r = map(deg2rad, (lat1, lon1, lat2, lon2))
+    dlat = lat2r - lat1r
+    dlon = lon2r - lon1r
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1r) * math.cos(lat2r) * math.sin(dlon / 2) ** 2
+    return 2 * EARTH_R * math.asin(math.sqrt(a))
 
-    # 2) 和式など "HH時MM分"
-    m = re.search(r'(\d{1,2})\s*[時Hh]\s*\d{1,2}', t)
-    if m:
-        try:
-            hh = int(m.group(1))
-            return hh if 0 <= hh <= 23 else None
-        except Exception:
-            return None
 
-    # 3) "HH-MM" のようなハイフン区切り（時刻っぽいもの）
-    m = re.search(r'(\d{1,2})-\d{1,2}', t)
-    if m:
-        try:
-            hh = int(m.group(1))
-            return hh if 0 <= hh <= 23 else None
-        except Exception:
-            return None
-
-    # 3-a) 区切り無しの HHMM / HMM （例: '0930', '930'）
-    m = re.search(r'\b(\d{3,4})\b', t)  # 3～4桁の連続数字を拾う
-    if m:
-        num = m.group(1)
-        try:
-            # 先頭1～2桁を時とみなす（'930'→'9','0930'→'09'）
-            hh = int(num[:-2]) if len(num) == 4 else int(num[0])
-            if 0 <= hh <= 23:
-                return hh
-        except Exception:
-            return None
-
-    # 3-b) 区切りなしの 14桁: YYYYMMDDHHMMSS（例: 20250224161105）
-    m = re.fullmatch(r'(\d{14})', t)
-    if m:
-        num = m.group(1)
-        try:
-            hh = int(num[8:10])  # 9～10文字目が「時」
-            if 0 <= hh <= 23:
-                return hh
-        except Exception:
-            pass
-
+def parse_datetime_from_row(row: list[str]) -> Optional[datetime]:
+    values = []
+    if len(row) > COL_TIME:
+        values.append(str(row[COL_TIME]).strip())
+    if len(row) > COL_DATE and len(row) > COL_TIME:
+        values.append(f"{str(row[COL_DATE]).strip()} {str(row[COL_TIME]).strip()}")
+    for text in values:
+        if not text:
+            continue
+        t = text.replace("T", " ").replace("/", "-")
+        t = re.sub(r"([+-]\d{2}:?\d{2}|Z)$", "", t).strip()
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+            "%Y%m%d %H:%M:%S", "%Y%m%d %H:%M", "%Y%m%d %H%M%S", "%Y%m%d%H%M%S",
+            "%H:%M:%S.%f", "%H:%M:%S", "%H:%M", "%H%M%S", "%H%M",
+        ):
+            try:
+                dt = datetime.strptime(t, fmt)
+                if dt.year == 1900 and len(row) > COL_DATE:
+                    d = str(row[COL_DATE]).strip()
+                    if re.fullmatch(r"\d{8}", d):
+                        base = datetime.strptime(d, "%Y%m%d")
+                        return base.replace(hour=dt.hour, minute=dt.minute, second=dt.second, microsecond=dt.microsecond)
+                return dt
+            except ValueError:
+                pass
     return None
 
 
-def parse_speed(val: str) -> Optional[float]:
-    """
-    速度セルから最初の数値（float）を抽出。
-    許容: カンマ, 前後空白, 単位文字, 全角スペース, 先頭ダッシュ等
-    例: "1,234.5", " 67km/h", "—" → None
-    """
-    if val is None:
-        return None
-    t = str(val).replace(",", "").replace("\u3000", " ").strip()
-    m = re.search(r'[-+]?\d+(?:\.\d+)?', t)
-    if not m:
-        return None
-    try:
-        return float(m.group(0))
-    except Exception:
-        return None
+def seconds_to_hhmmss(sec: Optional[float]) -> str:
+    if sec is None:
+        return ""
+    sec = int(round(sec)) % 86400
+    h, rem = divmod(sec, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
 
-def build_route_kp(route_path):
-    """
-    ルートCSVを上から順に辿り、1行目を 0.00 km として
-    O列(14)=lon, P列(15)=lat から⊿L[m]をハバーサインで積算し、
-    各行のキロポスト[km]配列を作る。
-    Returns:
-      kp_km   : List[float]  各ルート行のキロポスト[km]
-      lat_rad : List[float]  各ルート行の緯度(rad)
-      lon_rad : List[float]  各ルート行の経度(rad)
-    """
-    lats, lons = [], []
-    reader = None
-    for enc in ("cp932", "utf-8-sig", "utf-8"):
+
+@dataclass
+class RouteModel:
+    lons: list[float]
+    lats: list[float]
+    xs: list[float]
+    ys: list[float]
+    kp_m: list[float]
+    origin_lon: float
+    origin_lat: float
+
+    @property
+    def length_m(self) -> float:
+        return self.kp_m[-1] if self.kp_m else 0.0
+
+    def to_xy(self, lon: float, lat: float) -> tuple[float, float]:
+        lat0r = deg2rad(self.origin_lat)
+        return (
+            deg2rad(lon - self.origin_lon) * EARTH_R * math.cos(lat0r),
+            deg2rad(lat - self.origin_lat) * EARTH_R,
+        )
+
+    def project(self, lon: float, lat: float) -> tuple[float, float]:
+        px, py = self.to_xy(lon, lat)
+        best_s, best_d = 0.0, float("inf")
+        for i in range(len(self.xs) - 1):
+            ax, ay = self.xs[i], self.ys[i]
+            bx, by = self.xs[i + 1], self.ys[i + 1]
+            vx, vy = bx - ax, by - ay
+            seg2 = vx * vx + vy * vy
+            if seg2 <= 0:
+                continue
+            t = max(0.0, min(1.0, ((px - ax) * vx + (py - ay) * vy) / seg2))
+            qx, qy = ax + t * vx, ay + t * vy
+            d = math.hypot(px - qx, py - qy)
+            if d < best_d:
+                best_d = d
+                best_s = self.kp_m[i] + t * (self.kp_m[i + 1] - self.kp_m[i])
+        return best_s, best_d
+
+
+def read_csv_rows(path: Path) -> list[list[str]]:
+    last = None
+    for enc in ("cp932", "utf-8-sig", "utf-8", "shift_jis"):
         try:
-            with open(route_path, "r", newline="", encoding=enc) as f:
-                reader = list(csv.reader(f))
-            break
-        except Exception:
-            reader = None
-            continue
-    if reader is None:
-        raise RuntimeError("ルートCSVを読み取れません（文字コード不一致）。")
-    for row in reader:
-        if not row:
-            continue
+            with path.open("r", newline="", encoding=enc) as f:
+                return list(csv.reader(f))
+        except Exception as exc:
+            last = exc
+    raise last or RuntimeError(f"Failed to read {path}")
+
+
+def build_route_model(route_path: str | Path) -> RouteModel:
+    rows = read_csv_rows(Path(route_path))
+    lons, lats = [], []
+    for row in rows:
         try:
             lon = float(row[ROUTE_LON_COL])
             lat = float(row[ROUTE_LAT_COL])
         except Exception:
             continue
-        lons.append(lon)
-        lats.append(lat)
-    if not lats:
-        raise RuntimeError("ルートCSVから座標を読み取れませんでした。列index設定を確認してください。")
-
-    lat_r = [deg2rad(x) for x in lats]
-    lon_r = [deg2rad(x) for x in lons]
-    kp_km = [0.0]
-    for i in range(1, len(lat_r)):
-        d = haversine_m(lat_r[i-1], lon_r[i-1], lat_r[i], lon_r[i])  # meters
-        kp_km.append(kp_km[-1] + d / 1000.0)  # km 累積
-    min_lat = min(lats)
-    max_lat = max(lats)
-    min_lon = min(lons)
-    max_lon = max(lons)
-    print(f"[ROUTE] points={len(kp_km)}, length_km={kp_km[-1]:.3f}, "
-          f"lat=[{min_lat:.5f},{max_lat:.5f}] lon=[{min_lon:.5f},{max_lon:.5f}]")
-    return kp_km, lat_r, lon_r
+        lons.append(lon); lats.append(lat)
+    if len(lons) < 2:
+        raise RuntimeError("ルートCSVから2点以上の座標を読み取れませんでした。")
+    origin_lon, origin_lat = lons[0], lats[0]
+    lat0r = deg2rad(origin_lat)
+    xs = [deg2rad(lon - origin_lon) * EARTH_R * math.cos(lat0r) for lon in lons]
+    ys = [deg2rad(lat - origin_lat) * EARTH_R for lat in lats]
+    kp_m = [0.0]
+    for i in range(1, len(lons)):
+        kp_m.append(kp_m[-1] + haversine_m(lats[i - 1], lons[i - 1], lats[i], lons[i]))
+    print(f"[ROUTE] points={len(kp_m)}, length_km={kp_m[-1] / 1000:.3f}")
+    return RouteModel(lons, lats, xs, ys, kp_m, origin_lon, origin_lat)
 
 
-def nearest_distance_to_polyline_m(lat_deg, lon_deg, route_lat_r, route_lon_r):
-    lr = deg2rad(lat_deg)
-    lo = deg2rad(lon_deg)
-    min_d, min_i = float("inf"), -1
-    for i in range(len(route_lat_r)):
-        d = haversine_m(lr, lo, route_lat_r[i], route_lon_r[i])
-        if d < min_d:
-            min_d, min_i = d, i
-    return min_d, min_i
-
-def nearest_route_index(lat_deg, lon_deg, route_lat_r, route_lon_r):
-    """観測点→ルート最近傍インデックス（総当たり）"""
-    return nearest_distance_to_polyline_m(lat_deg, lon_deg, route_lat_r, route_lon_r)
-
-def list_input_csvs(input_dir, recursive):
+def list_input_csvs(input_dir: str | Path, recursive: bool) -> list[Path]:
     pattern = "**/*.csv" if recursive else "*.csv"
-    return glob.glob(os.path.join(input_dir, pattern), recursive=recursive)
-
-def iter_csv_rows_with_guess(path, encodings=("cp932", "utf-8-sig", "utf-8")):
-    """
-    指定ファイルを複数エンコーディングで試行して csv.reader を生成。
-    最初に成功したエンコーディングで全行を yield。
-    """
-    last_err = None
-    for enc in encodings:
-        try:
-            with open(path, "r", newline="", encoding=enc) as f:
-                for row in csv.reader(f):
-                    yield row
-            return
-        except Exception as e:
-            last_err = e
-            continue
-    # どれもだめなら最終エラーを投げる
-    raise last_err if last_err else RuntimeError(f"Failed to read: {path}")
+    return [Path(p) for p in glob.glob(str(Path(input_dir) / pattern), recursive=recursive)]
 
 
-def write_header(writer):
-    # 見本と同じヘッダー3行（50列固定）※時間帯は'を付けてExcelの日付化を防止
-    writer.writerow(["自動運転バス運行ルート　パフォーマンス調査"] + [""]*49)
-    writer.writerow(["キロ"] + ["速度"]*24 + ["キロ"] + ["台数"]*24)
-    time_labels = [f"'{h}-{h+1}" for h in range(24)]
-    writer.writerow(["ポスト"] + time_labels + ["ポスト"] + time_labels)
-
-def format_datetime(dt):
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
+def row_trip_key(path: Path, row: list[str], fallback: int) -> tuple[str, str]:
+    trip = row[COL_TRIP_NO].strip() if len(row) > COL_TRIP_NO else ""
+    return (path.name, trip or f"ALL-{fallback}")
 
 
-def format_timedelta(td):
-    total_seconds = int(td.total_seconds())
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+def period_keys(dt: datetime) -> list[str]:
+    wd = dt.weekday()
+    return (["平日"] if wd < 5 else ["休日"]) + [WEEKDAY_JA[wd]]
 
 
-def print_progress(current, total, width=40):
-    if total <= 0:
-        bar = "-" * width
-        pct = 100.0
-    else:
-        ratio = min(max(current / total, 0.0), 1.0)
-        filled = int(width * ratio)
-        bar = "#" * filled + "-" * (width - filled)
-        pct = ratio * 100.0
-    print(f"\r[PROGRESS] |{bar}| {pct:6.2f}% ({current}/{total})", end="", flush=True)
+def col_key(period: str, hour: int) -> str:
+    return f"{period}_{hour:02d}時台"
+
+
+class Aggregator:
+    def __init__(self, kp_m: list[float]):
+        self.kp_m = kp_m
+        self.speed_sum = defaultdict(float)
+        self.count = defaultdict(int)
+        self.time_sum = defaultdict(float)
+        self.time_count = defaultdict(int)
+
+    def add(self, direction: str, kp_idx: int, dt: datetime, speed_kmh: float) -> None:
+        sec = dt.hour * 3600 + dt.minute * 60 + dt.second + dt.microsecond / 1_000_000
+        for period in period_keys(dt):
+            key = (direction, kp_idx, period, dt.hour)
+            self.speed_sum[key] += speed_kmh
+            self.count[key] += 1
+            self.time_sum[key] += sec
+            self.time_count[key] += 1
+
+    def table(self, direction: str, metric: str) -> list[list[object]]:
+        columns = [col_key(p, h) for p in PERIODS for h in range(24)]
+        rows: list[list[object]] = [["KP[km]"] + columns]
+        for i, kp in enumerate(self.kp_m):
+            row: list[object] = [round(kp / 1000, KP_DECIMALS)]
+            for period in PERIODS:
+                for h in range(24):
+                    key = (direction, i, period, h)
+                    c = self.count.get(key, 0)
+                    if metric == "speed":
+                        row.append(round(self.speed_sum[key] / c, ROUND_DIGITS) if c else "")
+                    elif metric == "count":
+                        row.append(c if c else "")
+                    else:
+                        tc = self.time_count.get(key, 0)
+                        row.append(seconds_to_hhmmss(self.time_sum[key] / tc) if tc else "")
+            rows.append(row)
+        return rows
+
+    def frame(self, direction: str, metric: str):
+        if pd is None:
+            raise RuntimeError("pandas が必要です。")
+        table = self.table(direction, metric)
+        return pd.DataFrame(table[1:], columns=table[0])
+
+
+
+def xml_escape(value) -> str:
+    return (str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def excel_col(n: int) -> str:
+    name = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        name = chr(65 + r) + name
+    return name
+
+
+def write_minimal_xlsx(output_path: Path, sheets: dict[str, list[list[object]]]) -> None:
+    import zipfile
+    sheet_items = list(sheets.items())
+    content_types = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">', '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>', '<Default Extension="xml" ContentType="application/xml"/>', '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>']
+    for i in range(1, len(sheet_items) + 1):
+        content_types.append(f'<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>')
+    content_types.append('</Types>')
+    workbook_sheets = []
+    workbook_rels = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">']
+    for i, (name, _) in enumerate(sheet_items, start=1):
+        workbook_sheets.append(f'<sheet name="{xml_escape(name[:31])}" sheetId="{i}" r:id="rId{i}"/>')
+        workbook_rels.append(f'<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i}.xml"/>')
+    workbook_rels.append('</Relationships>')
+    workbook_xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' + ''.join(workbook_sheets) + '</sheets></workbook>'
+    root_rels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'
+
+    def sheet_xml(rows: list[list[object]]) -> str:
+        out = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>']
+        for r_idx, row in enumerate(rows, start=1):
+            out.append(f'<row r="{r_idx}">')
+            for c_idx, value in enumerate(row, start=1):
+                if value == "" or value is None:
+                    continue
+                ref = f'{excel_col(c_idx)}{r_idx}'
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    out.append(f'<c r="{ref}"><v>{value}</v></c>')
+                else:
+                    out.append(f'<c r="{ref}" t="inlineStr"><is><t>{xml_escape(value)}</t></is></c>')
+            out.append('</row>')
+        out.append('</sheetData></worksheet>')
+        return ''.join(out)
+
+    with zipfile.ZipFile(output_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('[Content_Types].xml', ''.join(content_types))
+        zf.writestr('_rels/.rels', root_rels)
+        zf.writestr('xl/workbook.xml', workbook_xml)
+        zf.writestr('xl/_rels/workbook.xml.rels', ''.join(workbook_rels))
+        for i, (_, rows) in enumerate(sheet_items, start=1):
+            zf.writestr(f'xl/worksheets/sheet{i}.xml', sheet_xml(rows))
+
+
+def crossing_kp_indices(kp_m: list[float], s1: float, s2: float) -> Iterable[int]:
+    lo, hi = sorted((s1, s2))
+    eps = 1e-6
+    for i, kp in enumerate(kp_m):
+        # 連続区間の終点側を含めることで、GPS点がKPちょうどにある場合も通過として扱う。
+        # 始点側は除外し、隣接セグメントとの二重計上を抑える。
+        if lo + eps < kp <= hi + eps:
+            yield i
+
+
+def analyze(
+    input_dir: str | Path,
+    route_path: str | Path,
+    output_path: str | Path,
+    recursive: bool = RECURSIVE,
+    progress_callback: Optional[Callable[..., None]] = None,
+) -> dict[str, int]:
+    progress_state = {
+        "total_files": 0,
+        "current_file": 0,
+        "current_file_name": "",
+        "raw_trips": 0,
+        "split_count": 0,
+        "split_total_trips": 0,
+        "events": 0,
+    }
+
+    def progress(percent: int, message: str, **stats) -> None:
+        progress_state.update(stats)
+        percent = max(0, min(100, int(percent)))
+        stat_text = (
+            f"files={progress_state['current_file']}/{progress_state['total_files']} "
+            f"raw_trips={progress_state['raw_trips']} "
+            f"splits={progress_state['split_count']} "
+            f"split_trips={progress_state['split_total_trips']} "
+            f"events={progress_state['events']}"
+        )
+        print(f"[PROGRESS] {percent:3d}% {message} | {stat_text}")
+        if progress_callback is not None:
+            progress_callback(percent, message, dict(progress_state))
+
+    progress(0, "ルート読込中")
+    route = build_route_model(route_path)
+    ag = Aggregator(route.kp_m)
+    files = list_input_csvs(input_dir, recursive)
+    print(f"[INFO] input_csvs={len(files)}")
+    progress(5, f"入力CSV {len(files)} 件を検出", total_files=len(files))
+    projected_by_trip: dict[tuple[str, str], list[tuple[datetime, float, float]]] = defaultdict(list)
+    total_rows = valid_points = 0
+    for file_index, path in enumerate(files, start=1):
+        progress(
+            5 + int(50 * (file_index - 1) / max(len(files), 1)),
+            f"投影中 {file_index}/{len(files)}: {path.name}",
+            current_file=file_index,
+            current_file_name=path.name,
+        )
+        for n, row in enumerate(read_csv_rows(path)):
+            total_rows += 1
+            try:
+                lon = float(row[COL_LON]); lat = float(row[COL_LAT])
+            except Exception:
+                continue
+            dt = parse_datetime_from_row(row)
+            if dt is None:
+                continue
+            s_m, off_m = route.project(lon, lat)
+            if off_m > MAX_OFF_ROUTE_M:
+                continue
+            projected_by_trip[row_trip_key(path, row, n)].append((dt, s_m, off_m))
+            valid_points += 1
+    events = skipped_segments = 0
+    trip_items = list(projected_by_trip.items())
+    progress(55, f"投影完了: 有効点 {valid_points} / 行 {total_rows}", raw_trips=len(trip_items))
+    split_count = 0
+    split_total_trips = 0
+    for trip_index, (key, pts) in enumerate(trip_items, start=1):
+        if trip_index == 1 or trip_index % 50 == 0 or trip_index == len(trip_items):
+            progress(
+                55 + int(35 * trip_index / max(len(trip_items), 1)),
+                f"KP通過イベント生成 {trip_index}/{len(trip_items)}",
+                raw_trips=len(trip_items),
+                split_count=split_count,
+                split_total_trips=split_total_trips,
+                events=events,
+            )
+        pts.sort(key=lambda x: x[0])
+        prev_direction = None
+        trip_piece_count = 0
+        for a, b in zip(pts, pts[1:]):
+            t1, s1, _ = a; t2, s2, _ = b
+            dt_s = (t2 - t1).total_seconds()
+            ds = s2 - s1
+            abs_ds = abs(ds)
+            if dt_s <= 0 or abs_ds < MIN_SEGMENT_DISTANCE_M:
+                skipped_segments += 1; continue
+            if abs_ds > MAX_SEGMENT_DISTANCE_M or dt_s > MAX_SEGMENT_TIME_S:
+                skipped_segments += 1; continue
+            direction = "forward" if ds > 0 else "reverse"
+            if direction != prev_direction:
+                if prev_direction is not None:
+                    split_count += 1
+                trip_piece_count += 1
+                prev_direction = direction
+            speed_kmh = abs_ds / dt_s * 3.6
+            if speed_kmh > 300:
+                skipped_segments += 1; continue
+            for kp_idx in crossing_kp_indices(route.kp_m, s1, s2):
+                kp = route.kp_m[kp_idx]
+                ratio = (kp - s1) / ds
+                pass_dt = t1 + timedelta(seconds=dt_s * ratio)
+                ag.add(direction, kp_idx, pass_dt, speed_kmh)
+                events += 1
+        split_total_trips += trip_piece_count
+    progress(
+        90,
+        "KP通過イベント生成完了",
+        raw_trips=len(trip_items),
+        split_count=split_count,
+        split_total_trips=split_total_trips,
+        events=events,
+    )
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    progress(
+        90,
+        "Excelシート作成中",
+        raw_trips=len(trip_items),
+        split_count=split_count,
+        split_total_trips=split_total_trips,
+        events=events,
+    )
+    sheet_tables = {}
+    sheet_items = list(SHEET_NAMES.items())
+    for sheet_index, (sheet_key, sheet_name) in enumerate(sheet_items, start=1):
+        direction, metric = sheet_key.split("_", 1)
+        sheet_tables[sheet_name] = ag.table(direction, metric)
+        progress(
+            90 + int(8 * sheet_index / max(len(sheet_items), 1)),
+            f"Excelシート作成 {sheet_index}/{len(sheet_items)}",
+            raw_trips=len(trip_items),
+            split_count=split_count,
+            split_total_trips=split_total_trips,
+            events=events,
+        )
+    write_minimal_xlsx(output_path, sheet_tables)
+    progress(100, "Excel出力完了", raw_trips=len(trip_items), split_count=split_count, split_total_trips=split_total_trips, events=events)
+    print(f"[DONE] output={output_path}")
+    print(f"[STATS] rows={total_rows}, valid_points={valid_points}, trips={len(projected_by_trip)}, split_count={split_count}, split_total_trips={split_total_trips}, events={events}, skipped_segments={skipped_segments}")
+    return {
+        "rows": total_rows,
+        "valid_points": valid_points,
+        "trips": len(projected_by_trip),
+        "split_count": split_count,
+        "split_total_trips": split_total_trips,
+        "events": events,
+        "skipped_segments": skipped_segments,
+    }
 
 
 def main():
-    ap = argparse.ArgumentParser(description="paformance001.csv を見本通りに生成（KPはルート座標から自動算出）")
-    ap.add_argument("--recursive", action="store_true", help="サブフォルダも探索（既定はRECURSIVEに従う）")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(description="方向別ルートパフォーマンスをExcel出力します。")
+    parser.add_argument("--input-dir", default=INPUT_DIR, help="第2スクリーニング後CSVフォルダ")
+    parser.add_argument("--route", default=ROUTE_PATH, help="ルートCSV")
+    parser.add_argument("--output", default=OUTPUT_PATH, help="出力Excelファイル")
+    parser.add_argument("--recursive", action="store_true", default=RECURSIVE, help="サブフォルダも探索")
+    args = parser.parse_args()
+    analyze(args.input_dir, args.route, args.output, args.recursive)
 
-    global RECURSIVE
-    if args.recursive:
-        RECURSIVE = True
-
-    # ルート読込 → KP[km]自動算出
-    kp_km, route_lat_r, route_lon_r = build_route_kp(ROUTE_PATH)
-    kp_count = len(kp_km)
-    print(f"[INFO] ルート点数(=行数): {kp_count}")
-
-    # 集計器：各ルート行index × 24時間 → [sum_speed, count]
-    stats = [[[0.0, 0] for _ in range(24)] for _ in range(kp_count)]
-
-    files = list_input_csvs(INPUT_DIR, RECURSIVE)
-    total_files = len(files)
-    print(f"[INFO] 検索対象CSV数: {total_files} @ {INPUT_DIR}")
-
-    processing_start = datetime.now()
-    print(f"[TIME] Start: {format_datetime(processing_start)}")
-
-    processed_files = 0
-    had_warning = False
-    if total_files == 0:
-        print_progress(total_files, total_files)
-
-    total_rows = 0
-    parsed_rows = 0
-    matched_rows = 0
-    fail_time = 0
-    fail_speed = 0
-    fail_coord = 0
-    geo_match_rows = 0
-    diag_samples = []
-
-    for path in files:
-        try:
-            rows = list(iter_csv_rows_with_guess(path))
-            if len(diag_samples) < 2000:
-                for r in rows[:200]:
-                    diag_samples.append(r)
-                    if len(diag_samples) >= 2000:
-                        break
-            for row in rows:
-                if not row:
-                    continue
-                total_rows += 1
-                try:
-                    lon = float(row[COL_LON])
-                    lat = float(row[COL_LAT])
-                except Exception:
-                    fail_coord += 1
-                    continue
-
-                d, idx = nearest_route_index(lat, lon, route_lat_r, route_lon_r)
-                if idx >= 0 and d <= RADIUS_M:
-                    geo_match_rows += 1
-                else:
-                    continue
-
-                hour = parse_hour(row[COL_TIME])
-                if hour is None or not (0 <= hour <= 23):
-                    fail_time += 1
-                    continue
-
-                spd = parse_speed(row[COL_SPEED])
-                if spd is None or spd < 0 or spd > 300:
-                    fail_speed += 1
-                    continue
-
-                parsed_rows += 1
-
-                s, c = stats[idx][hour]
-                stats[idx][hour] = [s + spd, c + 1]
-                matched_rows += 1
-        except Exception as e:
-            print(f"[WARN] 読み込み失敗: {path} ({e})")
-            had_warning = True
-        finally:
-            processed_files += 1
-            print_progress(processed_files, total_files)
-
-    print()
-
-    # 出力（Shift_JIS, CRLF）
-    with open(OUTPUT_PATH, "w", newline="", encoding="cp932") as f:
-        writer = csv.writer(f, lineterminator="\r\n")
-        write_header(writer)
-        for i in range(kp_count):
-            km_str = f"{kp_km[i]:.{KP_DECIMALS}f}"
-            avg24, cnt24 = [], []
-            for h in range(24):
-                s, c = stats[i][h]
-                if c > 0:
-                    avg24.append(f"{round(s / c, ROUND_DIGITS)}")
-                    cnt24.append(str(c))
-                else:
-                    avg24.append("")
-                    cnt24.append("")
-            row = [km_str] + avg24 + [km_str] + cnt24
-            writer.writerow(row)
-
-    print(f"[DONE] 出力: {OUTPUT_PATH}")
-    print(f"[STATS] files={len(files)}, total_rows={total_rows}, parsed_rows={parsed_rows}, "
-          f"matched_rows={matched_rows}, geo_only_matches={geo_match_rows}, "
-          f"fail_time={fail_time}, fail_speed={fail_speed}, fail_coord={fail_coord}, "
-          f"radius_m={RADIUS_M}")
-    if parsed_rows == 0:
-        print("[HINT] parsed_rows=0 → 時刻 or 速度の抽出が全滅の可能性。fail_time / fail_speed の内訳を確認。")
-    if matched_rows == 0 and parsed_rows > 0:
-        print("[HINT] matched_rows=0 → ルートと観測の距離が常に閾値超過の可能性。RADIUS_Mを一時的に50–100mで試し、"
-              "lon/lat入替え（自動検知済）やルート座標の誤差を確認してください。")
-    if diag_samples:
-        d_list = []
-        within20 = within50 = within100 = 0
-        for r in random.sample(diag_samples, min(len(diag_samples), 1000)):
-            try:
-                lon = float(r[COL_LON])
-                lat = float(r[COL_LAT])
-            except Exception:
-                continue
-            d, _ = nearest_distance_to_polyline_m(lat, lon, route_lat_r, route_lon_r)
-            d_list.append(d)
-            if d <= 20:
-                within20 += 1
-            if d <= 50:
-                within50 += 1
-            if d <= 100:
-                within100 += 1
-        if d_list:
-            print(f"[DIAG] sample_n={len(d_list)}, d_median={median(d_list):.1f}m, "
-                  f"≤20m={within20}, ≤50m={within50}, ≤100m={within100}")
-        else:
-            print("[DIAG] 距離診断サンプルが数値化できませんでした。列の位置や値を確認してください。")
-
-    # --- デバッグ一致CSV出力を停止 ---
-    # try:
-    #     dbg_path = str(Path(OUTPUT_PATH).with_name("debug_matches.csv"))
-    #     out_dbg = []
-    #     count_dbg = 0
-    #     for i, km in enumerate(kp_km):
-    #         for h in range(24):
-    #             s, c = stats[i][h]
-    #             if c > 0:
-    #                 avg = s / c
-    #                 out_dbg.append([f"{km:.{KP_DECIMALS}f}", h, round(avg, ROUND_DIGITS), c])
-    #                 count_dbg += 1
-    #                 if count_dbg >= 200:
-    #                     break
-    #         if count_dbg >= 200:
-    #             break
-    #     if out_dbg:
-    #         with open(dbg_path, "w", newline="", encoding="cp932") as df:
-    #             w = csv.writer(df, lineterminator="\r\n")
-    #             w.writerow(["KP[km]", "hour", "avg_speed", "count"])
-    #             w.writerows(out_dbg)
-    #         print(f"[DEBUG] 一致サンプルを {dbg_path} に出力しました（最大200行）。")
-    #     else:
-    #         print("[DEBUG] 一致サンプルは0件でした。")
-    # except Exception as e:
-    #     print(f"[DEBUG] debug_matches.csv 出力に失敗: {e}")
-
-    processing_end = datetime.now()
-    print(f"[TIME] End: {format_datetime(processing_end)}")
-    print(f"[TIME] Duration: {format_timedelta(processing_end - processing_start)}")
-
-    if not had_warning:
-        print("Congratulations, everything completed successfully.")
 
 if __name__ == "__main__":
     main()
