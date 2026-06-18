@@ -1,0 +1,431 @@
+import math
+import sys
+import tempfile
+from pathlib import Path
+
+SRC_DIR = Path(__file__).resolve().parent.parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import pandas as pd
+from PyQt6.QtCore import QObject, QThread, Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtWidgets import (
+    QApplication, QCalendarWidget, QCheckBox, QComboBox, QDialog, QFileDialog,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QPushButton,
+    QScrollArea, QVBoxLayout, QWidget
+)
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+
+from common.ui.logo_link import ClickableLogoLabel
+import importlib.util
+
+try:
+    import folium
+except Exception:  # pragma: no cover
+    folium = None
+
+try:
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+except Exception:  # pragma: no cover
+    QWebEngineView = None
+
+_PERF_PATH = Path(__file__).resolve().parent / "30_build_performance.py"
+_SPEC = importlib.util.spec_from_file_location("route_performance30", _PERF_PATH)
+_perf = importlib.util.module_from_spec(_SPEC)
+assert _SPEC and _SPEC.loader
+_SPEC.loader.exec_module(_perf)
+PERIODS = _perf.PERIODS
+SHEET_NAMES = _perf.SHEET_NAMES
+analyze_project = _perf.analyze_project
+build_route_model = _perf.build_route_model
+resolve_project_paths = _perf.resolve_project_paths
+list_route_csvs = _perf.list_route_csvs
+extract_available_dates = _perf.extract_available_dates
+format_date_token = _perf.format_date_token
+
+APP_TITLE = "30_ルートパフォーマンス（方向別KP集計）"
+
+
+class RouteCanvas(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.points = []
+        self.setMinimumHeight(280)
+
+    def set_route(self, route_path: str):
+        try:
+            route = build_route_model(route_path)
+            raw = list(zip(route.xs, route.ys))
+            if len(raw) >= 2:
+                sx, sy = raw[0]
+                ex, ey = raw[-1]
+                angle = math.atan2(ey - sy, ex - sx)
+                ca, sa = math.cos(-angle), math.sin(-angle)
+                self.points = [((x - sx) * ca - (y - sy) * sa, (x - sx) * sa + (y - sy) * ca) for x, y in raw]
+            else:
+                self.points = raw
+        except Exception:
+            self.points = []
+        self.update()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor("#020403"))
+        grid = QPen(QColor("#16351f"), 1)
+        p.setPen(grid)
+        for x in range(0, self.width(), 32):
+            p.drawLine(x, 0, x, self.height())
+        for y in range(0, self.height(), 32):
+            p.drawLine(0, y, self.width(), y)
+        if len(self.points) < 2:
+            p.setPen(QPen(QColor("#00ff99"), 1))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "プロジェクトフォルダ選択後に先頭ルートを表示\n（オンライン地図タイルは接続可能時のみ利用する想定）")
+            return
+        xs = [x for x, _ in self.points]; ys = [y for _, y in self.points]
+        minx, maxx = min(xs), max(xs); miny, maxy = min(ys), max(ys)
+        w = max(maxx - minx, 1); h = max(maxy - miny, 1)
+        margin = 24
+        sx = (self.width() - margin * 2) / w
+        sy = (self.height() - margin * 2) / h
+        s = min(sx, sy)
+        def map_pt(pt):
+            x, y = pt
+            return int(margin + (x - minx) * s), int(self.height() - margin - (y - miny) * s)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(QColor("#00ff99"), 3))
+        prev = map_pt(self.points[0])
+        for pt in self.points[1:]:
+            cur = map_pt(pt); p.drawLine(prev[0], prev[1], cur[0], cur[1]); prev = cur
+        p.setPen(QPen(QColor("#f6d36b"), 2))
+        a = map_pt(self.points[0]); b = map_pt(self.points[-1])
+        p.drawEllipse(a[0]-5, a[1]-5, 10, 10); p.drawText(a[0]+8, a[1], "START")
+        p.drawEllipse(b[0]-5, b[1]-5, 10, 10); p.drawText(b[0]+8, b[1], "END")
+
+
+class RouteMapDialog(QDialog):
+    def __init__(self, route_path: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"ルート表示 - {Path(route_path).name}")
+        self.resize(980, 720)
+        lay = QVBoxLayout(self)
+        if QWebEngineView is not None and folium is not None:
+            try:
+                route = build_route_model(route_path)
+                coords = list(zip(route.lats, route.lons))
+                center = coords[len(coords) // 2]
+                fmap = folium.Map(location=center, zoom_start=15, tiles="OpenStreetMap")
+                folium.PolyLine(coords, color="#00ff99", weight=6, opacity=0.9).add_to(fmap)
+                folium.Marker(coords[0], tooltip="START").add_to(fmap)
+                folium.Marker(coords[-1], tooltip="END").add_to(fmap)
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".html")
+                tmp.close()
+                fmap.save(tmp.name)
+                view = QWebEngineView()
+                view.load(QUrl.fromLocalFile(tmp.name))
+                lay.addWidget(view)
+                return
+            except Exception:
+                pass
+        canvas = RouteCanvas()
+        canvas.set_route(route_path)
+        lay.addWidget(canvas)
+
+
+class PlotPanel(FigureCanvas):
+    def __init__(self):
+        self.fig = Figure(figsize=(8, 3), facecolor="#050b09")
+        self.ax_speed = self.fig.add_subplot(211)
+        self.ax_count = self.fig.add_subplot(212)
+        super().__init__(self.fig)
+
+    def plot(self, kp, speed, count, title):
+        for ax in (self.ax_speed, self.ax_count):
+            ax.clear(); ax.set_facecolor("#050b09"); ax.tick_params(colors="#b7ffd8")
+            for spine in ax.spines.values(): spine.set_color("#00ff99")
+            ax.grid(color="#16351f")
+        self.ax_speed.plot(kp, speed, color="#00ff99")
+        self.ax_speed.set_ylabel("速度 km/h", color="#b7ffd8")
+        self.ax_speed.set_title(title, color="#f6d36b")
+        self.ax_count.bar(kp, count, color="#56d27f", width=0.01)
+        self.ax_count.set_ylabel("トリップ数", color="#b7ffd8")
+        self.ax_count.set_xlabel("KP[km]", color="#b7ffd8")
+        self.fig.tight_layout()
+        self.draw()
+
+
+class Worker(QObject):
+    progress = pyqtSignal(int, str, dict)
+    finished = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, project_dir, allowed_dates):
+        super().__init__(); self.project_dir = project_dir; self.allowed_dates = allowed_dates; self.output_path = ""
+
+    def run(self):
+        try:
+            result = analyze_project(self.project_dir, True, self.progress.emit, self.allowed_dates)
+            outputs = [item.get("output", "") for item in result.get("results", [])]
+            self.output_path = outputs[-1] if outputs else str(Path(result.get("output_dir", self.project_dir)))
+            self.finished.emit(self.output_path)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__(); self.setWindowTitle(APP_TITLE); self.resize(1180, 820)
+        self.output_path = ""; self.book = {}
+        root = QWidget(); self.setCentralWidget(root); lay = QVBoxLayout(root)
+        title = QLabel("APOLLO ROUTE PERFORMANCE CONSOLE")
+        title.setObjectName("title"); lay.addWidget(title)
+        form = QGridLayout(); lay.addLayout(form)
+        self.project_edit = QLineEdit()
+        btn_project = QPushButton("プロジェクトフォルダ選択"); self.btn_run = QPushButton("解析開始")
+        form.addWidget(QLabel("PROJECT FOLDER"), 0, 0); form.addWidget(self.project_edit, 0, 1); form.addWidget(btn_project, 0, 2)
+        form.addWidget(self.btn_run, 1, 2)
+        self.progress_bar = QProgressBar(); self.progress_bar.setRange(0, 100); self.progress_bar.setValue(0)
+        self.progress_label = QLabel("待機中")
+        self.progress_label.setObjectName("progressLabel")
+        lay.addWidget(self.progress_bar); lay.addWidget(self.progress_label)
+        self.stats = {}
+        stats_frame = QFrame()
+        stats_frame.setObjectName("telemetryFrame")
+        stats_layout = QGridLayout(stats_frame)
+        stats_layout.setContentsMargins(10, 8, 10, 8)
+        stats_layout.setHorizontalSpacing(12)
+        stats_layout.setVerticalSpacing(6)
+        stat_specs = [
+            ("routes", "ROUTES", "0 / 0"),
+            ("current_route", "ROUTE", "-"),
+            ("files", "FILES", "0 / 0"),
+            ("current_file", "NOW", "-"),
+            ("raw_trips", "RAW TRIPS", "0"),
+            ("split_count", "SPLITS", "0"),
+            ("split_total_trips", "SPLIT TRIPS", "0"),
+            ("events", "KP EVENTS", "0"),
+        ]
+        for col, (key, caption, initial) in enumerate(stat_specs):
+            box = QFrame()
+            box.setObjectName("telemetryBox")
+            box_lay = QVBoxLayout(box)
+            box_lay.setContentsMargins(8, 4, 8, 4)
+            cap = QLabel(caption)
+            cap.setObjectName("telemetryCaption")
+            val = QLabel(initial)
+            val.setObjectName("telemetryValue")
+            box_lay.addWidget(cap)
+            box_lay.addWidget(val)
+            stats_layout.addWidget(box, 0, col)
+            self.stats[key] = val
+        lay.addWidget(stats_frame)
+
+        selector_row = QHBoxLayout()
+        route_box = QFrame()
+        route_box.setObjectName("selectorBox")
+        route_lay = QVBoxLayout(route_box)
+        route_title = QLabel("ROUTE FILES")
+        route_title.setObjectName("selectorTitle")
+        self.route_list = QListWidget()
+        self.route_list.itemClicked.connect(self.open_route_map)
+        route_lay.addWidget(route_title)
+        route_lay.addWidget(self.route_list)
+        selector_row.addWidget(route_box, 1)
+
+        date_box = QFrame()
+        date_box.setObjectName("selectorBox")
+        date_lay = QVBoxLayout(date_box)
+        date_title = QLabel("DATE FILTER")
+        date_title.setObjectName("selectorTitle")
+        self.calendar = QCalendarWidget()
+        self.calendar.clicked.connect(self.toggle_calendar_date)
+        date_buttons = QHBoxLayout()
+        self.btn_all_dates = QPushButton("全日ON")
+        self.btn_no_dates = QPushButton("全日OFF")
+        self.btn_all_dates.clicked.connect(lambda: self.set_all_dates(True))
+        self.btn_no_dates.clicked.connect(lambda: self.set_all_dates(False))
+        date_buttons.addWidget(self.btn_all_dates)
+        date_buttons.addWidget(self.btn_no_dates)
+        self.date_checks_widget = QWidget()
+        self.date_checks_layout = QVBoxLayout(self.date_checks_widget)
+        self.date_checks_layout.setContentsMargins(4, 4, 4, 4)
+        self.date_scroll = QScrollArea()
+        self.date_scroll.setWidgetResizable(True)
+        self.date_scroll.setWidget(self.date_checks_widget)
+        date_lay.addWidget(date_title)
+        date_lay.addWidget(self.calendar)
+        date_lay.addLayout(date_buttons)
+        date_lay.addWidget(self.date_scroll)
+        selector_row.addWidget(date_box, 1)
+        lay.addLayout(selector_row)
+
+        self.route_canvas = RouteCanvas(); lay.addWidget(self.route_canvas)
+        controls = QHBoxLayout(); lay.addLayout(controls)
+        self.period_combo = QComboBox(); self.period_combo.addItems(PERIODS)
+        self.hour_combo = QComboBox(); self.hour_combo.addItems([f"{h:02d}時台" for h in range(24)])
+        self.direction_combo = QComboBox(); self.direction_combo.addItems(["順方向", "逆方向"])
+        for label, widget in (("区分", self.period_combo), ("時間帯", self.hour_combo), ("方向", self.direction_combo)):
+            controls.addWidget(QLabel(label)); controls.addWidget(widget)
+        self.plot_panel = PlotPanel(); lay.addWidget(self.plot_panel, 1)
+        btn_project.clicked.connect(self.choose_project); self.btn_run.clicked.connect(self.start_analysis)
+        self.period_combo.currentIndexChanged.connect(self.refresh_plot); self.hour_combo.currentIndexChanged.connect(self.refresh_plot); self.direction_combo.currentIndexChanged.connect(self.refresh_plot)
+        self.setStyleSheet("""
+            QWidget{background:#050b09;color:#b7ffd8;font-family:'Consolas','Yu Gothic UI';font-size:13px;}
+            QLabel#title{color:#f6d36b;font-size:22px;font-weight:800;letter-spacing:2px;}
+            QLineEdit,QComboBox{border:1px solid #00ff99;background:#020403;color:#b7ffd8;padding:6px;}
+            QLabel#progressLabel{color:#f6d36b;font-weight:700;}
+            QProgressBar{border:1px solid #00ff99;background:#020403;color:#f6d36b;text-align:center;height:18px;}
+            QProgressBar::chunk{background:#00ff99;}
+            QFrame#telemetryFrame{border:1px solid #214f32;background:#07110c;}
+            QFrame#telemetryBox{border:1px solid #00ff99;background:#020403;}
+            QLabel#telemetryCaption{color:#56d27f;font-size:11px;font-weight:700;}
+            QLabel#telemetryValue{color:#f6d36b;font-size:19px;font-weight:900;}
+            QFrame#selectorBox{border:1px solid #214f32;background:#07110c;}
+            QLabel#selectorTitle{color:#f6d36b;font-weight:900;letter-spacing:1px;}
+            QListWidget{border:1px solid #00ff99;background:#020403;color:#b7ffd8;}
+            QCalendarWidget QWidget{alternate-background-color:#07110c;}
+            QCalendarWidget QAbstractItemView{background:#020403;color:#b7ffd8;selection-background-color:#00ff99;selection-color:#020403;}
+            QCheckBox{color:#b7ffd8;}
+            QPushButton{border:2px solid #00ff99;border-radius:8px;background:#102318;color:#00ff99;font-weight:700;padding:8px;}
+            QPushButton:hover{background:#173d29;}
+        """)
+
+    def choose_project(self):
+        d = QFileDialog.getExistingDirectory(self, "プロジェクトフォルダ")
+        if not d:
+            return
+        self.project_edit.setText(d)
+        self.route_list.clear()
+        self.clear_date_checks()
+        try:
+            _input_dir, route_dir, _output_dir = resolve_project_paths(d)
+            routes = list_route_csvs(route_dir)
+            for route_path in routes:
+                item = QListWidgetItem(route_path.name)
+                item.setData(Qt.ItemDataRole.UserRole, str(route_path))
+                self.route_list.addItem(item)
+            if routes:
+                self.route_canvas.set_route(str(routes[0]))
+                self.progress_label.setText(f"ルートCSV {len(routes)} 件を検出")
+            else:
+                self.route_canvas.points = []; self.route_canvas.update()
+                self.progress_label.setText("ルートCSVが見つかりません")
+            input_dir, _route_dir, _output_dir = resolve_project_paths(d)
+            self.populate_date_checks(extract_available_dates(input_dir, True))
+        except Exception as exc:
+            self.route_canvas.points = []; self.route_canvas.update()
+            self.progress_label.setText(str(exc))
+
+    def clear_date_checks(self):
+        while self.date_checks_layout.count():
+            item = self.date_checks_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def populate_date_checks(self, dates):
+        self.clear_date_checks()
+        self.date_checks = {}
+        for token in dates:
+            cb = QCheckBox(format_date_token(token))
+            cb.setChecked(True)
+            cb.setProperty("date_token", token)
+            self.date_checks_layout.addWidget(cb)
+            self.date_checks[token] = cb
+        self.date_checks_layout.addStretch(1)
+        if dates:
+            self.progress_label.setText(f"{self.progress_label.text()} / 対象日 {len(dates)} 日")
+
+    def selected_dates(self):
+        if not hasattr(self, "date_checks"):
+            return None
+        selected = {token for token, cb in self.date_checks.items() if cb.isChecked()}
+        return selected or set()
+
+    def set_all_dates(self, checked):
+        for cb in getattr(self, "date_checks", {}).values():
+            cb.setChecked(checked)
+
+    def toggle_calendar_date(self, qdate):
+        token = qdate.toString("yyyyMMdd")
+        cb = getattr(self, "date_checks", {}).get(token)
+        if cb is not None:
+            cb.setChecked(not cb.isChecked())
+
+    def open_route_map(self, item):
+        route_path = item.data(Qt.ItemDataRole.UserRole)
+        if route_path:
+            self.route_canvas.set_route(route_path)
+            dialog = RouteMapDialog(route_path, self)
+            dialog.exec()
+
+    def start_analysis(self):
+        project_dir = self.project_edit.text().strip()
+        if not project_dir:
+            QMessageBox.warning(self, "入力不足", "プロジェクトフォルダを選択してください。")
+            return
+        self.output_path = str(Path(project_dir) / "30_ルートパフォーマンス")
+        self.btn_run.setEnabled(False); self.btn_run.setText("解析中...")
+        self.progress_bar.setValue(0); self.progress_label.setText("解析準備中")
+        self.update_progress(0, "解析準備中", {})
+        self.thread = QThread(); self.worker = Worker(project_dir, self.selected_dates()); self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run); self.worker.progress.connect(self.update_progress); self.worker.finished.connect(self.analysis_done); self.worker.failed.connect(self.analysis_failed)
+        self.worker.finished.connect(self.thread.quit); self.worker.failed.connect(self.thread.quit)
+        self.thread.start()
+
+    def update_progress(self, percent, message, stats=None):
+        self.progress_bar.setValue(percent)
+        self.progress_label.setText(message)
+        stats = stats or {}
+        current_route = stats.get("current_route", 0)
+        total_routes = stats.get("total_routes", 0)
+        route_name = stats.get("current_route_name") or "-"
+        current = stats.get("current_file", 0)
+        total = stats.get("total_files", 0)
+        current_name = stats.get("current_file_name") or "-"
+        self.stats["routes"].setText(f"{current_route} / {total_routes}")
+        self.stats["current_route"].setText(route_name)
+        self.stats["files"].setText(f"{current} / {total}")
+        self.stats["current_file"].setText(current_name)
+        self.stats["raw_trips"].setText(str(stats.get("raw_trips", 0)))
+        self.stats["split_count"].setText(str(stats.get("split_count", 0)))
+        self.stats["split_total_trips"].setText(str(stats.get("split_total_trips", 0)))
+        self.stats["events"].setText(str(stats.get("events", 0)))
+
+    def analysis_done(self, path):
+        self.btn_run.setEnabled(True); self.btn_run.setText("解析開始")
+        self.progress_bar.setValue(100); self.progress_label.setText("解析完了")
+        self.book = pd.read_excel(path, sheet_name=None)
+        QMessageBox.information(self, "完了", f"Excelを出力しました。\n{path}")
+        self.refresh_plot()
+
+    def analysis_failed(self, message):
+        self.btn_run.setEnabled(True); self.btn_run.setText("解析開始")
+        self.progress_label.setText("解析失敗")
+        QMessageBox.critical(self, "解析失敗", message)
+
+    def refresh_plot(self):
+        if not self.book: return
+        direction = "forward" if self.direction_combo.currentText() == "順方向" else "reverse"
+        speed_sheet = SHEET_NAMES[f"{direction}_speed"]; count_sheet = SHEET_NAMES[f"{direction}_count"]
+        period = self.period_combo.currentText(); hour = self.hour_combo.currentIndex(); col = f"{period}_{hour:02d}時台"
+        if speed_sheet not in self.book or col not in self.book[speed_sheet]: return
+        sp = self.book[speed_sheet]; ct = self.book[count_sheet]
+        kp = sp["KP[km]"].astype(float)
+        speed = pd.to_numeric(sp[col], errors="coerce")
+        count = pd.to_numeric(ct[col], errors="coerce").fillna(0)
+        self.plot_panel.plot(kp, speed, count, f"{self.direction_combo.currentText()} / {period} / {hour:02d}時台")
+
+
+def main():
+    app = QApplication(sys.argv)
+    w = MainWindow(); w.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
