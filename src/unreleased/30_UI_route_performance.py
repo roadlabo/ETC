@@ -28,8 +28,10 @@ assert _SPEC and _SPEC.loader
 _SPEC.loader.exec_module(_perf)
 PERIODS = _perf.PERIODS
 SHEET_NAMES = _perf.SHEET_NAMES
-analyze = _perf.analyze
+analyze_project = _perf.analyze_project
 build_route_model = _perf.build_route_model
+resolve_project_paths = _perf.resolve_project_paths
+list_route_csvs = _perf.list_route_csvs
 
 APP_TITLE = "30_ルートパフォーマンス（方向別KP集計）"
 
@@ -67,7 +69,7 @@ class RouteCanvas(QWidget):
             p.drawLine(0, y, self.width(), y)
         if len(self.points) < 2:
             p.setPen(QPen(QColor("#00ff99"), 1))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "ルートファイル選択後に簡易ルートを表示\n（オンライン地図タイルは接続可能時のみ利用する想定）")
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "プロジェクトフォルダ選択後に先頭ルートを表示\n（オンライン地図タイルは接続可能時のみ利用する想定）")
             return
         xs = [x for x, _ in self.points]; ys = [y for _, y in self.points]
         minx, maxx = min(xs), max(xs); miny, maxy = min(ys), max(ys)
@@ -117,12 +119,14 @@ class Worker(QObject):
     finished = pyqtSignal(str)
     failed = pyqtSignal(str)
 
-    def __init__(self, input_dir, route_path, output_path):
-        super().__init__(); self.input_dir = input_dir; self.route_path = route_path; self.output_path = output_path
+    def __init__(self, project_dir):
+        super().__init__(); self.project_dir = project_dir; self.output_path = ""
 
     def run(self):
         try:
-            analyze(self.input_dir, self.route_path, self.output_path, True, self.progress.emit)
+            result = analyze_project(self.project_dir, True, self.progress.emit)
+            outputs = [item.get("output", "") for item in result.get("results", [])]
+            self.output_path = outputs[-1] if outputs else str(Path(result.get("output_dir", self.project_dir)))
             self.finished.emit(self.output_path)
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -136,10 +140,10 @@ class MainWindow(QMainWindow):
         title = QLabel("APOLLO ROUTE PERFORMANCE CONSOLE")
         title.setObjectName("title"); lay.addWidget(title)
         form = QGridLayout(); lay.addLayout(form)
-        self.input_edit = QLineEdit(); self.route_edit = QLineEdit()
-        btn_in = QPushButton("第2スクリーニング後フォルダ選択"); btn_route = QPushButton("ルートファイル選択"); self.btn_run = QPushButton("解析開始")
-        form.addWidget(QLabel("DATA FOLDER"), 0, 0); form.addWidget(self.input_edit, 0, 1); form.addWidget(btn_in, 0, 2)
-        form.addWidget(QLabel("ROUTE FILE"), 1, 0); form.addWidget(self.route_edit, 1, 1); form.addWidget(btn_route, 1, 2); form.addWidget(self.btn_run, 2, 2)
+        self.project_edit = QLineEdit()
+        btn_project = QPushButton("プロジェクトフォルダ選択"); self.btn_run = QPushButton("解析開始")
+        form.addWidget(QLabel("PROJECT FOLDER"), 0, 0); form.addWidget(self.project_edit, 0, 1); form.addWidget(btn_project, 0, 2)
+        form.addWidget(self.btn_run, 1, 2)
         self.progress_bar = QProgressBar(); self.progress_bar.setRange(0, 100); self.progress_bar.setValue(0)
         self.progress_label = QLabel("待機中")
         self.progress_label.setObjectName("progressLabel")
@@ -152,6 +156,8 @@ class MainWindow(QMainWindow):
         stats_layout.setHorizontalSpacing(12)
         stats_layout.setVerticalSpacing(6)
         stat_specs = [
+            ("routes", "ROUTES", "0 / 0"),
+            ("current_route", "ROUTE", "-"),
             ("files", "FILES", "0 / 0"),
             ("current_file", "NOW", "-"),
             ("raw_trips", "RAW TRIPS", "0"),
@@ -181,7 +187,7 @@ class MainWindow(QMainWindow):
         for label, widget in (("区分", self.period_combo), ("時間帯", self.hour_combo), ("方向", self.direction_combo)):
             controls.addWidget(QLabel(label)); controls.addWidget(widget)
         self.plot_panel = PlotPanel(); lay.addWidget(self.plot_panel, 1)
-        btn_in.clicked.connect(self.choose_input); btn_route.clicked.connect(self.choose_route); self.btn_run.clicked.connect(self.start_analysis)
+        btn_project.clicked.connect(self.choose_project); self.btn_run.clicked.connect(self.start_analysis)
         self.period_combo.currentIndexChanged.connect(self.refresh_plot); self.hour_combo.currentIndexChanged.connect(self.refresh_plot); self.direction_combo.currentIndexChanged.connect(self.refresh_plot)
         self.setStyleSheet("""
             QWidget{background:#050b09;color:#b7ffd8;font-family:'Consolas','Yu Gothic UI';font-size:13px;}
@@ -198,25 +204,34 @@ class MainWindow(QMainWindow):
             QPushButton:hover{background:#173d29;}
         """)
 
-    def choose_input(self):
-        d = QFileDialog.getExistingDirectory(self, "第2スクリーニング後データフォルダ")
-        if d: self.input_edit.setText(d)
-
-    def choose_route(self):
-        f, _ = QFileDialog.getOpenFileName(self, "ルートCSV", "", "CSV (*.csv);;All Files (*)")
-        if f:
-            self.route_edit.setText(f); self.route_canvas.set_route(f)
+    def choose_project(self):
+        d = QFileDialog.getExistingDirectory(self, "プロジェクトフォルダ")
+        if not d:
+            return
+        self.project_edit.setText(d)
+        try:
+            _input_dir, route_dir, _output_dir = resolve_project_paths(d)
+            routes = list_route_csvs(route_dir)
+            if routes:
+                self.route_canvas.set_route(str(routes[0]))
+                self.progress_label.setText(f"ルートCSV {len(routes)} 件を検出")
+            else:
+                self.route_canvas.points = []; self.route_canvas.update()
+                self.progress_label.setText("ルートCSVが見つかりません")
+        except Exception as exc:
+            self.route_canvas.points = []; self.route_canvas.update()
+            self.progress_label.setText(str(exc))
 
     def start_analysis(self):
-        input_dir = self.input_edit.text().strip(); route_path = self.route_edit.text().strip()
-        if not input_dir or not route_path:
-            QMessageBox.warning(self, "入力不足", "データフォルダとルートファイルを選択してください。")
+        project_dir = self.project_edit.text().strip()
+        if not project_dir:
+            QMessageBox.warning(self, "入力不足", "プロジェクトフォルダを選択してください。")
             return
-        self.output_path = str(Path(input_dir).parent / "30_ルートパフォーマンス" / "route_performance_directional.xlsx")
+        self.output_path = str(Path(project_dir) / "30_ルートパフォーマンス")
         self.btn_run.setEnabled(False); self.btn_run.setText("解析中...")
         self.progress_bar.setValue(0); self.progress_label.setText("解析準備中")
         self.update_progress(0, "解析準備中", {})
-        self.thread = QThread(); self.worker = Worker(input_dir, route_path, self.output_path); self.worker.moveToThread(self.thread)
+        self.thread = QThread(); self.worker = Worker(project_dir); self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run); self.worker.progress.connect(self.update_progress); self.worker.finished.connect(self.analysis_done); self.worker.failed.connect(self.analysis_failed)
         self.worker.finished.connect(self.thread.quit); self.worker.failed.connect(self.thread.quit)
         self.thread.start()
@@ -225,9 +240,14 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(percent)
         self.progress_label.setText(message)
         stats = stats or {}
+        current_route = stats.get("current_route", 0)
+        total_routes = stats.get("total_routes", 0)
+        route_name = stats.get("current_route_name") or "-"
         current = stats.get("current_file", 0)
         total = stats.get("total_files", 0)
         current_name = stats.get("current_file_name") or "-"
+        self.stats["routes"].setText(f"{current_route} / {total_routes}")
+        self.stats["current_route"].setText(route_name)
         self.stats["files"].setText(f"{current} / {total}")
         self.stats["current_file"].setText(current_name)
         self.stats["raw_trips"].setText(str(stats.get("raw_trips", 0)))
