@@ -19,6 +19,9 @@ except Exception:  # pragma: no cover
 INPUT_DIR = r"D:\\path\\to\\trip_extractor_outputs"
 ROUTE_PATH = r"D:\\path\\to\\自動運転ルート.csv"
 OUTPUT_PATH = r"D:\\path\\to\\route_performance_directional.xlsx"
+FOLDER_ROUTE_CANDIDATES = ["10_ルート(Route)データ", "10_ルートデータ"]
+FOLDER_SCREENING2 = "20_第２スクリーニング"
+FOLDER_OUTPUT = "30_ルートパフォーマンス"
 
 ROUTE_LON_COL = 14
 ROUTE_LAT_COL = 15
@@ -178,6 +181,74 @@ def list_input_csvs(input_dir: str | Path, recursive: bool) -> list[Path]:
     return [Path(p) for p in glob.glob(str(Path(input_dir) / pattern), recursive=recursive)]
 
 
+def find_route_dir(project_dir: str | Path) -> Path:
+    project = Path(project_dir)
+    for name in FOLDER_ROUTE_CANDIDATES:
+        candidate = project / name
+        if candidate.exists():
+            return candidate
+    names = " / ".join(FOLDER_ROUTE_CANDIDATES)
+    raise FileNotFoundError(f"ルートフォルダが見つかりません: {names}")
+
+
+def resolve_project_paths(project_dir: str | Path) -> tuple[Path, Path, Path]:
+    project = Path(project_dir)
+    if not project.exists():
+        raise FileNotFoundError(f"プロジェクトフォルダが見つかりません: {project}")
+    input_dir = project / FOLDER_SCREENING2
+    if not input_dir.exists():
+        raise FileNotFoundError(f"第2スクリーニングフォルダが見つかりません: {input_dir}")
+    route_dir = find_route_dir(project)
+    output_dir = project / FOLDER_OUTPUT
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return input_dir, route_dir, output_dir
+
+
+def list_route_csvs(route_dir: str | Path) -> list[Path]:
+    return sorted(Path(route_dir).glob("*.csv"))
+
+
+def route_output_path(output_dir: str | Path, route_path: str | Path) -> Path:
+    stem = Path(route_path).stem
+    route_out_dir = Path(output_dir) / stem
+    route_out_dir.mkdir(parents=True, exist_ok=True)
+    return route_out_dir / f"{stem}_directional.xlsx"
+
+
+def normalize_date_token(value: str) -> Optional[str]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    m = re.search(r"(\d{4})[-/]?(\d{2})[-/]?(\d{2})", text)
+    if not m:
+        return None
+    return f"{m.group(1)}{m.group(2)}{m.group(3)}"
+
+
+def format_date_token(date_token: str) -> str:
+    token = normalize_date_token(date_token) or date_token
+    if re.fullmatch(r"\d{8}", token):
+        return f"{token[:4]}-{token[4:6]}-{token[6:8]}"
+    return str(date_token)
+
+
+def extract_available_dates(input_dir: str | Path, recursive: bool = RECURSIVE) -> list[str]:
+    dates: set[str] = set()
+    for path in list_input_csvs(input_dir, recursive):
+        try:
+            rows = read_csv_rows(path)
+        except Exception:
+            continue
+        for row in rows:
+            token = normalize_date_token(row[COL_DATE] if len(row) > COL_DATE else "")
+            if token is None:
+                dt = parse_datetime_from_row(row)
+                token = dt.strftime("%Y%m%d") if dt is not None else None
+            if token is not None:
+                dates.add(token)
+    return sorted(dates)
+
+
 def row_trip_key(path: Path, row: list[str], fallback: int) -> tuple[str, str]:
     trip = row[COL_TRIP_NO].strip() if len(row) > COL_TRIP_NO else ""
     return (path.name, trip or f"ALL-{fallback}")
@@ -305,6 +376,7 @@ def analyze(
     output_path: str | Path,
     recursive: bool = RECURSIVE,
     progress_callback: Optional[Callable[..., None]] = None,
+    allowed_dates: Optional[set[str]] = None,
 ) -> dict[str, int]:
     progress_state = {
         "total_files": 0,
@@ -353,6 +425,8 @@ def analyze(
                 continue
             dt = parse_datetime_from_row(row)
             if dt is None:
+                continue
+            if allowed_dates is not None and dt.strftime("%Y%m%d") not in allowed_dates:
                 continue
             s_m, off_m = route.project(lon, lat)
             if off_m > MAX_OFF_ROUTE_M:
@@ -448,14 +522,67 @@ def analyze(
     }
 
 
+def analyze_project(
+    project_dir: str | Path,
+    recursive: bool = RECURSIVE,
+    progress_callback: Optional[Callable[..., None]] = None,
+    allowed_dates: Optional[set[str]] = None,
+) -> dict[str, object]:
+    input_dir, route_dir, output_dir = resolve_project_paths(project_dir)
+    route_files = list_route_csvs(route_dir)
+    if not route_files:
+        raise FileNotFoundError(f"ルートCSVが見つかりません: {route_dir}")
+
+    results: list[dict[str, object]] = []
+    total_routes = len(route_files)
+    for route_index, route_path in enumerate(route_files, start=1):
+        output_path = route_output_path(output_dir, route_path)
+
+        def route_progress(percent: int, message: str, stats: dict | None = None) -> None:
+            stats = dict(stats or {})
+            stats.update(
+                {
+                    "total_routes": total_routes,
+                    "current_route": route_index,
+                    "current_route_name": route_path.name,
+                    "output_path": str(output_path),
+                }
+            )
+            overall = int(((route_index - 1) * 100 + percent) / max(total_routes, 1))
+            print(f"[PROJECT] {overall:3d}% [{route_index}/{total_routes}] {route_path.name}: {message}")
+            if progress_callback is not None:
+                progress_callback(overall, f"[{route_index}/{total_routes}] {route_path.name}: {message}", stats)
+
+        route_progress(0, "解析開始", {})
+        stats = analyze(input_dir, route_path, output_path, recursive, route_progress, allowed_dates)
+        results.append({"route": str(route_path), "output": str(output_path), "stats": stats})
+        route_progress(100, "解析完了", stats)
+
+    return {
+        "project_dir": str(Path(project_dir)),
+        "input_dir": str(input_dir),
+        "route_dir": str(route_dir),
+        "output_dir": str(output_dir),
+        "route_count": total_routes,
+        "results": results,
+    }
+
 def main():
     parser = argparse.ArgumentParser(description="方向別ルートパフォーマンスをExcel出力します。")
+    parser.add_argument("--project", help="プロジェクトフォルダ（指定時は全ルートCSVを一括解析）")
+    parser.add_argument("--dates", help="対象日（YYYYMMDD/カンマ区切り）。未指定なら全日")
     parser.add_argument("--input-dir", default=INPUT_DIR, help="第2スクリーニング後CSVフォルダ")
     parser.add_argument("--route", default=ROUTE_PATH, help="ルートCSV")
     parser.add_argument("--output", default=OUTPUT_PATH, help="出力Excelファイル")
     parser.add_argument("--recursive", action="store_true", default=RECURSIVE, help="サブフォルダも探索")
     args = parser.parse_args()
-    analyze(args.input_dir, args.route, args.output, args.recursive)
+    allowed_dates = None
+    if args.dates:
+        allowed_dates = {token for token in (normalize_date_token(x) for x in args.dates.split(",")) if token}
+    if args.project:
+        analyze_project(args.project, args.recursive, allowed_dates=allowed_dates)
+    else:
+        analyze(args.input_dir, args.route, args.output, args.recursive, allowed_dates=allowed_dates)
 
 
 if __name__ == "__main__":
