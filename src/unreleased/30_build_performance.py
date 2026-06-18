@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import median
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 try:
     import pandas as pd
@@ -299,14 +299,52 @@ def crossing_kp_indices(kp_m: list[float], s1: float, s2: float) -> Iterable[int
             yield i
 
 
-def analyze(input_dir: str | Path, route_path: str | Path, output_path: str | Path, recursive: bool = RECURSIVE) -> dict[str, int]:
+def analyze(
+    input_dir: str | Path,
+    route_path: str | Path,
+    output_path: str | Path,
+    recursive: bool = RECURSIVE,
+    progress_callback: Optional[Callable[..., None]] = None,
+) -> dict[str, int]:
+    progress_state = {
+        "total_files": 0,
+        "current_file": 0,
+        "current_file_name": "",
+        "raw_trips": 0,
+        "split_count": 0,
+        "split_total_trips": 0,
+        "events": 0,
+    }
+
+    def progress(percent: int, message: str, **stats) -> None:
+        progress_state.update(stats)
+        percent = max(0, min(100, int(percent)))
+        stat_text = (
+            f"files={progress_state['current_file']}/{progress_state['total_files']} "
+            f"raw_trips={progress_state['raw_trips']} "
+            f"splits={progress_state['split_count']} "
+            f"split_trips={progress_state['split_total_trips']} "
+            f"events={progress_state['events']}"
+        )
+        print(f"[PROGRESS] {percent:3d}% {message} | {stat_text}")
+        if progress_callback is not None:
+            progress_callback(percent, message, dict(progress_state))
+
+    progress(0, "ルート読込中")
     route = build_route_model(route_path)
     ag = Aggregator(route.kp_m)
     files = list_input_csvs(input_dir, recursive)
     print(f"[INFO] input_csvs={len(files)}")
+    progress(5, f"入力CSV {len(files)} 件を検出", total_files=len(files))
     projected_by_trip: dict[tuple[str, str], list[tuple[datetime, float, float]]] = defaultdict(list)
     total_rows = valid_points = 0
-    for path in files:
+    for file_index, path in enumerate(files, start=1):
+        progress(
+            5 + int(50 * (file_index - 1) / max(len(files), 1)),
+            f"投影中 {file_index}/{len(files)}: {path.name}",
+            current_file=file_index,
+            current_file_name=path.name,
+        )
         for n, row in enumerate(read_csv_rows(path)):
             total_rows += 1
             try:
@@ -322,8 +360,23 @@ def analyze(input_dir: str | Path, route_path: str | Path, output_path: str | Pa
             projected_by_trip[row_trip_key(path, row, n)].append((dt, s_m, off_m))
             valid_points += 1
     events = skipped_segments = 0
-    for key, pts in projected_by_trip.items():
+    trip_items = list(projected_by_trip.items())
+    progress(55, f"投影完了: 有効点 {valid_points} / 行 {total_rows}", raw_trips=len(trip_items))
+    split_count = 0
+    split_total_trips = 0
+    for trip_index, (key, pts) in enumerate(trip_items, start=1):
+        if trip_index == 1 or trip_index % 50 == 0 or trip_index == len(trip_items):
+            progress(
+                55 + int(35 * trip_index / max(len(trip_items), 1)),
+                f"KP通過イベント生成 {trip_index}/{len(trip_items)}",
+                raw_trips=len(trip_items),
+                split_count=split_count,
+                split_total_trips=split_total_trips,
+                events=events,
+            )
         pts.sort(key=lambda x: x[0])
+        prev_direction = None
+        trip_piece_count = 0
         for a, b in zip(pts, pts[1:]):
             t1, s1, _ = a; t2, s2, _ = b
             dt_s = (t2 - t1).total_seconds()
@@ -334,6 +387,11 @@ def analyze(input_dir: str | Path, route_path: str | Path, output_path: str | Pa
             if abs_ds > MAX_SEGMENT_DISTANCE_M or dt_s > MAX_SEGMENT_TIME_S:
                 skipped_segments += 1; continue
             direction = "forward" if ds > 0 else "reverse"
+            if direction != prev_direction:
+                if prev_direction is not None:
+                    split_count += 1
+                trip_piece_count += 1
+                prev_direction = direction
             speed_kmh = abs_ds / dt_s * 3.6
             if speed_kmh > 300:
                 skipped_segments += 1; continue
@@ -343,16 +401,51 @@ def analyze(input_dir: str | Path, route_path: str | Path, output_path: str | Pa
                 pass_dt = t1 + timedelta(seconds=dt_s * ratio)
                 ag.add(direction, kp_idx, pass_dt, speed_kmh)
                 events += 1
+        split_total_trips += trip_piece_count
+    progress(
+        90,
+        "KP通過イベント生成完了",
+        raw_trips=len(trip_items),
+        split_count=split_count,
+        split_total_trips=split_total_trips,
+        events=events,
+    )
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    progress(
+        90,
+        "Excelシート作成中",
+        raw_trips=len(trip_items),
+        split_count=split_count,
+        split_total_trips=split_total_trips,
+        events=events,
+    )
     sheet_tables = {}
-    for sheet_key, sheet_name in SHEET_NAMES.items():
+    sheet_items = list(SHEET_NAMES.items())
+    for sheet_index, (sheet_key, sheet_name) in enumerate(sheet_items, start=1):
         direction, metric = sheet_key.split("_", 1)
         sheet_tables[sheet_name] = ag.table(direction, metric)
+        progress(
+            90 + int(8 * sheet_index / max(len(sheet_items), 1)),
+            f"Excelシート作成 {sheet_index}/{len(sheet_items)}",
+            raw_trips=len(trip_items),
+            split_count=split_count,
+            split_total_trips=split_total_trips,
+            events=events,
+        )
     write_minimal_xlsx(output_path, sheet_tables)
+    progress(100, "Excel出力完了", raw_trips=len(trip_items), split_count=split_count, split_total_trips=split_total_trips, events=events)
     print(f"[DONE] output={output_path}")
-    print(f"[STATS] rows={total_rows}, valid_points={valid_points}, trips={len(projected_by_trip)}, events={events}, skipped_segments={skipped_segments}")
-    return {"rows": total_rows, "valid_points": valid_points, "trips": len(projected_by_trip), "events": events, "skipped_segments": skipped_segments}
+    print(f"[STATS] rows={total_rows}, valid_points={valid_points}, trips={len(projected_by_trip)}, split_count={split_count}, split_total_trips={split_total_trips}, events={events}, skipped_segments={skipped_segments}")
+    return {
+        "rows": total_rows,
+        "valid_points": valid_points,
+        "trips": len(projected_by_trip),
+        "split_count": split_count,
+        "split_total_trips": split_total_trips,
+        "events": events,
+        "skipped_segments": skipped_segments,
+    }
 
 
 def main():
