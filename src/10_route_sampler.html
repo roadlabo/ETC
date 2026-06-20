@@ -12,7 +12,7 @@
     .toolbar { position:absolute; top:10px; left:10px; z-index:1000; background:#fff; padding:10px 14px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,.3); font-size:13px; width:330px; }
     .toolbar input { width:160px; }
     html.embed .toolbar { display:none; }
-    .route-no-label { width:44px; height:28px; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:900; color:#00150d; background:rgba(0,255,136,.88); border:2px solid #fff; border-radius:14px; box-shadow:0 0 8px rgba(0,255,136,.8); }
+    .route-no-label { display:flex; align-items:center; justify-content:center; font-weight:900; color:#00150d; background:rgba(0,255,136,.88); border:2px solid #fff; box-shadow:0 0 8px rgba(0,255,136,.8); }
     html.embed #map { outline:1px solid rgba(42,115,255,.35); box-shadow:0 0 0 1px rgba(0,255,136,.15) inset,0 0 18px rgba(42,115,255,.22); background:#05070a; }
   </style>
 </head>
@@ -44,15 +44,49 @@ map.createPane('routePane'); map.getPane('routePane').style.zIndex=430;
 map.createPane('labelPane'); map.getPane('labelPane').style.zIndex=650;
 L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors © CARTO'}).addTo(map);
 let points=[];
+const savedRouteLayer=L.layerGroup().addTo(map);
 const routeLine=L.polyline([], {pane:'routePane', color:'#00ff88', weight:7, opacity:.95}).addTo(map);
 const rawLine=L.polyline([], {pane:'routePane', color:'#2A73FF', weight:3, opacity:.70, dashArray:'8,8'}).addTo(map);
 const markerLayer=L.layerGroup().addTo(map);
+function visualMetrics() {
+  const z=map.getZoom();
+  const t=Math.max(0, Math.min(1, (z-9)/5));
+  return {
+    editWeight: 3 + 4*t,
+    savedWeight: 2 + 2*t,
+    rawWeight: 1 + 2*t,
+    markerRadius: 2.5 + 5.5*t,
+    markerWeight: 1 + 2*t,
+    labelW: Math.round(18 + 26*t),
+    labelH: Math.round(14 + 14*t),
+    labelFont: Math.round(9 + 9*t),
+    labelVisible: z >= 11
+  };
+}
 function label(lat, lon, text) {
-  return L.marker([lat,lon], {pane:'labelPane', interactive:false, keyboard:false, icon:L.divIcon({className:'', html:'<div class="route-no-label">'+text+'</div>', iconSize:[44,28], iconAnchor:[22,14]})});
+  const m=visualMetrics();
+  if(!m.labelVisible) return null;
+  return L.marker([lat,lon], {pane:'labelPane', interactive:false, keyboard:false, icon:L.divIcon({className:'', html:'<div class="route-no-label" style="width:'+m.labelW+'px;height:'+m.labelH+'px;font-size:'+m.labelFont+'px;border-radius:'+Math.round(m.labelH/2)+'px;">'+text+'</div>', iconSize:[m.labelW,m.labelH], iconAnchor:[Math.round(m.labelW/2),Math.round(m.labelH/2)]})});
+}
+function applyDynamicStyles() {
+  const m=visualMetrics();
+  routeLine.setStyle({weight:m.editWeight});
+  rawLine.setStyle({weight:m.rawWeight});
+  savedRouteLayer.eachLayer(layer=>layer.setStyle && layer.setStyle({weight:m.savedWeight}));
 }
 function redraw() {
+  const m=visualMetrics();
   rawLine.setLatLngs(points.map(p=>[p.lat,p.lon])); routeLine.setLatLngs(points.map(p=>[p.lat,p.lon])); markerLayer.clearLayers();
-  points.forEach((p,i)=>{ let color='#111', fill='#00ff88', text=String(i+1); if(i===0){color='#ff334e'; fill='#fff'; text='S';} else if(i===points.length-1){color='#2A73FF'; fill='#fff'; text='G';} markerLayer.addLayer(L.circleMarker([p.lat,p.lon],{radius:8,color:color,weight:3,fill:true,fillColor:fill,fillOpacity:1})); markerLayer.addLayer(label(p.lat,p.lon,text)); });
+  applyDynamicStyles();
+  points.forEach((p,i)=>{ let color='#111', fill='#00ff88', text=String(i+1); if(i===0){color='#ff334e'; fill='#fff'; text='S';} else if(i===points.length-1){color='#2A73FF'; fill='#fff'; text='G';} markerLayer.addLayer(L.circleMarker([p.lat,p.lon],{radius:m.markerRadius,color:color,weight:m.markerWeight,fill:true,fillColor:fill,fillOpacity:1})); const lbl=label(p.lat,p.lon,text); if(lbl) markerLayer.addLayer(lbl); });
+}
+function setSavedRoutes(routes) {
+  savedRouteLayer.clearLayers();
+  (routes||[]).forEach(route=>{
+    const latlngs=(route.points||[]).map(p=>[p.lat,p.lon]).filter(p=>Number.isFinite(p[0])&&Number.isFinite(p[1]));
+    if(latlngs.length>=2) savedRouteLayer.addLayer(L.polyline(latlngs,{pane:'routePane', color:'#ff334e', weight:visualMetrics().savedWeight, opacity:.70}));
+  });
+  applyDynamicStyles();
 }
 function haversineM(p1,p2){ const R=6371000.0,dLat=(p2.lat-p1.lat)*Math.PI/180,dLon=(p2.lon-p1.lon)*Math.PI/180,lat1=p1.lat*Math.PI/180,lat2=p2.lat*Math.PI/180; const a=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2; return R*2*Math.asin(Math.min(1,Math.sqrt(a))); }
 function bearingDeg(p1,p2){ const lat1=p1.lat*Math.PI/180, lon1=p1.lon*Math.PI/180, lat2=p2.lat*Math.PI/180, lon2=p2.lon*Math.PI/180, dLon=lon2-lon1; const x=Math.sin(dLon)*Math.cos(lat2), y=Math.cos(lat1)*Math.sin(lat2)-Math.sin(lat1)*Math.cos(lat2)*Math.cos(dLon); return ((Math.atan2(x,y)*180/Math.PI)+360)%360; }
@@ -70,6 +104,7 @@ function loadFromCsvText(csvText){ clearAll(); String(csvText||'').split(/\r?\n/
 function saveCsvStandalone(){ if(points.length<2){ alert('2点以上を指定してください。'); return; } const pitch=Number(document.getElementById('pitchM').value)||20, routeName=(document.getElementById('outputName').value||'route').trim(); const suffix='_'+(Math.round(pitch)===pitch?String(Math.round(pitch)):String(pitch).replace('.','p'))+'m'; const filename=routeName.replace(/[\\/:*?"<>|]+/g,'_').replace(/_\d+(?:p\d+)?m$/,'')+suffix+'.csv'; const blob=new Blob(['\uFEFF'+buildCsvText(pitch)],{type:'text/csv;charset=utf-8;'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); }
 map.on('click', e=>{ points.push({lat:e.latlng.lat, lon:e.latlng.lng}); redraw(); });
 map.on('contextmenu', e=>{ if(e.originalEvent){ L.DomEvent.preventDefault(e.originalEvent); L.DomEvent.stopPropagation(e.originalEvent); } points.pop(); redraw(); });
+map.on('zoomend', redraw);
 document.addEventListener('DOMContentLoaded', setupBridge);
 </script>
 </body>

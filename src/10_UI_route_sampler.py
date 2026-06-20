@@ -15,7 +15,7 @@ from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import (
     QApplication, QFileDialog, QDoubleSpinBox, QFrame, QGraphicsOpacityEffect,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QPushButton, QSizePolicy, QSpacerItem, QSplitter, QTableWidget,
+    QMessageBox, QPushButton, QSizePolicy, QSplitter, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -67,7 +67,7 @@ class Bridge(QObject):
 
     @pyqtSlot()
     def jsReady(self) -> None:
-        return
+        self.window.refresh_saved_route_overlay()
 
     @pyqtSlot(str)
     def requestSave(self, json_str: str) -> None:
@@ -182,7 +182,7 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         root = QWidget(); self.setCentralWidget(root)
         main = QHBoxLayout(root); main.setContentsMargins(8, 8, 8, 8); main.setSpacing(8)
-        left = QWidget(); lv = QVBoxLayout(left); lv.setContentsMargins(0, 0, 0, 0); lv.setSpacing(6)
+        left = QWidget(); left.setMinimumWidth(520); lv = QVBoxLayout(left); lv.setContentsMargins(0, 0, 0, 0); lv.setSpacing(6)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["ルート名", "CSV", "ピッチ", "点数"])
         self.table.horizontalHeader().setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
@@ -200,8 +200,10 @@ class MainWindow(QMainWindow):
         right = QWidget(); rv = QVBoxLayout(right); rv.setContentsMargins(0, 0, 0, 0); rv.setSpacing(6)
         self.btn_project = QPushButton("選択"); self.btn_project.clicked.connect(self.select_project)
         self.project_path_edit = QLineEdit(); self.project_path_edit.setReadOnly(True); self.project_path_edit.setPlaceholderText("フォルダが選択されていません")
+        self.project_path_edit.setMinimumWidth(360)
         self.btn_clear = QPushButton("クリア"); self.btn_clear.clicked.connect(self.clear_clicked)
         self.name_edit = QLineEdit(); self.name_edit.setPlaceholderText("例：01津山駅ルート")
+        self.name_edit.setMinimumWidth(260)
         self.pitch_spin = QDoubleSpinBox(); self.pitch_spin.setRange(1.0, 500.0); self.pitch_spin.setDecimals(1); self.pitch_spin.setSingleStep(5.0); self.pitch_spin.setValue(20.0); self.pitch_spin.setSuffix(" m"); self.pitch_spin.valueChanged.connect(self.update_pitch_label)
         self.pitch_hint = QLabel("→ _20m"); self.pitch_hint.setObjectName("StepBody")
         self.btn_save = QPushButton("保存"); self.btn_save.clicked.connect(self.save_clicked)
@@ -211,15 +213,15 @@ class MainWindow(QMainWindow):
         body2 = QWidget(); l2 = QHBoxLayout(body2); l2.setContentsMargins(0, 0, 0, 0); label2 = QLabel("左クリック=ルート点追加\n右クリック=直前点を戻す"); label2.setObjectName("StepBody"); l2.addWidget(label2, 1); l2.addWidget(self.btn_clear)
         body3 = QWidget(); l3 = QHBoxLayout(body3); l3.setContentsMargins(0, 0, 0, 0); l3.addWidget(QLabel("ルート名")); l3.addWidget(self.name_edit, 1); l3.addWidget(QLabel("ピッチ")); l3.addWidget(self.pitch_spin); l3.addWidget(self.pitch_hint); l3.addWidget(self.btn_save)
         body4 = QWidget(); l4 = QHBoxLayout(body4); l4.setContentsMargins(0, 0, 0, 0); label4 = QLabel("保存後は自動クリア。\n次のルートを続けて作れます。"); label4.setObjectName("StepBody"); l4.addWidget(label4, 1)
-        sl.addWidget(self._make_step_card("STEP1  プロジェクトフォルダ選択", body1), 10)
-        sl.addWidget(self._make_step_card("STEP2  地図でルート指定", body2), 10)
-        sl.addWidget(self._make_step_card("STEP3  ルートファイルの保存", body3), 18)
+        sl.addWidget(self._make_step_card("STEP1  プロジェクトフォルダ選択", body1), 18)
+        sl.addWidget(self._make_step_card("STEP2  地図でルート指定", body2), 11)
+        sl.addWidget(self._make_step_card("STEP3  ルートファイルの保存", body3), 24)
         sl.addWidget(self._make_step_card("STEP4  一括で次のルートへ", body4), 8)
-        header = QWidget(); hh = QHBoxLayout(header); hh.setContentsMargins(0, 0, 0, 0); hh.addWidget(steps, 1); hh.addSpacerItem(QSpacerItem(360, 1, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum))
+        header = QWidget(); hh = QHBoxLayout(header); hh.setContentsMargins(0, 0, 0, 0); hh.addWidget(steps, 1)
         rv.addWidget(header); rv.addSpacing(10)
         self.web = QWebEngineView(); s = self.web.settings(); s.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True); s.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
         rv.addWidget(self.web, 1)
-        splitter = QSplitter(Qt.Orientation.Horizontal); splitter.addWidget(left); splitter.addWidget(right); splitter.setStretchFactor(0, 0); splitter.setStretchFactor(1, 1); splitter.setSizes([420, 1400])
+        splitter = QSplitter(Qt.Orientation.Horizontal); splitter.addWidget(left); splitter.addWidget(right); splitter.setStretchFactor(0, 0); splitter.setStretchFactor(1, 1); splitter.setSizes([560, 1360])
         main.addWidget(splitter)
 
     def _setup_web_channel(self) -> None:
@@ -253,6 +255,36 @@ class MainWindow(QMainWindow):
                 pass
         return None
 
+    def _read_route_points(self, path: Path) -> list[dict[str, float]]:
+        for enc in ("utf-8-sig", "cp932", "utf-8"):
+            try:
+                points: list[dict[str, float]] = []
+                for line in path.read_text(encoding=enc).splitlines():
+                    if not line.strip():
+                        continue
+                    cols = line.split(",")
+                    if len(cols) <= 15:
+                        continue
+                    try:
+                        lon = float(cols[14]); lat = float(cols[15])
+                    except ValueError:
+                        continue
+                    points.append({"lat": lat, "lon": lon})
+                return points
+            except Exception:
+                pass
+        return []
+
+    def refresh_saved_route_overlay(self) -> None:
+        if not self.route_dir:
+            return
+        routes = []
+        for csv_path in sorted(self.route_dir.glob("*.csv")):
+            points = self._read_route_points(csv_path)
+            if len(points) >= 2:
+                routes.append({"name": csv_path.stem, "points": points})
+        self.web.page().runJavaScript(f"setSavedRoutes({json.dumps(routes, ensure_ascii=False)})")
+
     def scan_routes(self) -> None:
         self.table.setRowCount(0)
         if not self.route_dir:
@@ -262,6 +294,7 @@ class MainWindow(QMainWindow):
             values = [name, "✔", self._pitch_from_name(name) or "-", str(self._count_rows(csv_path) or "-")]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter if col else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter); self.table.setItem(row, col, item)
+        self.refresh_saved_route_overlay()
 
     def selected_name(self) -> str | None:
         item = self.table.item(self.table.currentRow(), COL_NAME) if self.table.currentRow() >= 0 else None
