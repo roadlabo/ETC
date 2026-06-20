@@ -227,7 +227,7 @@ class MainWindow(QMainWindow):
         self.project_path_edit.setFixedWidth(180)
         self.btn_clear = QPushButton("クリア"); self.btn_clear.clicked.connect(self.clear_clicked)
         self.name_edit = QLineEdit(); self.name_edit.setPlaceholderText("例：01津山駅ルート")
-        self.name_edit.setFixedWidth(260)
+        self.name_edit.setFixedWidth(234)
         self.pitch_spin = QDoubleSpinBox(); self.pitch_spin.setRange(1.0, 500.0); self.pitch_spin.setDecimals(1); self.pitch_spin.setSingleStep(5.0); self.pitch_spin.setValue(20.0); self.pitch_spin.setSuffix(" m"); self.pitch_spin.valueChanged.connect(self.update_pitch_label)
         self.pitch_hint = QLabel("→ _20m"); self.pitch_hint.setObjectName("StepBody")
         self.btn_save = QPushButton("保存"); self.btn_save.clicked.connect(self.save_clicked)
