@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, Iterator, List, Sequence, Tuple
 
 FOLDER_ROUTE = "10_ルート(Route)データ"
-FOLDER_OUT = "22_第２スクリーニング(ルート)"
+FOLDER_OUT = "20_第２スクリーニング(ルート)"
 
 DEFAULT_RADIUS_M = 30.0
 MIN_ROUTE_POINTS = 3

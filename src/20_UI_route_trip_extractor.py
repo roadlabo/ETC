@@ -33,9 +33,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-APP_TITLE = "22_第２スクリーニング（ルート通過トリップの抽出）"
+APP_TITLE = "20_第２スクリーニング（ルート通過トリップの抽出）"
 FOLDER_ROUTE = "10_ルート(Route)データ"
-FOLDER_OUT = "22_第２スクリーニング(ルート)"
+FOLDER_OUT = "20_第２スクリーニング(ルート)"
 
 RE_LEVEL = re.compile(r"\[(INFO|WARN|WARNING|ERROR|DEBUG)\]")
 RE_FILE_PROCESSED = re.compile(r"進捗ファイル:\s*([0-9,]+)\s*files\s*processed")
@@ -455,7 +455,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "対象なし", "ルートCSVがありません。")
             return
 
-        script = Path(__file__).resolve().parent / "22_route_trip_extractor.py"
+        script = Path(__file__).resolve().parent / "20_route_trip_extractor.py"
         if not script.exists():
             QMessageBox.critical(self, "エラー", f"処理スクリプトが見つかりません:\n{script}")
             return
