@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>Route Sampler</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <style>
+    html, body { height:100%; margin:0; padding:0; }
+    #map { width:100%; height:100%; }
+    .toolbar { position:absolute; top:10px; left:10px; z-index:1000; background:#fff; padding:10px 14px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,.3); font-size:13px; width:330px; }
+    .toolbar input { width:160px; }
+    html.embed .toolbar { display:none; }
+    .route-no-label { display:flex; align-items:center; justify-content:center; font-weight:900; color:#00150d; background:rgba(0,255,136,.88); border:2px solid #fff; box-shadow:0 0 8px rgba(0,255,136,.8); }
+    html.embed #map { outline:1px solid rgba(42,115,255,.35); box-shadow:0 0 0 1px rgba(0,255,136,.15) inset,0 0 18px rgba(42,115,255,.22); background:#05070a; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="toolbar">
+  <div><strong>ルートファイル作成</strong></div>
+  <div style="margin-top:4px;">出力ルート名：<input id="outputName" type="text" value="route001"></div>
+  <div style="margin-top:4px;">ピッチ(m)：<input id="pitchM" type="number" value="20" min="1" step="1"></div>
+  <div style="margin-top:4px;"><button onclick="saveCsvStandalone()">保存</button><button onclick="clearAll()">クリア</button></div>
+  <div style="margin-top:4px;">左クリック：ルート点追加　右クリック：直前点削除</div>
+  <div style="margin-top:4px;">保存時：指定ピッチ + 30°以上の折れ点保持</div>
+</div>
+<script>
+if (new URLSearchParams(location.search).get("embed") === "1") document.documentElement.classList.add("embed");
+let bridge = null;
+function setupBridge() {
+  if (typeof QWebChannel === "undefined" || !window.qt || !qt.webChannelTransport) return;
+  new QWebChannel(qt.webChannelTransport, function(channel) {
+    bridge = channel.objects.bridge;
+    if (bridge && bridge.jsReady) bridge.jsReady();
+  });
+}
+const TYPE_COL=4, USE_COL=5, TIME_COL=6, FLAG_COL=12, LON_COL=14, LAT_COL=15, SPEED_COL=18;
+const TOTAL_COLS=Math.max(TYPE_COL,USE_COL,TIME_COL,FLAG_COL,LON_COL,LAT_COL,SPEED_COL)+1;
+const DEFAULT_TYPE='2', DEFAULT_USE='1', DEFAULT_FLAG='2', DEFAULT_SPEED='30.0', ANGLE_THRESHOLD=30.0, EPS_M=0.001, TIME_STEP_SEC=10;
+const map=L.map('map',{preferCanvas:true}).setView([35.069095,134.004512],14);
+map.createPane('routePane'); map.getPane('routePane').style.zIndex=430;
+map.createPane('labelPane'); map.getPane('labelPane').style.zIndex=650;
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors © CARTO'}).addTo(map);
+let points=[];
+const savedRouteLayer=L.layerGroup().addTo(map);
+const routeLine=L.polyline([], {pane:'routePane', color:'#00ff88', weight:7, opacity:.95}).addTo(map);
+const rawLine=L.polyline([], {pane:'routePane', color:'#2A73FF', weight:3, opacity:.70, dashArray:'8,8'}).addTo(map);
+const markerLayer=L.layerGroup().addTo(map);
+function visualMetrics() {
+  const z=map.getZoom();
+  const t=Math.max(0, Math.min(1, (z-9)/5));
+  return {
+    editWeight: 3 + 4*t,
+    savedWeight: 2 + 2*t,
+    rawWeight: 1 + 2*t,
+    markerRadius: 2.5 + 5.5*t,
+    markerWeight: 1 + 2*t,
+    labelW: Math.round(18 + 26*t),
+    labelH: Math.round(14 + 14*t),
+    labelFont: Math.round(9 + 9*t),
+    labelVisible: z >= 11
+  };
+}
+function label(lat, lon, text) {
+  const m=visualMetrics();
+  if(!m.labelVisible) return null;
+  return L.marker([lat,lon], {pane:'labelPane', interactive:false, keyboard:false, icon:L.divIcon({className:'', html:'<div class="route-no-label" style="width:'+m.labelW+'px;height:'+m.labelH+'px;font-size:'+m.labelFont+'px;border-radius:'+Math.round(m.labelH/2)+'px;">'+text+'</div>', iconSize:[m.labelW,m.labelH], iconAnchor:[Math.round(m.labelW/2),Math.round(m.labelH/2)]})});
+}
+function applyDynamicStyles() {
+  const m=visualMetrics();
+  routeLine.setStyle({weight:m.editWeight});
+  rawLine.setStyle({weight:m.rawWeight});
+  savedRouteLayer.eachLayer(layer=>layer.setStyle && layer.setStyle({weight:m.savedWeight}));
+}
+function redraw() {
+  const m=visualMetrics();
+  rawLine.setLatLngs(points.map(p=>[p.lat,p.lon])); routeLine.setLatLngs(points.map(p=>[p.lat,p.lon])); markerLayer.clearLayers();
+  applyDynamicStyles();
+  points.forEach((p,i)=>{ let color='#111', fill='#00ff88', text=String(i+1); if(i===0){color='#ff334e'; fill='#fff'; text='S';} else if(i===points.length-1){color='#2A73FF'; fill='#fff'; text='G';} markerLayer.addLayer(L.circleMarker([p.lat,p.lon],{radius:m.markerRadius,color:color,weight:m.markerWeight,fill:true,fillColor:fill,fillOpacity:1})); const lbl=label(p.lat,p.lon,text); if(lbl) markerLayer.addLayer(lbl); });
+}
+function setSavedRoutes(routes) {
+  savedRouteLayer.clearLayers();
+  (routes||[]).forEach(route=>{
+    const latlngs=(route.points||[]).map(p=>[p.lat,p.lon]).filter(p=>Number.isFinite(p[0])&&Number.isFinite(p[1]));
+    if(latlngs.length>=2) savedRouteLayer.addLayer(L.polyline(latlngs,{pane:'routePane', color:'#ff334e', weight:visualMetrics().savedWeight, opacity:.70}));
+  });
+  applyDynamicStyles();
+}
+function haversineM(p1,p2){ const R=6371000.0,dLat=(p2.lat-p1.lat)*Math.PI/180,dLon=(p2.lon-p1.lon)*Math.PI/180,lat1=p1.lat*Math.PI/180,lat2=p2.lat*Math.PI/180; const a=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2; return R*2*Math.asin(Math.min(1,Math.sqrt(a))); }
+function bearingDeg(p1,p2){ const lat1=p1.lat*Math.PI/180, lon1=p1.lon*Math.PI/180, lat2=p2.lat*Math.PI/180, lon2=p2.lon*Math.PI/180, dLon=lon2-lon1; const x=Math.sin(dLon)*Math.cos(lat2), y=Math.cos(lat1)*Math.sin(lat2)-Math.sin(lat1)*Math.cos(lat2)*Math.cos(dLon); return ((Math.atan2(x,y)*180/Math.PI)+360)%360; }
+function turnAngleDeg(prev,cur,next){ const b1=bearingDeg(prev,cur), b2=bearingDeg(cur,next); return Math.abs(((b2-b1+180)%360)-180); }
+function lerpPoint(p1,p2,r){ return {lat:p1.lat+(p2.lat-p1.lat)*r, lon:p1.lon+(p2.lon-p1.lon)*r}; }
+function resampleSegment(segmentPoints, stepM){ if(!segmentPoints.length) return []; if(segmentPoints.length===1) return [segmentPoints[0]]; const res=[segmentPoints[0]]; let accumulated=0, nextTarget=stepM; for(let i=0;i<segmentPoints.length-1;i++){ const p1=segmentPoints[i], p2=segmentPoints[i+1], segLen=haversineM(p1,p2); if(segLen<=0) continue; while(accumulated+segLen>=nextTarget){ res.push(lerpPoint(p1,p2,(nextTarget-accumulated)/segLen)); nextTarget+=stepM; } accumulated+=segLen; } if(haversineM(res[res.length-1], segmentPoints[segmentPoints.length-1])>EPS_M) res.push(segmentPoints[segmentPoints.length-1]); return res; }
+function resamplePolyline(rawPoints, stepM, angleThreshold){ if(rawPoints.length<2) return rawPoints.slice(); const breakpoints=new Set([0,rawPoints.length-1]); for(let i=1;i<rawPoints.length-1;i++){ if(turnAngleDeg(rawPoints[i-1],rawPoints[i],rawPoints[i+1])>=angleThreshold) breakpoints.add(i); } const sorted=Array.from(breakpoints).sort((a,b)=>a-b), res=[]; for(let i=0;i<sorted.length-1;i++){ let seg=resampleSegment(rawPoints.slice(sorted[i], sorted[i+1]+1), stepM); if(res.length && seg.length && haversineM(res[res.length-1],seg[0])<EPS_M) seg=seg.slice(1); res.push(...seg); } const last=rawPoints[sorted[sorted.length-1]]; if(!res.length || haversineM(res[res.length-1],last)>EPS_M) res.push(last); return res; }
+function formatTimestamp(baseDate, secOffset){ const t=new Date(baseDate.getTime()+secOffset*1000); return ''+t.getFullYear()+String(t.getMonth()+1).padStart(2,'0')+String(t.getDate()).padStart(2,'0')+String(t.getHours()).padStart(2,'0')+String(t.getMinutes()).padStart(2,'0')+String(t.getSeconds()).padStart(2,'0'); }
+function buildCsvRows(sampled, startTime){ return sampled.map((p,i)=>{ const row=new Array(TOTAL_COLS).fill('0'); row[TYPE_COL]=DEFAULT_TYPE; row[USE_COL]=DEFAULT_USE; row[TIME_COL]=formatTimestamp(startTime,i*TIME_STEP_SEC); row[FLAG_COL]=DEFAULT_FLAG; row[LON_COL]=p.lon.toFixed(10); row[LAT_COL]=p.lat.toFixed(10); row[SPEED_COL]=DEFAULT_SPEED; return row; }); }
+function csvEscape(v){ const s=String(v==null?'':v); return /[",\r\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; }
+function buildCsvText(stepM){ return buildCsvRows(resamplePolyline(points, stepM, ANGLE_THRESHOLD), new Date()).map(row=>row.map(csvEscape).join(',')).join('\n')+'\n'; }
+function clearAll(){ points=[]; redraw(); }
+function beginSaveFromPy(routeName, pitchM, overwrite){ if(points.length<2){ alert('2点以上を指定してください'); return; } if(!bridge || !bridge.requestSave){ alert('ブリッジ未接続'); return; } bridge.requestSave(JSON.stringify({route_name:routeName, pitch_m:Number(pitchM)||20, overwrite:!!overwrite, csv_text:buildCsvText(Number(pitchM)||20)})); }
+function loadFromCsvText(csvText){ clearAll(); String(csvText||'').split(/\r?\n/).filter(line=>line.trim()!=='').forEach(line=>{ const cols=line.split(','), lon=parseFloat(cols[LON_COL]), lat=parseFloat(cols[LAT_COL]); if(Number.isFinite(lat)&&Number.isFinite(lon)) points.push({lat:lat, lon:lon}); }); redraw(); if(points.length) map.fitBounds(L.latLngBounds(points.map(p=>[p.lat,p.lon])).pad(.2)); }
+function saveCsvStandalone(){ if(points.length<2){ alert('2点以上を指定してください。'); return; } const pitch=Number(document.getElementById('pitchM').value)||20, routeName=(document.getElementById('outputName').value||'route').trim(); const suffix='_'+(Math.round(pitch)===pitch?String(Math.round(pitch)):String(pitch).replace('.','p'))+'m'; const filename=routeName.replace(/[\\/:*?"<>|]+/g,'_').replace(/_\d+(?:p\d+)?m$/,'')+suffix+'.csv'; const blob=new Blob(['\uFEFF'+buildCsvText(pitch)],{type:'text/csv;charset=utf-8;'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); }
+map.on('click', e=>{ points.push({lat:e.latlng.lat, lon:e.latlng.lng}); redraw(); });
+map.on('contextmenu', e=>{ if(e.originalEvent){ L.DomEvent.preventDefault(e.originalEvent); L.DomEvent.stopPropagation(e.originalEvent); } points.pop(); redraw(); });
+map.on('zoomend', redraw);
+document.addEventListener('DOMContentLoaded', setupBridge);
+</script>
+</body>
+</html>
