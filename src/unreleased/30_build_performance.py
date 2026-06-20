@@ -65,31 +65,35 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def parse_datetime_from_row(row: list[str]) -> Optional[datetime]:
-    values = []
-    if len(row) > COL_TIME:
-        values.append(str(row[COL_TIME]).strip())
-    if len(row) > COL_DATE and len(row) > COL_TIME:
-        values.append(f"{str(row[COL_DATE]).strip()} {str(row[COL_TIME]).strip()}")
-    for text in values:
-        if not text:
-            continue
+    date_text = str(row[COL_DATE]).strip() if len(row) > COL_DATE else ""
+    time_text = str(row[COL_TIME]).strip() if len(row) > COL_TIME else ""
+    candidates = []
+    if date_text and time_text:
+        # 日付列 + 時刻列の組み合わせを先に試す。
+        # 時刻だけを先に返すと 1900-01-01 扱いになり、曜日・日付フィルタがずれるため。
+        candidates.append(f"{date_text} {time_text}")
+    if time_text:
+        candidates.append(time_text)
+
+    for text in candidates:
         t = text.replace("T", " ").replace("/", "-")
         t = re.sub(r"([+-]\d{2}:?\d{2}|Z)$", "", t).strip()
         for fmt in (
             "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
-            "%Y%m%d %H:%M:%S", "%Y%m%d %H:%M", "%Y%m%d %H%M%S", "%Y%m%d%H%M%S",
+            "%Y%m%d %H:%M:%S.%f", "%Y%m%d %H:%M:%S", "%Y%m%d %H:%M",
+            "%Y%m%d %H%M%S", "%Y%m%d%H%M%S",
             "%H:%M:%S.%f", "%H:%M:%S", "%H:%M", "%H%M%S", "%H%M",
         ):
             try:
                 dt = datetime.strptime(t, fmt)
-                if dt.year == 1900 and len(row) > COL_DATE:
-                    d = str(row[COL_DATE]).strip()
-                    if re.fullmatch(r"\d{8}", d):
-                        base = datetime.strptime(d, "%Y%m%d")
-                        return base.replace(hour=dt.hour, minute=dt.minute, second=dt.second, microsecond=dt.microsecond)
-                return dt
             except ValueError:
-                pass
+                continue
+            if dt.year == 1900:
+                token = normalize_date_token(date_text)
+                if token is not None:
+                    base = datetime.strptime(token, "%Y%m%d")
+                    return base.replace(hour=dt.hour, minute=dt.minute, second=dt.second, microsecond=dt.microsecond)
+            return dt
     return None
 
 
@@ -251,7 +255,8 @@ def extract_available_dates(input_dir: str | Path, recursive: bool = RECURSIVE) 
 
 def row_trip_key(path: Path, row: list[str], fallback: int) -> tuple[str, str]:
     trip = row[COL_TRIP_NO].strip() if len(row) > COL_TRIP_NO else ""
-    return (path.name, trip or f"ALL-{fallback}")
+    # 複数フォルダに同名CSVがある場合でも TRIP_NO が混ざらないよう、絶対パスを含める。
+    return (str(path.resolve()), trip or f"ALL-{fallback}")
 
 
 def period_keys(dt: datetime) -> list[str]:
@@ -361,13 +366,17 @@ def write_minimal_xlsx(output_path: Path, sheets: dict[str, list[list[object]]])
 
 
 def crossing_kp_indices(kp_m: list[float], s1: float, s2: float) -> Iterable[int]:
-    lo, hi = sorted((s1, s2))
     eps = 1e-6
-    for i, kp in enumerate(kp_m):
-        # 連続区間の終点側を含めることで、GPS点がKPちょうどにある場合も通過として扱う。
-        # 始点側は除外し、隣接セグメントとの二重計上を抑える。
-        if lo + eps < kp <= hi + eps:
-            yield i
+    if s2 > s1:
+        for i, kp in enumerate(kp_m):
+            # 順方向: 連続区間の終点側を含め、始点側は除外する。
+            if s1 + eps < kp <= s2 + eps:
+                yield i
+    elif s2 < s1:
+        for i, kp in enumerate(kp_m):
+            # 逆方向: 進行方向の終点側を含め、始点側は除外する。
+            if s2 - eps <= kp < s1 - eps:
+                yield i
 
 
 def analyze(
