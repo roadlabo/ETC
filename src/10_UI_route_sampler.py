@@ -161,17 +161,32 @@ class MainWindow(QMainWindow):
         self.splash.setStyleSheet("background:transparent;")
         self.splash.setPixmap(self._pix_small)
         self.splash.adjustSize()
-        self._reserve_corner_logo_space()
-        self.splash.move(self.width() - self.splash.width() - 18, 4)
         self._logo_phase = "corner"
         self._corner_logo_visible = True
-        self.splash.show()
+        self._queue_corner_logo_reposition()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self.splash and self._logo_phase == "corner" and self._corner_logo_visible:
-            self._reserve_corner_logo_space()
-            self.splash.move(self.width() - self.splash.width() - 18, 4)
+            self._position_corner_logo()
+
+    def _queue_corner_logo_reposition(self) -> None:
+        for delay_ms in (0, 50, 250, 1000):
+            QTimer.singleShot(delay_ms, self._position_corner_logo)
+
+    def _position_corner_logo(self) -> None:
+        if not self.splash or self._logo_phase != "corner" or not self._corner_logo_visible:
+            return
+        self.splash.adjustSize()
+        self._reserve_corner_logo_space()
+        layout = self.centralWidget().layout() if self.centralWidget() else None
+        if layout:
+            layout.activate()
+        x = max(0, self.width() - self.splash.width() - 18)
+        self.splash.move(x, 4)
+        self.splash.raise_()
+        if not self.splash.isVisible():
+            self.splash.show()
 
     def _reserve_corner_logo_space(self) -> None:
         if not getattr(self, "header_layout", None) or not self.splash:
