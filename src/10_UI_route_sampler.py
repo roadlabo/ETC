@@ -138,6 +138,13 @@ class MainWindow(QMainWindow):
                 max(CORNER_LOGO_RESERVED_WIDTH, self._pix_small.width()),
                 CORNER_LOGO_HEIGHT,
             )
+        if self.corner_logo is None:
+            self.corner_logo = ClickableLogoLabel(self)
+            self.corner_logo.setStyleSheet("background:transparent;")
+            self.corner_logo.hide()
+        self.corner_logo.setPixmap(self._pix_small)
+        self.corner_logo.setFixedSize(self._pix_small.size())
+        self._place_corner_logo()
         big = pixmap.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
         self.splash = QLabel(self)
         self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -164,24 +171,25 @@ class MainWindow(QMainWindow):
         if self.splash:
             self.splash.deleteLater()
             self.splash = None
-        if not self._pix_small or not getattr(self, "header_layout", None):
+        if not self._pix_small or self.corner_logo is None:
             return
-        if self.corner_logo is None:
-            parent = getattr(self, "logo_slot", None) or self.centralWidget()
-            self.corner_logo = ClickableLogoLabel(parent)
-            self.corner_logo.setStyleSheet("background:transparent;")
-            self.corner_logo.setPixmap(self._pix_small)
-            self.corner_logo.setFixedSize(self._pix_small.size())
-            if getattr(self, "logo_slot_layout", None):
-                self.logo_slot_layout.addWidget(self.corner_logo, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
-            else:
-                self.header_layout.addWidget(self.corner_logo, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        self._place_corner_logo()
+        self.corner_logo.raise_()
         self.corner_logo.show()
         self._logo_phase = "corner"
         self._corner_logo_visible = True
 
+    def _place_corner_logo(self) -> None:
+        if not self.corner_logo or not getattr(self, "logo_slot", None):
+            return
+        top_left = self.logo_slot.mapTo(self, self.logo_slot.rect().topLeft())
+        x = top_left.x() + max(0, self.logo_slot.width() - self.corner_logo.width())
+        y = top_left.y()
+        self.corner_logo.move(x, y)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._place_corner_logo()
 
     def _make_step_card(self, title: str, body: QWidget) -> QFrame:
         card = QFrame(); card.setObjectName("StepCard")
