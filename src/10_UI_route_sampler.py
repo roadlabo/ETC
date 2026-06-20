@@ -129,7 +129,7 @@ class MainWindow(QMainWindow):
         pixmap = QPixmap(str(logo_path))
         if pixmap.isNull():
             return
-        self._pix_small = pixmap.scaledToHeight(110, Qt.TransformationMode.SmoothTransformation)
+        self._pix_small = pixmap.scaledToHeight(86, Qt.TransformationMode.SmoothTransformation)
         big = pixmap.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
         self.splash = QLabel(self)
         self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -161,6 +161,7 @@ class MainWindow(QMainWindow):
         self.splash.setStyleSheet("background:transparent;")
         self.splash.setPixmap(self._pix_small)
         self.splash.adjustSize()
+        self._reserve_corner_logo_space()
         self.splash.move(self.width() - self.splash.width() - 18, 4)
         self._logo_phase = "corner"
         self._corner_logo_visible = True
@@ -169,7 +170,14 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self.splash and self._logo_phase == "corner" and self._corner_logo_visible:
+            self._reserve_corner_logo_space()
             self.splash.move(self.width() - self.splash.width() - 18, 4)
+
+    def _reserve_corner_logo_space(self) -> None:
+        if not getattr(self, "header_layout", None) or not self.splash:
+            return
+        logo_space = self.splash.width() + 28
+        self.header_layout.setContentsMargins(0, 0, logo_space, 0)
 
     def _make_step_card(self, title: str, body: QWidget) -> QFrame:
         card = QFrame(); card.setObjectName("StepCard")
@@ -182,12 +190,16 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         root = QWidget(); self.setCentralWidget(root)
         main = QHBoxLayout(root); main.setContentsMargins(8, 8, 8, 8); main.setSpacing(8)
-        left = QWidget(); left.setMinimumWidth(520); lv = QVBoxLayout(left); lv.setContentsMargins(0, 0, 0, 0); lv.setSpacing(6)
+        left = QWidget(); left.setMinimumWidth(420); lv = QVBoxLayout(left); lv.setContentsMargins(0, 0, 0, 0); lv.setSpacing(6)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["ルート名", "CSV", "ピッチ", "点数"])
+        self.table.horizontalHeader().setMinimumSectionSize(36)
         self.table.horizontalHeader().setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
         for col in (COL_CSV, COL_PITCH, COL_POINTS):
-            self.table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+            self.table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(COL_CSV, 50)
+        self.table.setColumnWidth(COL_PITCH, 56)
+        self.table.setColumnWidth(COL_POINTS, 58)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(self.table.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(self.table.EditTrigger.NoEditTriggers)
@@ -203,7 +215,7 @@ class MainWindow(QMainWindow):
         self.project_path_edit.setMinimumWidth(360)
         self.btn_clear = QPushButton("クリア"); self.btn_clear.clicked.connect(self.clear_clicked)
         self.name_edit = QLineEdit(); self.name_edit.setPlaceholderText("例：01津山駅ルート")
-        self.name_edit.setMinimumWidth(260)
+        self.name_edit.setMinimumWidth(190)
         self.pitch_spin = QDoubleSpinBox(); self.pitch_spin.setRange(1.0, 500.0); self.pitch_spin.setDecimals(1); self.pitch_spin.setSingleStep(5.0); self.pitch_spin.setValue(20.0); self.pitch_spin.setSuffix(" m"); self.pitch_spin.valueChanged.connect(self.update_pitch_label)
         self.pitch_hint = QLabel("→ _20m"); self.pitch_hint.setObjectName("StepBody")
         self.btn_save = QPushButton("保存"); self.btn_save.clicked.connect(self.save_clicked)
@@ -213,15 +225,15 @@ class MainWindow(QMainWindow):
         body2 = QWidget(); l2 = QHBoxLayout(body2); l2.setContentsMargins(0, 0, 0, 0); label2 = QLabel("左クリック=ルート点追加\n右クリック=直前点を戻す"); label2.setObjectName("StepBody"); l2.addWidget(label2, 1); l2.addWidget(self.btn_clear)
         body3 = QWidget(); l3 = QHBoxLayout(body3); l3.setContentsMargins(0, 0, 0, 0); l3.addWidget(QLabel("ルート名")); l3.addWidget(self.name_edit, 1); l3.addWidget(QLabel("ピッチ")); l3.addWidget(self.pitch_spin); l3.addWidget(self.pitch_hint); l3.addWidget(self.btn_save)
         body4 = QWidget(); l4 = QHBoxLayout(body4); l4.setContentsMargins(0, 0, 0, 0); label4 = QLabel("保存後は自動クリア。\n次のルートを続けて作れます。"); label4.setObjectName("StepBody"); l4.addWidget(label4, 1)
-        sl.addWidget(self._make_step_card("STEP1  プロジェクトフォルダ選択", body1), 18)
-        sl.addWidget(self._make_step_card("STEP2  地図でルート指定", body2), 11)
-        sl.addWidget(self._make_step_card("STEP3  ルートファイルの保存", body3), 24)
-        sl.addWidget(self._make_step_card("STEP4  一括で次のルートへ", body4), 8)
-        header = QWidget(); hh = QHBoxLayout(header); hh.setContentsMargins(0, 0, 0, 0); hh.addWidget(steps, 1)
+        sl.addWidget(self._make_step_card("STEP1  プロジェクトフォルダ選択", body1), 17)
+        sl.addWidget(self._make_step_card("STEP2  地図でルート指定", body2), 9)
+        sl.addWidget(self._make_step_card("STEP3  ルートファイルの保存", body3), 26)
+        sl.addWidget(self._make_step_card("STEP4  一括で次のルートへ", body4), 6)
+        header = QWidget(); self.header_layout = QHBoxLayout(header); self.header_layout.setContentsMargins(0, 0, 0, 0); self.header_layout.addWidget(steps, 1)
         rv.addWidget(header); rv.addSpacing(10)
         self.web = QWebEngineView(); s = self.web.settings(); s.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True); s.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
         rv.addWidget(self.web, 1)
-        splitter = QSplitter(Qt.Orientation.Horizontal); splitter.addWidget(left); splitter.addWidget(right); splitter.setStretchFactor(0, 0); splitter.setStretchFactor(1, 1); splitter.setSizes([560, 1360])
+        splitter = QSplitter(Qt.Orientation.Horizontal); splitter.addWidget(left); splitter.addWidget(right); splitter.setStretchFactor(0, 0); splitter.setStretchFactor(1, 1); splitter.setSizes([430, 1490])
         main.addWidget(splitter)
 
     def _setup_web_channel(self) -> None:
