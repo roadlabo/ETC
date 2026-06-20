@@ -113,6 +113,7 @@ class MainWindow(QMainWindow):
         self._logo_phase = ""
         self._corner_logo_visible = False
         self.splash = None
+        self.corner_logo = None
         self._build_ui()
         QTimer.singleShot(0, self._init_logo_overlay)
         self._setup_web_channel()
@@ -155,44 +156,21 @@ class MainWindow(QMainWindow):
     def _show_corner_logo(self) -> None:
         if self.splash:
             self.splash.deleteLater()
-        if not self._pix_small:
+            self.splash = None
+        if not self._pix_small or not getattr(self, "header_layout", None):
             return
-        self.splash = ClickableLogoLabel(self)
-        self.splash.setStyleSheet("background:transparent;")
-        self.splash.setPixmap(self._pix_small)
-        self.splash.adjustSize()
+        if self.corner_logo is None:
+            self.corner_logo = ClickableLogoLabel(self.centralWidget())
+            self.corner_logo.setStyleSheet("background:transparent;")
+            self.corner_logo.setPixmap(self._pix_small)
+            self.corner_logo.setFixedSize(self._pix_small.size())
+            self.header_layout.addWidget(self.corner_logo, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        self.corner_logo.show()
         self._logo_phase = "corner"
         self._corner_logo_visible = True
-        self._queue_corner_logo_reposition()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self.splash and self._logo_phase == "corner" and self._corner_logo_visible:
-            self._position_corner_logo()
-
-    def _queue_corner_logo_reposition(self) -> None:
-        for delay_ms in (0, 50, 250, 1000):
-            QTimer.singleShot(delay_ms, self._position_corner_logo)
-
-    def _position_corner_logo(self) -> None:
-        if not self.splash or self._logo_phase != "corner" or not self._corner_logo_visible:
-            return
-        self.splash.adjustSize()
-        self._reserve_corner_logo_space()
-        layout = self.centralWidget().layout() if self.centralWidget() else None
-        if layout:
-            layout.activate()
-        x = max(0, self.width() - self.splash.width() - 18)
-        self.splash.move(x, 4)
-        self.splash.raise_()
-        if not self.splash.isVisible():
-            self.splash.show()
-
-    def _reserve_corner_logo_space(self) -> None:
-        if not getattr(self, "header_layout", None) or not self.splash:
-            return
-        logo_space = self.splash.width() + 28
-        self.header_layout.setContentsMargins(0, 0, logo_space, 0)
 
     def _make_step_card(self, title: str, body: QWidget) -> QFrame:
         card = QFrame(); card.setObjectName("StepCard")
