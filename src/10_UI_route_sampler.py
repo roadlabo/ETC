@@ -27,6 +27,8 @@ APP_TITLE = "10 ルートファイル作成ツール"
 FOLDER_ROUTE = "10_ルート(Route)データ"
 DUPLICATE_MSG = "そのルート名は既に存在します。別名で保存してください。"
 COL_NAME, COL_CSV, COL_PITCH, COL_POINTS = range(4)
+CORNER_LOGO_HEIGHT = 86
+CORNER_LOGO_RESERVED_WIDTH = 200
 
 CYBER_QSS = """
 QMainWindow, QWidget { background:#0b0f14; color:#e6f1ff; font-family:"Segoe UI","Meiryo UI","Consolas"; font-size:12px; }
@@ -130,7 +132,12 @@ class MainWindow(QMainWindow):
         pixmap = QPixmap(str(logo_path))
         if pixmap.isNull():
             return
-        self._pix_small = pixmap.scaledToHeight(86, Qt.TransformationMode.SmoothTransformation)
+        self._pix_small = pixmap.scaledToHeight(CORNER_LOGO_HEIGHT, Qt.TransformationMode.SmoothTransformation)
+        if getattr(self, "logo_slot", None):
+            self.logo_slot.setFixedSize(
+                max(CORNER_LOGO_RESERVED_WIDTH, self._pix_small.width()),
+                CORNER_LOGO_HEIGHT,
+            )
         big = pixmap.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
         self.splash = QLabel(self)
         self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -160,11 +167,15 @@ class MainWindow(QMainWindow):
         if not self._pix_small or not getattr(self, "header_layout", None):
             return
         if self.corner_logo is None:
-            self.corner_logo = ClickableLogoLabel(self.centralWidget())
+            parent = getattr(self, "logo_slot", None) or self.centralWidget()
+            self.corner_logo = ClickableLogoLabel(parent)
             self.corner_logo.setStyleSheet("background:transparent;")
             self.corner_logo.setPixmap(self._pix_small)
             self.corner_logo.setFixedSize(self._pix_small.size())
-            self.header_layout.addWidget(self.corner_logo, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+            if getattr(self, "logo_slot_layout", None):
+                self.logo_slot_layout.addWidget(self.corner_logo, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+            else:
+                self.header_layout.addWidget(self.corner_logo, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         self.corner_logo.show()
         self._logo_phase = "corner"
         self._corner_logo_visible = True
@@ -222,7 +233,12 @@ class MainWindow(QMainWindow):
         sl.addWidget(self._make_step_card("STEP2  地図でルート指定", body2), 9)
         sl.addWidget(self._make_step_card("STEP3  ルートファイルの保存", body3), 26)
         sl.addWidget(self._make_step_card("STEP4  一括で次のルートへ", body4), 6)
-        header = QWidget(); self.header_layout = QHBoxLayout(header); self.header_layout.setContentsMargins(0, 0, 0, 0); self.header_layout.addWidget(steps, 1)
+        self.logo_slot = QWidget()
+        self.logo_slot.setFixedSize(CORNER_LOGO_RESERVED_WIDTH, CORNER_LOGO_HEIGHT)
+        self.logo_slot.setStyleSheet("background:transparent;")
+        self.logo_slot_layout = QHBoxLayout(self.logo_slot)
+        self.logo_slot_layout.setContentsMargins(0, 0, 0, 0)
+        header = QWidget(); self.header_layout = QHBoxLayout(header); self.header_layout.setContentsMargins(0, 0, 0, 0); self.header_layout.addWidget(steps, 1); self.header_layout.addWidget(self.logo_slot, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         rv.addWidget(header); rv.addSpacing(10)
         self.web = QWebEngineView(); s = self.web.settings(); s.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True); s.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
         rv.addWidget(self.web, 1)
