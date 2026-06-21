@@ -12,7 +12,7 @@ SRC_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from PyQt6.QtCore import QObject, QDate, QThread, QUrl, pyqtSignal
+from PyQt6.QtCore import QObject, QDate, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QTextCharFormat
 from PyQt6.QtWidgets import (
     QApplication,
@@ -60,6 +60,133 @@ def date_token_to_qdate(token: str) -> QDate:
 
 def qdate_to_token(qdate: QDate) -> str:
     return qdate.toString("yyyyMMdd")
+
+
+ROUTE_MAP_HTML = r"""
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Route Map</title>
+  <link rel="stylesheet" href="leaflet/leaflet.css"/>
+  <script src="leaflet/leaflet.js"></script>
+  <style>
+    html, body { height:100%; margin:0; background:#fff; overflow:hidden; font-family:"Segoe UI","Meiryo UI",sans-serif; }
+    #map, #fallback { position:absolute; inset:0; background:#fff; }
+    #fallback svg { width:100%; height:100%; display:block; }
+    #fallback { display:none; }
+    .panel { position:absolute; z-index:1000; left:10px; top:10px; background:#ffffffee; border-radius:6px; padding:8px 10px; box-shadow:0 4px 18px #0003; font-weight:700; }
+    .leaflet-container { background:#fff; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div id="fallback"><svg id="fallbackSvg" role="img" aria-label="route map"></svg></div>
+<div class="panel">ルートマップ</div>
+<script>
+const COLORS = ['#00a2ff','#22c55e','#f97316','#a855f7','#ef4444','#14b8a6','#eab308','#ec4899','#84cc16','#6366f1'];
+let map = null;
+let routeLayer = null;
+let lastRoutes = [];
+
+function validPoint(pt) {
+  return Array.isArray(pt) && Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1]));
+}
+function allPoints(routes) {
+  return routes.flatMap(route => (route.coords || []).filter(validPoint).map(pt => [Number(pt[0]), Number(pt[1])]));
+}
+function showFallback(routes) {
+  lastRoutes = routes || lastRoutes || [];
+  document.getElementById('map').style.display = 'none';
+  const fallback = document.getElementById('fallback');
+  const svg = document.getElementById('fallbackSvg');
+  fallback.style.display = 'block';
+  svg.replaceChildren();
+  const width = Math.max(svg.clientWidth || window.innerWidth, 200);
+  const height = Math.max(svg.clientHeight || window.innerHeight, 200);
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  const pts = allPoints(lastRoutes);
+  if (!pts.length) return;
+  let minLat = Math.min(...pts.map(pt => pt[0]));
+  let maxLat = Math.max(...pts.map(pt => pt[0]));
+  let minLon = Math.min(...pts.map(pt => pt[1]));
+  let maxLon = Math.max(...pts.map(pt => pt[1]));
+  if (minLat === maxLat) { minLat -= 0.001; maxLat += 0.001; }
+  if (minLon === maxLon) { minLon -= 0.001; maxLon += 0.001; }
+  const pad = 34;
+  const project = ([lat, lon]) => {
+    const x = pad + (lon - minLon) / (maxLon - minLon) * (width - pad * 2);
+    const y = pad + (maxLat - lat) / (maxLat - minLat) * (height - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  };
+  lastRoutes.forEach((route, idx) => {
+    const coords = (route.coords || []).filter(validPoint).map(pt => [Number(pt[0]), Number(pt[1])]);
+    if (coords.length < 2) return;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    line.setAttribute('points', coords.map(project).join(' '));
+    line.setAttribute('fill', 'none');
+    line.setAttribute('stroke', COLORS[idx % COLORS.length]);
+    line.setAttribute('stroke-width', '4.5');
+    line.setAttribute('stroke-linecap', 'round');
+    line.setAttribute('stroke-linejoin', 'round');
+    line.setAttribute('opacity', '0.95');
+    svg.appendChild(line);
+  });
+}
+function initMap() {
+  if (typeof L === 'undefined') {
+    showFallback(lastRoutes);
+    return false;
+  }
+  if (map) return true;
+  try {
+    map = L.map('map', { zoomControl:true, preferCanvas:true }).setView([35.069095, 134.004512], 12);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors © CARTO'
+    }).addTo(map);
+    routeLayer = L.layerGroup().addTo(map);
+    return true;
+  } catch (e) {
+    showFallback(lastRoutes);
+    return false;
+  }
+}
+function setRoutes(routes) {
+  lastRoutes = routes || [];
+  showFallback(lastRoutes);
+  if (!initMap()) return false;
+  try {
+    document.getElementById('map').style.display = 'block';
+    document.getElementById('fallback').style.display = 'none';
+    routeLayer.clearLayers();
+    const bounds = [];
+    lastRoutes.forEach((route, idx) => {
+      const coords = (route.coords || []).filter(validPoint).map(pt => [Number(pt[0]), Number(pt[1])]);
+      if (coords.length < 2) return;
+      L.polyline(coords, { color: COLORS[idx % COLORS.length], weight: 5, opacity: 0.9 })
+        .bindTooltip(`${idx + 1}. ${route.name}<br>延長 ${route.length_km} km / 点数 ${route.points}`)
+        .addTo(routeLayer);
+      coords.forEach(pt => bounds.push(pt));
+    });
+    if (bounds.length) map.fitBounds(bounds, { padding:[24,24] });
+    setTimeout(() => map.invalidateSize(), 0);
+    return true;
+  } catch (e) {
+    showFallback(lastRoutes);
+    return false;
+  }
+}
+window.addEventListener('resize', () => {
+  if (document.getElementById('fallback').style.display !== 'none') showFallback(lastRoutes);
+  if (map) setTimeout(() => map.invalidateSize(), 0);
+});
+window._routePerformanceMap = { initMap, setRoutes, showFallback };
+</script>
+</body>
+</html>
+"""
 
 
 class ProjectScanWorker(QObject):
@@ -719,11 +846,13 @@ class MainWindow(QMainWindow):
     def load_route_map(self, routes: list[dict[str, object]]) -> None:
         if self.web is None or not routes:
             return
-        html = self.build_route_map_html(routes)
-        self.web.setHtml(html, QUrl.fromLocalFile(str(SRC_DIR) + "/"))
+        base = QUrl.fromLocalFile(str(SRC_DIR) + "/")
+        self.web.setHtml(ROUTE_MAP_HTML, base)
+        payload = self.route_map_payload(routes)
+        self.run_route_map_js(f"window._routePerformanceMap.setRoutes({json.dumps(payload, ensure_ascii=False)});")
 
-    def build_route_map_html(self, routes: list[dict[str, object]]) -> str:
-        payload = [
+    def route_map_payload(self, routes: list[dict[str, object]]) -> list[dict[str, object]]:
+        return [
             {
                 "name": route.get("name", ""),
                 "length_km": route.get("length_km", 0),
@@ -732,127 +861,26 @@ class MainWindow(QMainWindow):
             }
             for route in routes
         ]
-        leaflet_css = (SRC_DIR / "leaflet" / "leaflet.css").read_text(encoding="utf-8")
-        leaflet_js = (SRC_DIR / "leaflet" / "leaflet.js").read_text(encoding="utf-8")
-        html = f"""<!doctype html>
-<html lang="ja">
-<head>
-  <meta charset="utf-8">
-  <title>Route Map</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    {leaflet_css}
-    html, body {{ height:100%; margin:0; background:#fff; overflow:hidden; }}
-    body {{ font-family:"Segoe UI","Meiryo UI",sans-serif; }}
-    #map {{ position:absolute; inset:0; background:#fff; }}
-    #leafletMap {{ position:absolute; inset:0; display:none; }}
-    svg {{ width:100%; height:100%; display:block; }}
-    .panel {{ position:absolute; z-index:1000; left:10px; top:10px; background:#ffffffee; border-radius:6px; padding:8px 10px; font-family:"Segoe UI","Meiryo UI",sans-serif; box-shadow:0 4px 18px #0003; }}
-    .empty {{ position:absolute; inset:0; display:grid; place-items:center; color:#475569; }}
-  </style>
-  <script>{leaflet_js}</script>
-</head>
-<body>
-<div id="map"><div id="leafletMap"></div><svg id="svg" role="img" aria-label="route map"></svg></div>
-<div class="panel"><b>ルートマップ</b></div>
-<script>
-const ROUTES = {json.dumps(payload, ensure_ascii=False)};
-const COLORS = ['#00a2ff','#22c55e','#f97316','#a855f7','#ef4444','#14b8a6','#eab308','#ec4899','#84cc16','#6366f1'];
-const svg = document.getElementById('svg');
-let leafletStarted = false;
-function validPoint(pt) {{
-  return Array.isArray(pt) && Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1]));
-}}
-function draw() {{
-  svg.replaceChildren();
-  const width = Math.max(svg.clientWidth || window.innerWidth, 200);
-  const height = Math.max(svg.clientHeight || window.innerHeight, 200);
-  svg.setAttribute('viewBox', `0 0 ${{width}} ${{height}}`);
-  const all = ROUTES.flatMap(route => (route.coords || []).filter(validPoint).map(pt => [Number(pt[0]), Number(pt[1])]));
-  if (!all.length) {{
-    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    text.setAttribute('x', width / 2); text.setAttribute('y', height / 2);
-    text.setAttribute('text-anchor', 'middle'); text.setAttribute('fill', '#475569');
-    text.textContent = '表示できる座標がありません';
-    svg.appendChild(text);
-    return;
-  }}
-  let minLat = Math.min(...all.map(pt => pt[0]));
-  let maxLat = Math.max(...all.map(pt => pt[0]));
-  let minLon = Math.min(...all.map(pt => pt[1]));
-  let maxLon = Math.max(...all.map(pt => pt[1]));
-  if (minLat === maxLat) {{ minLat -= 0.001; maxLat += 0.001; }}
-  if (minLon === maxLon) {{ minLon -= 0.001; maxLon += 0.001; }}
-  const pad = 34;
-  const project = ([lat, lon]) => {{
-    const x = pad + (lon - minLon) / (maxLon - minLon) * (width - pad * 2);
-    const y = pad + (maxLat - lat) / (maxLat - minLat) * (height - pad * 2);
-    return `${{x.toFixed(1)}},${{y.toFixed(1)}}`;
-  }};
-  ROUTES.forEach((route, idx) => {{
-    const coords = (route.coords || []).filter(validPoint).map(pt => [Number(pt[0]), Number(pt[1])]);
-    if (coords.length < 2) return;
-    const shadow = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-    shadow.setAttribute('points', coords.map(project).join(' '));
-    shadow.setAttribute('fill', 'none');
-    shadow.setAttribute('stroke', '#ffffff');
-    shadow.setAttribute('stroke-width', '9');
-    shadow.setAttribute('stroke-linecap', 'round');
-    shadow.setAttribute('stroke-linejoin', 'round');
-    svg.appendChild(shadow);
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-    line.setAttribute('points', coords.map(project).join(' '));
-    line.setAttribute('fill', 'none');
-    line.setAttribute('stroke', COLORS[idx % COLORS.length]);
-    line.setAttribute('stroke-width', '4.5');
-    line.setAttribute('stroke-linecap', 'round');
-    line.setAttribute('stroke-linejoin', 'round');
-    line.setAttribute('opacity', '0.95');
-    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-    title.textContent = `${{idx + 1}}. ${{route.name}} / ${{route.length_km}} km / ${{route.points}}点`;
-    line.appendChild(title);
-    svg.appendChild(line);
-  }});
-}}
-window.addEventListener('resize', draw);
-draw();
-function drawLeaflet() {{
-  if (leafletStarted || typeof L === 'undefined') return;
-  leafletStarted = true;
-  const all = ROUTES.flatMap(route => (route.coords || []).filter(validPoint).map(pt => [Number(pt[0]), Number(pt[1])]));
-  if (!all.length) return;
-  try {{
-    const leafletMap = document.getElementById('leafletMap');
-    leafletMap.style.display = 'block';
-    svg.style.display = 'none';
-    const center = [
-      all.reduce((sum, pt) => sum + pt[0], 0) / all.length,
-      all.reduce((sum, pt) => sum + pt[1], 0) / all.length,
-    ];
-    const map = L.map('leafletMap').setView(center, 12);
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }}).addTo(map);
-    const bounds = [];
-    ROUTES.forEach((route, idx) => {{
-      const coords = (route.coords || []).filter(validPoint).map(pt => [Number(pt[0]), Number(pt[1])]);
-      if (coords.length < 2) return;
-      L.polyline(coords, {{ color: COLORS[idx % COLORS.length], weight: 5, opacity: 0.9 }})
-        .bindTooltip(`${{idx + 1}}. ${{route.name}}<br>延長 ${{route.length_km}} km / 点数 ${{route.points}}`)
-        .addTo(map);
-      coords.forEach(pt => bounds.push(pt));
-    }});
-    if (bounds.length) map.fitBounds(bounds, {{ padding: [24, 24] }});
-    setTimeout(() => map.invalidateSize(), 0);
-  }} catch (error) {{
-    document.getElementById('leafletMap').style.display = 'none';
-    svg.style.display = 'block';
-    draw();
-  }}
-}}
-drawLeaflet();
-</script>
-</body>
-</html>"""
-        return html
+
+    def run_route_map_js(self, js: str, retry_ms: int = 120) -> None:
+        if self.web is None:
+            return
+        wrapped = (
+            "(function(){"
+            "if (window._routePerformanceMap) {"
+            f"{js}"
+            "return true;"
+            "}"
+            "return false;"
+            "})();"
+        )
+
+        def callback(ok):
+            if ok:
+                return
+            QTimer.singleShot(retry_ms, lambda: self.web.page().runJavaScript(wrapped, callback))
+
+        self.web.page().runJavaScript(wrapped, callback)
 
     def open_viewer(self) -> None:
         if not self.result:
