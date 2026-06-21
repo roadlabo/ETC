@@ -79,6 +79,44 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             bucket_one_events = [row for row in rows if row["bucket_idx"] == "1"]
             self.assertEqual(len(bucket_one_events), 1)
 
+    def test_daily_hourly_summary_and_viewer_can_be_rebuilt_later(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            route_dir = project / route_performance.ROUTE_DIR_CANDIDATES[0]
+            trip_dir = project / route_performance.SCREENING_DIR_CANDIDATES[0]
+            route_dir.mkdir(parents=True)
+            trip_dir.mkdir(parents=True)
+            write_route(route_dir / "route_a.csv", step=0.0005)
+            write_trip(trip_dir / "trip.csv", [("08:00:00", 139.0), ("08:04:00", 139.002)])
+
+            result = route_performance.analyze_project(project, allowed_dates={"20250102"}, allowed_hours={8})
+            daily_csv = Path(result["results"][0]["daily_hourly_csv"])
+            rebuilt_viewer = route_performance.build_viewer_from_output(result["output_dir"])
+
+            self.assertTrue(daily_csv.exists())
+            with daily_csv.open("r", encoding="utf-8-sig", newline="") as fh:
+                rows = list(csv.DictReader(fh))
+            self.assertTrue(rows)
+            self.assertTrue(all(row["date"] == "20250102" for row in rows))
+            self.assertTrue(Path(rebuilt_viewer).exists())
+
+    def test_project_paths_accept_fullwidth_screening_number_and_japanese_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            route_dir = project / "10_ルート(Route)データ"
+            trip_dir = project / "20_第２スクリーニング(ルート)"
+            out_dir = project / "30_ルートパフォーマンス"
+            route_dir.mkdir(parents=True)
+            trip_dir.mkdir()
+            out_dir.mkdir()
+            write_route(route_dir / "route_a.csv")
+
+            resolved_trip, resolved_route, resolved_out = route_performance.resolve_project_paths(project)
+
+            self.assertEqual(resolved_trip, trip_dir)
+            self.assertEqual(resolved_route, route_dir)
+            self.assertEqual(resolved_out, out_dir)
+
 
 if __name__ == "__main__":
     unittest.main()

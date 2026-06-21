@@ -33,10 +33,16 @@ ROUTE_DIR_CANDIDATES = [
 SCREENING_DIR_CANDIDATES = [
     "20_第2スクリーニング(ルート)",
     "20_第2スクリーニング",
+    "20_第２スクリーニング(ルート)",
+    "20_第２スクリーニング",
     "20_隨ｬ・偵せ繧ｯ繝ｪ繝ｼ繝九Φ繧ｰ(繝ｫ繝ｼ繝・",
     "20_隨ｬ・偵せ繧ｯ繝ｪ繝ｼ繝九Φ繧ｰ",
 ]
 OUTPUT_DIR_NAME = "30_route_performance"
+OUTPUT_DIR_CANDIDATES = [
+    "30_route_performance",
+    "30_ルートパフォーマンス",
+]
 
 ROUTE_LON_COL = 14
 ROUTE_LAT_COL = 15
@@ -263,6 +269,7 @@ class RouteAggregator:
         self.time_values: dict[tuple[str, int, str, int], list[float]] = defaultdict(list)
         self.counts: dict[tuple[str, int, str, int], int] = defaultdict(int)
         self.seen_trip_bucket: set[tuple[str, int]] = set()
+        self.date_tokens: set[str] = set()
         self.events: list[Event] = []
 
     def add_event(self, event: Event) -> bool:
@@ -272,18 +279,23 @@ class RouteAggregator:
         self.seen_trip_bucket.add(unique_key)
         self.events.append(event)
         sec = event.pass_dt.hour * 3600 + event.pass_dt.minute * 60 + event.pass_dt.second + event.pass_dt.microsecond / 1_000_000
-        for period in period_keys(event.pass_dt):
+        date_token = event.pass_dt.strftime("%Y%m%d")
+        self.date_tokens.add(date_token)
+        for period in period_keys(event.pass_dt) + [date_token]:
             key = (event.direction, event.bucket_idx, period, event.pass_dt.hour)
             self.speed_values[key].append(event.speed_kmh)
             self.time_values[key].append(sec)
             self.counts[key] += 1
         return True
 
+    def summary_periods(self) -> list[str]:
+        return PERIODS + sorted(self.date_tokens)
+
     def summary_rows(self) -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
         for i, kp in enumerate(self.route.kp_m):
             for direction in DIRECTIONS:
-                for period in PERIODS:
+                for period in self.summary_periods():
                     for hour in range(24):
                         key = (direction, i, period, hour)
                         speeds = self.speed_values.get(key, [])
@@ -299,6 +311,7 @@ class RouteAggregator:
                                 "direction": direction,
                                 "direction_label": DIRECTION_LABEL[direction],
                                 "period": period,
+                                "date": period if re.fullmatch(r"\d{8}", period) else "",
                                 "hour": hour,
                                 "avg_speed_kmh": round(sum(speeds) / len(speeds), 1) if speeds else "",
                                 "median_speed_kmh": round(statistics.median(speeds), 1) if speeds else "",
@@ -310,7 +323,7 @@ class RouteAggregator:
         return rows
 
     def pivot(self, direction: str, metric: str) -> pd.DataFrame:
-        columns = [f"{period}_{hour:02d}" for period in PERIODS for hour in range(24)]
+        columns = [f"{period}_{hour:02d}" for period in self.summary_periods() for hour in range(24)]
         data: list[dict[str, object]] = []
         for i, kp in enumerate(self.route.kp_m):
             row: dict[str, object] = {
@@ -319,7 +332,7 @@ class RouteAggregator:
                 "lon": self.route.lons[i],
                 "lat": self.route.lats[i],
             }
-            for period in PERIODS:
+            for period in self.summary_periods():
                 for hour in range(24):
                     col = f"{period}_{hour:02d}"
                     key = (direction, i, period, hour)
@@ -350,7 +363,7 @@ def resolve_project_paths(project_dir: str | Path) -> tuple[Path, Path, Path]:
     project = Path(project_dir)
     route_dir = find_first_existing(project, ROUTE_DIR_CANDIDATES)
     screening_dir = find_first_existing(project, SCREENING_DIR_CANDIDATES)
-    out_dir = project / OUTPUT_DIR_NAME
+    out_dir = next((project / name for name in OUTPUT_DIR_CANDIDATES if (project / name).exists()), project / OUTPUT_DIR_NAME)
     out_dir.mkdir(parents=True, exist_ok=True)
     return screening_dir, route_dir, out_dir
 
@@ -476,17 +489,21 @@ def analyze_route(
     route_dir = Path(output_dir) / safe_name(route.name)
     route_dir.mkdir(parents=True, exist_ok=True)
     summary_csv = route_dir / f"{safe_name(route.name)}_performance.csv"
+    daily_hourly_csv = route_dir / f"{safe_name(route.name)}_daily_hourly_performance.csv"
     event_csv = route_dir / f"{safe_name(route.name)}_events.csv"
     xlsx_path = route_dir / f"{safe_name(route.name)}_performance.xlsx"
     json_path = route_dir / f"{safe_name(route.name)}_viewer.json"
 
     summary_df = pd.DataFrame(aggregator.summary_rows())
+    daily_hourly_df = summary_df[summary_df["date"].astype(str).str.fullmatch(r"\d{8}", na=False)].copy()
     events_df = pd.DataFrame([event.__dict__ | {"pass_dt": event.pass_dt.isoformat()} for event in aggregator.events])
     summary_df.to_csv(summary_csv, index=False, encoding="utf-8-sig")
+    daily_hourly_df.to_csv(daily_hourly_csv, index=False, encoding="utf-8-sig")
     events_df.to_csv(event_csv, index=False, encoding="utf-8-sig")
 
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
         summary_df.to_excel(writer, sheet_name="summary_long", index=False)
+        daily_hourly_df.to_excel(writer, sheet_name="daily_hourly", index=False)
         events_df.to_excel(writer, sheet_name="events", index=False)
         for direction in DIRECTIONS:
             aggregator.pivot(direction, "speed").to_excel(writer, sheet_name=f"{DIRECTION_LABEL[direction]}_速度", index=False)
@@ -511,6 +528,7 @@ def analyze_route(
         "route_path": str(route.path),
         "xlsx": str(xlsx_path),
         "summary_csv": str(summary_csv),
+        "daily_hourly_csv": str(daily_hourly_csv),
         "events_csv": str(event_csv),
         "viewer_json": str(json_path),
         "events": len(aggregator.events),
@@ -591,10 +609,16 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
 </div>
 <script>
 const DATA = {json.dumps(payloads, ensure_ascii=False)};
+const DATE_PERIODS = Array.from(new Set(DATA.flatMap(payload => payload.summary.map(r => String(r.period || '')).filter(p => /^\\d{{8}}$/.test(p))))).sort();
 const map = L.map('map').setView([{center_lat:.7f}, {center_lon:.7f}], 13);
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }}).addTo(map);
-const state = {{metric:'speed', period:'平日', hour:8}};
+const state = {{metric:'speed', period: DATE_PERIODS[0] || '平日', hour:8}};
 let layers = [];
+function periodLabel(period) {{
+  period = String(period);
+  if (/^\\d{{8}}$/.test(period)) return `${{period.slice(0,4)}}-${{period.slice(4,6)}}-${{period.slice(6,8)}}`;
+  return period;
+}}
 function offsetPoint(a, b, side, meters) {{
   const lat = (a.lat + b.lat) / 2;
   const mLat = 111320;
@@ -657,7 +681,7 @@ function buttons(id, values, key) {{
   }});
 }}
 buttons('metric', [{{label:'速度', value:'speed'}}, {{label:'交通量', value:'volume'}}], 'metric');
-buttons('period', ['平日','休日','月','火','水','木','金','土','日'], 'period');
+buttons('period', DATE_PERIODS.map(d => ({{label: periodLabel(d), value: d}})).concat(['平日','休日','月','火','水','木','金','土','日'].map(p => ({{label:p, value:p}}))), 'period');
 buttons('hours', Array.from({{length:24}}, (_, i) => ({{label:String(i).padStart(2,'0'), value:i}})), 'hour');
 redraw();
 </script>
@@ -665,6 +689,18 @@ redraw();
 </html>"""
     html_path.write_text(html, encoding="utf-8")
     return html_path
+
+
+def discover_viewer_results(output_dir: str | Path) -> list[dict[str, object]]:
+    out_dir = Path(output_dir)
+    return [{"viewer_json": str(path)} for path in sorted(out_dir.glob("*/*_viewer.json"))]
+
+
+def build_viewer_from_output(output_dir: str | Path) -> Path:
+    results = discover_viewer_results(output_dir)
+    if not results:
+        raise FileNotFoundError(f"viewer JSONが見つかりません: {Path(output_dir)}")
+    return build_viewer(output_dir, results)
 
 
 def analyze_project(
@@ -732,11 +768,18 @@ def parse_hours(value: str | None) -> Optional[set[int]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ETC2.0 route performance aggregation")
-    parser.add_argument("--project", required=True, help="Project folder containing step 10 route and step 20 trip outputs")
+    parser.add_argument("--project", help="Project folder containing step 10 route and step 20 trip outputs")
+    parser.add_argument("--build-viewer", help="Existing 30_route_performance output folder; rebuild viewer without reanalysis")
     parser.add_argument("--dates", help="Target dates, comma-separated YYYYMMDD")
     parser.add_argument("--hours", help="Target hours, comma-separated or ranges, e.g. 7,8,17-19")
     parser.add_argument("--recursive", action="store_true", default=True)
     args = parser.parse_args()
+    if args.build_viewer:
+        viewer = build_viewer_from_output(args.build_viewer)
+        print(json.dumps({"viewer": str(viewer)}, ensure_ascii=False, indent=2))
+        return
+    if not args.project:
+        parser.error("--project or --build-viewer is required")
     result = analyze_project(args.project, args.recursive, parse_dates(args.dates), parse_hours(args.hours))
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
