@@ -913,14 +913,27 @@ def analyze_project(
         if progress_callback:
             progress_callback(percent, message, stats)
 
+    def csv_scan_percent(file_index: int) -> int:
+        if not files:
+            return 60
+        return max(1, min(60, math.ceil(60 * file_index / len(files))))
+
     emit(
         0,
         f"CSV走査を開始します: {len(files)}ファイル / {len(routes)}路線",
-        {"phase": "CSV走査", "total_files": len(files), "total_routes": len(routes), "current_file": 0, "current_route": 0},
+        {
+            "phase": "CSV走査",
+            "total_files": len(files),
+            "total_routes": len(routes),
+            "current_file": 0,
+            "current_route": 0,
+            "route_names": [route.name for route in routes],
+            "route_valid_points": list(valid_points_by_route),
+        },
     )
     for file_index, path in enumerate(files, start=1):
         emit(
-            int(60 * (file_index - 1) / max(len(files), 1)),
+            csv_scan_percent(file_index),
             f"CSV走査中 {file_index}/{len(files)}",
             {
                 "phase": "CSV走査",
@@ -930,6 +943,8 @@ def analyze_project(
                 "total_routes": len(routes),
                 "rows": total_rows,
                 "valid_points": sum(valid_points_by_route),
+                "route_names": [route.name for route in routes],
+                "route_valid_points": list(valid_points_by_route),
                 "events": sum(len(agg.events) for agg in aggregators),
             },
         )
@@ -955,6 +970,23 @@ def analyze_project(
                     continue
                 projected_by_route[route_index][trip].append((dt, projection.s_m, projection.off_m))
                 valid_points_by_route[route_index] += 1
+            if total_rows % 20000 == 0:
+                emit(
+                    csv_scan_percent(file_index),
+                    f"CSV走査中 {file_index}/{len(files)}",
+                    {
+                        "phase": "CSV走査",
+                        "current_file": file_index,
+                        "total_files": len(files),
+                        "current_route": 0,
+                        "total_routes": len(routes),
+                        "rows": total_rows,
+                        "valid_points": sum(valid_points_by_route),
+                        "route_names": [route.name for route in routes],
+                        "route_valid_points": list(valid_points_by_route),
+                        "events": sum(len(agg.events) for agg in aggregators),
+                    },
+                )
 
     results: list[dict[str, object]] = []
     for route_index, (route, aggregator, projected, factor) in enumerate(zip(routes, aggregators, projected_by_route, factors), start=1):
@@ -973,6 +1005,8 @@ def analyze_project(
                     "total_files": len(files),
                     "rows": total_rows,
                     "valid_points": valid_points_by_route[route_index - 1],
+                    "route_names": [route.name for route in routes],
+                    "route_valid_points": list(valid_points_by_route),
                     "events": len(aggregator.events),
                 }
             )
@@ -990,6 +1024,8 @@ def analyze_project(
                 "total_files": len(files),
                 "rows": total_rows,
                 "valid_points": valid_points_by_route[route_index - 1],
+                "route_names": [route.name for route in routes],
+                "route_valid_points": list(valid_points_by_route),
                 "events": len(aggregator.events),
             },
         )
@@ -1017,13 +1053,40 @@ def analyze_project(
                 "total_files": len(files),
                 "rows": total_rows,
                 "valid_points": valid_points_by_route[route_index - 1],
+                "route_names": [route.name for route in routes],
+                "route_valid_points": list(valid_points_by_route),
                 "events": results[-1]["events"],
                 "trips": results[-1]["trips"],
             },
         )
-    emit(98, "ビューアを作成中", {"phase": "ビューア作成", "current_file": len(files), "total_files": len(files), "current_route": len(routes), "total_routes": len(routes)})
+    emit(
+        98,
+        "ビューアを作成中",
+        {
+            "phase": "ビューア作成",
+            "current_file": len(files),
+            "total_files": len(files),
+            "current_route": len(routes),
+            "total_routes": len(routes),
+            "route_names": [route.name for route in routes],
+            "route_valid_points": list(valid_points_by_route),
+        },
+    )
     viewer = build_viewer(output_dir, results)
-    emit(100, "解析完了", {"phase": "解析完了", "current_file": len(files), "total_files": len(files), "current_route": len(routes), "total_routes": len(routes), "rows": total_rows})
+    emit(
+        100,
+        "解析完了",
+        {
+            "phase": "解析完了",
+            "current_file": len(files),
+            "total_files": len(files),
+            "current_route": len(routes),
+            "total_routes": len(routes),
+            "rows": total_rows,
+            "route_names": [route.name for route in routes],
+            "route_valid_points": list(valid_points_by_route),
+        },
+    )
     return {"project_dir": str(project_dir), "input_dir": str(input_dir), "route_dir": str(route_dir), "output_dir": str(output_dir), "viewer": str(viewer), "results": results}
 
 

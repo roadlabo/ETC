@@ -5,7 +5,7 @@ import importlib.util
 import json
 import subprocess
 import sys
-import tempfile
+import time
 from pathlib import Path
 
 SRC_DIR = Path(__file__).resolve().parent
@@ -38,8 +38,10 @@ from PyQt6.QtWidgets import (
 )
 
 try:
+    from PyQt6.QtWebEngineCore import QWebEngineSettings
     from PyQt6.QtWebEngineWidgets import QWebEngineView
 except Exception:  # pragma: no cover
+    QWebEngineSettings = None
     QWebEngineView = None
 
 PERF_PATH = SRC_DIR / "30_route_performance.py"
@@ -155,10 +157,10 @@ class MainWindow(QMainWindow):
         self.hour_checks: dict[int, QCheckBox] = {}
         self.stats: dict[str, QLabel] = {}
         self.result: dict | None = None
-        self.route_map_path: Path | None = None
         self._syncing_calendars = False
         self._last_scan_log_bucket = -1
         self._last_analysis_log_bucket = -1
+        self.analysis_start_time: float | None = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -218,6 +220,10 @@ class MainWindow(QMainWindow):
         right = self._box("ルートマップ")
         if QWebEngineView is not None:
             self.web = QWebEngineView()
+            if QWebEngineSettings is not None:
+                settings = self.web.settings()
+                settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
+                settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
             right.layout().addWidget(self.web, 1)
         else:
             self.web = None
@@ -265,7 +271,7 @@ class MainWindow(QMainWindow):
             ("phase", "PHASE", "-"),
             ("files", "FILES", "0 / 0"),
             ("rows", "ROWS", "0"),
-            ("routes", "ROUTES", "0"),
+            ("time", "TIME", "00:00 / --:--"),
             ("events", "EVENTS", "0"),
         ]
         for key, caption, initial in specs:
@@ -337,13 +343,15 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_route_box(self) -> QFrame:
-        box = self._box("路線別 拡大係数 (20路線表示)")
-        self.route_table = QTableWidget(0, 4)
-        self.route_table.setHorizontalHeaderLabels(["ルート名", "延長[km]", "点数", "拡大係数"])
+        box = self._box("路線別 拡大係数")
+        self.route_table = QTableWidget(0, 6)
+        self.route_table.setHorizontalHeaderLabels(["ルート名", "延長[km]", "点数", "有効点", "HIT比", "拡大係数"])
         self.route_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.route_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.route_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.route_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.route_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.route_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         self.route_table.verticalHeader().setDefaultSectionSize(28)
         box.layout().addWidget(self.route_table)
         buttons = QHBoxLayout()
@@ -418,8 +426,6 @@ class MainWindow(QMainWindow):
         self.update_stat("phase", stats.get("phase", "-"))
         self.update_stat("files", f"{file_index} / {file_total}" if file_total else "0 / 0")
         self.update_stat("rows", f"{rows:,}")
-        self.update_stat("dates", str(dates))
-        self.update_stat("routes", f"{routes} / {route_total}" if route_total else str(routes))
         bucket = percent // 5
         if bucket != self._last_scan_log_bucket or percent >= 100:
             self._last_scan_log_bucket = bucket
@@ -437,8 +443,7 @@ class MainWindow(QMainWindow):
         self.update_stat("phase", "読込完了")
         self.update_stat("files", "解析時に読込")
         self.update_stat("rows", "解析時に集計")
-        self.update_stat("dates", "ビューアで選択")
-        self.update_stat("routes", str(len(routes)))
+        self.update_stat("time", "00:00 / --:--")
         self.progress_label.setText(f"ルート読込完了: {len(routes)}路線。拡大係数を確認してから解析開始してください。")
         self.append_log(self.progress_label.text())
         self.load_route_map(routes)
@@ -463,11 +468,17 @@ class MainWindow(QMainWindow):
         self.route_table.setItem(row, 0, QTableWidgetItem(str(route.get("name", ""))))
         self.route_table.setItem(row, 1, QTableWidgetItem(f"{float(route.get('length_km', 0.0)):.3f}"))
         self.route_table.setItem(row, 2, QTableWidgetItem(str(route.get("points", 0))))
+        self.route_table.setItem(row, 3, QTableWidgetItem("0"))
+        hit_bar = QProgressBar()
+        hit_bar.setRange(0, 100)
+        hit_bar.setValue(0)
+        hit_bar.setFormat("0%")
+        self.route_table.setCellWidget(row, 4, hit_bar)
         spin = QDoubleSpinBox()
         spin.setRange(0.0, 1000000.0)
         spin.setDecimals(3)
         spin.setValue(1.0)
-        self.route_table.setCellWidget(row, 3, spin)
+        self.route_table.setCellWidget(row, 5, spin)
 
     def sync_calendar_b(self, year: int, month: int) -> None:
         if self._syncing_calendars:
@@ -520,12 +531,10 @@ class MainWindow(QMainWindow):
         else:
             self.selected_date_tokens.add(token)
         self.refresh_calendar_formats()
-        self.update_stat("dates", f"{len(self.selected_date_tokens)} / {len(self.available_dates)}")
 
     def set_all_dates(self, checked: bool) -> None:
         self.selected_date_tokens = set(self.available_dates) if checked else set()
         self.refresh_calendar_formats()
-        self.update_stat("dates", f"{len(self.selected_date_tokens)} / {len(self.available_dates)}")
 
     def set_hours(self, hours) -> None:
         hours = set(hours)
@@ -545,7 +554,7 @@ class MainWindow(QMainWindow):
         factors: dict[str, float] = {}
         for row in range(self.route_table.rowCount()):
             name_item = self.route_table.item(row, 0)
-            spin = self.route_table.cellWidget(row, 3)
+            spin = self.route_table.cellWidget(row, 5)
             if name_item and isinstance(spin, QDoubleSpinBox):
                 factors[name_item.text()] = spin.value()
         return factors
@@ -576,7 +585,7 @@ class MainWindow(QMainWindow):
 
     def load_expansion_factors(self) -> None:
         for row in range(self.route_table.rowCount()):
-            spin = self.route_table.cellWidget(row, 3)
+            spin = self.route_table.cellWidget(row, 5)
             if isinstance(spin, QDoubleSpinBox) and not spin.isEnabled():
                 QMessageBox.warning(self, "読込不可", "解析中は拡大係数を変更できません。")
                 return
@@ -603,7 +612,7 @@ class MainWindow(QMainWindow):
         applied = 0
         for row in range(self.route_table.rowCount()):
             name_item = self.route_table.item(row, 0)
-            spin = self.route_table.cellWidget(row, 3)
+            spin = self.route_table.cellWidget(row, 5)
             if name_item and isinstance(spin, QDoubleSpinBox) and name_item.text() in loaded:
                 spin.setValue(loaded[name_item.text()])
                 applied += 1
@@ -611,7 +620,7 @@ class MainWindow(QMainWindow):
 
     def set_factor_inputs_enabled(self, enabled: bool) -> None:
         for row in range(self.route_table.rowCount()):
-            spin = self.route_table.cellWidget(row, 3)
+            spin = self.route_table.cellWidget(row, 5)
             if isinstance(spin, QDoubleSpinBox):
                 spin.setEnabled(enabled)
 
@@ -633,6 +642,7 @@ class MainWindow(QMainWindow):
         self.viewer_button.setEnabled(False)
         self.set_factor_inputs_enabled(False)
         self.max_off_route_spin.setEnabled(False)
+        self.analysis_start_time = time.monotonic()
         self.progress.setValue(0)
         self.progress_label.setText("解析準備中")
         self.append_log(f"解析を開始しました。第2スクリーニングCSVを読み込み、全日・全時間を一度だけ集計します。離れ閾値={self.max_off_route_spin.value():.1f}m")
@@ -648,22 +658,29 @@ class MainWindow(QMainWindow):
         self.thread.start()
 
     def update_analysis_progress(self, percent: int, message: str, stats: dict) -> None:
-        self.progress.setValue(percent)
+        file_index = int(stats.get("current_file", 0) or 0)
+        file_total = int(stats.get("total_files", 0) or 0)
+        visual_percent = percent
+        if file_total and file_index:
+            file_percent = max(1, min(100, int(file_index / file_total * 100)))
+            if str(stats.get("phase", "")).startswith("CSV"):
+                visual_percent = file_percent
+            else:
+                visual_percent = max(visual_percent, file_percent)
+        self.progress.setValue(visual_percent)
         route = stats.get("current_route_name") or stats.get("route") or "-"
         events = int(stats.get("events", 0))
         valid = int(stats.get("valid_points", 0))
         trips = int(stats.get("trips", stats.get("raw_trips", 0)))
-        route_index = int(stats.get("current_route", 0) or 0)
-        route_total = int(stats.get("total_routes", 0) or 0)
-        file_index = int(stats.get("current_file", 0) or 0)
-        file_total = int(stats.get("total_files", 0) or 0)
+        elapsed, remaining = self.elapsed_remaining_text(visual_percent)
+        self.update_route_hit_bars(stats.get("route_valid_points", []))
         self.progress_label.setText(
-            f"解析中: ルート {route_index}/{route_total} / CSV {file_index}/{file_total} / 有効点 {valid:,} / 投入 {events:,}"
+            f"解析中: CSV {file_index}/{file_total} / 有効点 {valid:,} / 投入 {events:,} / 経過 {elapsed} / 残り {remaining}"
         )
         self.update_stat("phase", "解析中")
         self.update_stat("files", f"{file_index} / {file_total}")
-        self.update_stat("routes", f"{route_index} / {route_total}")
         self.update_stat("rows", f"{valid:,}")
+        self.update_stat("time", f"{elapsed} / {remaining}")
         self.update_stat("events", f"{events:,}")
         bucket = percent // 5
         if bucket != self._last_analysis_log_bucket or percent >= 100:
@@ -678,6 +695,7 @@ class MainWindow(QMainWindow):
         self.max_off_route_spin.setEnabled(True)
         self.progress.setValue(100)
         self.update_stat("phase", "解析完了")
+        self.update_stat("time", f"{self.format_duration(time.monotonic() - self.analysis_start_time) if self.analysis_start_time else '00:00'} / 00:00")
         self.progress_label.setText(f"解析完了: {result.get('output_dir')}")
         self.append_log(self.progress_label.text())
         self.load_viewer()
@@ -701,10 +719,10 @@ class MainWindow(QMainWindow):
     def load_route_map(self, routes: list[dict[str, object]]) -> None:
         if self.web is None or not routes:
             return
-        self.route_map_path = self.build_route_map_html(routes)
-        self.web.load(QUrl.fromLocalFile(str(self.route_map_path)))
+        html = self.build_route_map_html(routes)
+        self.web.setHtml(html, QUrl.fromLocalFile(str(SRC_DIR) + "/"))
 
-    def build_route_map_html(self, routes: list[dict[str, object]]) -> Path:
+    def build_route_map_html(self, routes: list[dict[str, object]]) -> str:
         payload = [
             {
                 "name": route.get("name", ""),
@@ -714,15 +732,16 @@ class MainWindow(QMainWindow):
             }
             for route in routes
         ]
+        leaflet_css = (SRC_DIR / "leaflet" / "leaflet.css").read_text(encoding="utf-8")
+        leaflet_js = (SRC_DIR / "leaflet" / "leaflet.js").read_text(encoding="utf-8")
         html = f"""<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8">
   <title>Route Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" onload="drawLeaflet()"></script>
   <style>
+    {leaflet_css}
     html, body {{ height:100%; margin:0; background:#fff; overflow:hidden; }}
     body {{ font-family:"Segoe UI","Meiryo UI",sans-serif; }}
     #map {{ position:absolute; inset:0; background:#fff; }}
@@ -731,10 +750,11 @@ class MainWindow(QMainWindow):
     .panel {{ position:absolute; z-index:1000; left:10px; top:10px; background:#ffffffee; border-radius:6px; padding:8px 10px; font-family:"Segoe UI","Meiryo UI",sans-serif; box-shadow:0 4px 18px #0003; }}
     .empty {{ position:absolute; inset:0; display:grid; place-items:center; color:#475569; }}
   </style>
+  <script>{leaflet_js}</script>
 </head>
 <body>
 <div id="map"><div id="leafletMap"></div><svg id="svg" role="img" aria-label="route map"></svg></div>
-<div class="panel"><b>ルートマップ</b><br>{len(payload)} 路線を表示中</div>
+<div class="panel"><b>ルートマップ</b></div>
 <script>
 const ROUTES = {json.dumps(payload, ensure_ascii=False)};
 const COLORS = ['#00a2ff','#22c55e','#f97316','#a855f7','#ef4444','#14b8a6','#eab308','#ec4899','#84cc16','#6366f1'];
@@ -828,14 +848,11 @@ function drawLeaflet() {{
     draw();
   }}
 }}
+drawLeaflet();
 </script>
 </body>
 </html>"""
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix="_30_route_map.html")
-        tmp.close()
-        path = Path(tmp.name)
-        path.write_text(html, encoding="utf-8")
-        return path
+        return html
 
     def open_viewer(self) -> None:
         if not self.result:
@@ -847,6 +864,47 @@ function drawLeaflet() {{
             self.load_viewer()
             return
         subprocess.Popen([sys.executable, "-m", "webbrowser", str(Path(viewer).resolve())])
+
+    def format_duration(self, seconds: float) -> str:
+        seconds = max(0, int(seconds))
+        hours, rem = divmod(seconds, 3600)
+        minutes, sec = divmod(rem, 60)
+        if hours:
+            return f"{hours:d}:{minutes:02d}:{sec:02d}"
+        return f"{minutes:02d}:{sec:02d}"
+
+    def elapsed_remaining_text(self, percent: int) -> tuple[str, str]:
+        if not self.analysis_start_time:
+            return "00:00", "--:--"
+        elapsed_sec = time.monotonic() - self.analysis_start_time
+        if percent <= 0:
+            return self.format_duration(elapsed_sec), "--:--"
+        remaining_sec = elapsed_sec * max(0, 100 - percent) / max(percent, 1)
+        return self.format_duration(elapsed_sec), self.format_duration(remaining_sec)
+
+    def update_route_hit_bars(self, values: object) -> None:
+        if not isinstance(values, list):
+            return
+        counts: list[int] = []
+        for value in values:
+            try:
+                counts.append(int(value))
+            except Exception:
+                counts.append(0)
+        if not counts:
+            return
+        max_count = max(counts) or 1
+        for row, count in enumerate(counts[: self.route_table.rowCount()]):
+            item = self.route_table.item(row, 3)
+            if item is None:
+                item = QTableWidgetItem()
+                self.route_table.setItem(row, 3, item)
+            item.setText(f"{count:,}")
+            bar = self.route_table.cellWidget(row, 4)
+            pct = int(round(count / max_count * 100)) if max_count else 0
+            if isinstance(bar, QProgressBar):
+                bar.setValue(pct)
+                bar.setFormat(f"{pct}%")
 
     def update_stat(self, key: str, value: object) -> None:
         label = self.stats.get(key)
