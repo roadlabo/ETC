@@ -77,18 +77,25 @@ ROUTE_MAP_HTML = r"""
     #fallback svg { width:100%; height:100%; display:block; }
     #fallback { display:none; }
     .panel { position:absolute; z-index:1000; left:10px; top:10px; background:#ffffffee; border-radius:6px; padding:8px 10px; box-shadow:0 4px 18px #0003; font-weight:700; }
+    .status { font-size:11px; color:#334155; margin-top:2px; font-weight:600; }
     .leaflet-container { background:#fff; }
   </style>
 </head>
 <body>
 <div id="map"></div>
 <div id="fallback"><svg id="fallbackSvg" role="img" aria-label="route map"></svg></div>
-<div class="panel">ルートマップ</div>
+<div class="panel">ルートマップ<div class="status" id="mapStatus">SIMPLE</div></div>
 <script>
 const COLORS = ['#00a2ff','#22c55e','#f97316','#a855f7','#ef4444','#14b8a6','#eab308','#ec4899','#84cc16','#6366f1'];
 let map = null;
 let routeLayer = null;
 let lastRoutes = [];
+let loadingLeaflet = false;
+
+function setStatus(text) {
+  const el = document.getElementById('mapStatus');
+  if (el) el.textContent = text;
+}
 
 function validPoint(pt) {
   return Array.isArray(pt) && Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1]));
@@ -97,6 +104,7 @@ function allPoints(routes) {
   return routes.flatMap(route => (route.coords || []).filter(validPoint).map(pt => [Number(pt[0]), Number(pt[1])]));
 }
 function showFallback(routes) {
+  setStatus('SIMPLE');
   lastRoutes = routes || lastRoutes || [];
   document.getElementById('map').style.display = 'none';
   const fallback = document.getElementById('fallback');
@@ -136,6 +144,7 @@ function showFallback(routes) {
 }
 function initMap() {
   if (typeof L === 'undefined') {
+    loadLeafletFromCdn();
     showFallback(lastRoutes);
     return false;
   }
@@ -147,11 +156,26 @@ function initMap() {
       attribution: '© OpenStreetMap contributors © CARTO'
     }).addTo(map);
     routeLayer = L.layerGroup().addTo(map);
+    setStatus('WEB');
     return true;
   } catch (e) {
     showFallback(lastRoutes);
     return false;
   }
+}
+function loadLeafletFromCdn() {
+  if (loadingLeaflet || typeof L !== 'undefined') return;
+  loadingLeaflet = true;
+  setStatus('Leaflet読込中');
+  const css = document.createElement('link');
+  css.rel = 'stylesheet';
+  css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+  document.head.appendChild(css);
+  const script = document.createElement('script');
+  script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+  script.onload = () => { loadingLeaflet = false; setRoutes(lastRoutes); };
+  script.onerror = () => { loadingLeaflet = false; showFallback(lastRoutes); };
+  document.head.appendChild(script);
 }
 function setRoutes(routes) {
   lastRoutes = routes || [];
@@ -160,6 +184,7 @@ function setRoutes(routes) {
   try {
     document.getElementById('map').style.display = 'block';
     document.getElementById('fallback').style.display = 'none';
+    setStatus('WEB');
     routeLayer.clearLayers();
     const bounds = [];
     lastRoutes.forEach((route, idx) => {
@@ -284,6 +309,7 @@ class MainWindow(QMainWindow):
         self.hour_checks: dict[int, QCheckBox] = {}
         self.stats: dict[str, QLabel] = {}
         self.result: dict | None = None
+        self.pending_route_map_payload: list[dict[str, object]] | None = None
         self._syncing_calendars = False
         self._last_scan_log_bucket = -1
         self._last_analysis_log_bucket = -1
@@ -351,6 +377,7 @@ class MainWindow(QMainWindow):
                 settings = self.web.settings()
                 settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
                 settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
+            self.web.loadFinished.connect(self.route_map_load_finished)
             right.layout().addWidget(self.web, 1)
         else:
             self.web = None
@@ -846,9 +873,15 @@ class MainWindow(QMainWindow):
     def load_route_map(self, routes: list[dict[str, object]]) -> None:
         if self.web is None or not routes:
             return
+        self.pending_route_map_payload = self.route_map_payload(routes)
         base = QUrl.fromLocalFile(str(SRC_DIR) + "/")
         self.web.setHtml(ROUTE_MAP_HTML, base)
-        payload = self.route_map_payload(routes)
+
+    def route_map_load_finished(self, ok: bool) -> None:
+        if not ok or not self.pending_route_map_payload:
+            return
+        payload = self.pending_route_map_payload
+        self.pending_route_map_payload = None
         self.run_route_map_js(f"window._routePerformanceMap.setRoutes({json.dumps(payload, ensure_ascii=False)});")
 
     def route_map_payload(self, routes: list[dict[str, object]]) -> list[dict[str, object]]:
