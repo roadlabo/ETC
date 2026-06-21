@@ -22,6 +22,7 @@ from typing import Callable, Iterable, Optional
 
 import pandas as pd
 
+SRC_DIR = Path(__file__).resolve().parent
 EARTH_R = 6_371_000.0
 
 ROUTE_DIR_CANDIDATES = [
@@ -581,20 +582,32 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
     center_lat = sum(p["lat"] for p in all_points) / len(all_points) if all_points else 35.6812
     center_lon = sum(p["lon"] for p in all_points) / len(all_points) if all_points else 139.7671
     html_path = out_dir / "30_route_performance_viewer.html"
+    leaflet_css = (SRC_DIR / "leaflet" / "leaflet.css").as_uri()
+    leaflet_js = (SRC_DIR / "leaflet" / "leaflet.js").as_uri()
     html = f"""<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8">
   <title>30 Route Performance Viewer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="{leaflet_css}">
+  <script src="{leaflet_js}"></script>
   <style>
-    html, body, #map {{ height:100%; margin:0; font-family: "Segoe UI", "Meiryo UI", sans-serif; }}
+    html, body, #map {{ height:100%; margin:0; background:#fff; font-family: "Segoe UI", "Meiryo UI", sans-serif; }}
+    .leaflet-container {{ background:#fff; }}
     .panel {{ position:absolute; z-index:1000; left:12px; top:12px; width:min(560px, calc(100vw - 24px)); background:#ffffffee; border-radius:8px; box-shadow:0 8px 24px #0003; padding:10px; }}
     .row {{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:6px; }}
     button {{ border:1px solid #b8c2cc; background:#fff; border-radius:6px; padding:5px 8px; cursor:pointer; }}
     button.active {{ background:#0f766e; color:#fff; border-color:#0f766e; }}
+    button:disabled {{ color:#cbd5e1; cursor:default; background:#f8fafc; }}
+    .calendars {{ display:grid; grid-template-columns:repeat(4, minmax(118px, 1fr)); gap:8px; margin-top:8px; }}
+    .calendar {{ border:1px solid #d7dee8; border-radius:6px; padding:6px; background:#fff; }}
+    .monthTitle {{ text-align:center; font-weight:700; margin-bottom:4px; }}
+    .week, .days {{ display:grid; grid-template-columns:repeat(7, 1fr); gap:2px; text-align:center; }}
+    .week span {{ font-size:10px; color:#64748b; }}
+    .day {{ min-width:0; padding:3px 0; font-size:11px; }}
+    .hit {{ background:#ccfbf1; border-color:#0f766e; color:#0f172a; font-weight:700; }}
+    .hit.active {{ background:#0f766e; color:#fff; }}
     .legend span {{ display:inline-block; width:14px; height:10px; margin-right:4px; }}
   </style>
 </head>
@@ -603,6 +616,8 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
 <div class="panel">
   <b>30 Route Performance Viewer</b>
   <div class="row" id="metric"></div>
+  <div class="row" id="monthbar"></div>
+  <div class="calendars" id="calendars"></div>
   <div class="row" id="period"></div>
   <div class="row" id="hours"></div>
   <div class="row legend" id="legend"></div>
@@ -610,14 +625,66 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
 <script>
 const DATA = {json.dumps(payloads, ensure_ascii=False)};
 const DATE_PERIODS = Array.from(new Set(DATA.flatMap(payload => payload.summary.map(r => String(r.period || '')).filter(p => /^\\d{{8}}$/.test(p))))).sort();
+const HIT_DATES = new Set(DATE_PERIODS);
+const HIT_MONTHS = Array.from(new Set(DATE_PERIODS.map(d => d.slice(0, 6)))).sort();
 const map = L.map('map').setView([{center_lat:.7f}, {center_lon:.7f}], 13);
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }}).addTo(map);
 const state = {{metric:'speed', period: DATE_PERIODS[0] || '平日', hour:8}};
+let monthIndex = 0;
 let layers = [];
 function periodLabel(period) {{
   period = String(period);
   if (/^\\d{{8}}$/.test(period)) return `${{period.slice(0,4)}}-${{period.slice(4,6)}}-${{period.slice(6,8)}}`;
   return period;
+}}
+function monthLabel(month) {{
+  return `${{month.slice(0,4)}}-${{month.slice(4,6)}}`;
+}}
+function renderMonthbar() {{
+  const el = document.getElementById('monthbar');
+  el.innerHTML = '';
+  if (!HIT_MONTHS.length) {{
+    el.textContent = '日付データなし';
+    return;
+  }}
+  HIT_MONTHS.forEach((month, idx) => {{
+    const b = document.createElement('button');
+    b.textContent = monthLabel(month);
+    b.onclick = () => {{ monthIndex = idx; renderMonthbar(); renderCalendars(); }};
+    if (idx >= monthIndex && idx < monthIndex + 4) b.className = 'active';
+    el.appendChild(b);
+  }});
+}}
+function renderCalendars() {{
+  const el = document.getElementById('calendars');
+  el.innerHTML = '';
+  HIT_MONTHS.slice(monthIndex, monthIndex + 4).forEach(month => {{
+    const year = Number(month.slice(0, 4));
+    const mon = Number(month.slice(4, 6));
+    const first = new Date(year, mon - 1, 1);
+    const daysInMonth = new Date(year, mon, 0).getDate();
+    const box = document.createElement('div');
+    box.className = 'calendar';
+    box.innerHTML = `<div class="monthTitle">${{year}}年${{mon}}月</div><div class="week"><span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span></div>`;
+    const days = document.createElement('div');
+    days.className = 'days';
+    for (let i = 0; i < first.getDay(); i++) days.appendChild(document.createElement('span'));
+    for (let day = 1; day <= daysInMonth; day++) {{
+      const token = `${{month}}${{String(day).padStart(2, '0')}}`;
+      const b = document.createElement('button');
+      b.className = 'day';
+      b.textContent = String(day);
+      if (HIT_DATES.has(token)) {{
+        b.className += ' hit';
+        b.onclick = () => {{ state.period = token; renderCalendars(); buttons('period', aggregatePeriods(), 'period'); redraw(); }};
+        if (state.period === token) b.className += ' active';
+      }} else {{
+        b.disabled = true;
+      }}
+      days.appendChild(b);
+    }}
+    box.appendChild(days);
+    el.appendChild(box);
+  }});
 }}
 function offsetPoint(a, b, side, meters) {{
   const lat = (a.lat + b.lat) / 2;
@@ -675,13 +742,18 @@ function buttons(id, values, key) {{
   values.forEach(v => {{
     const b = document.createElement('button');
     b.textContent = v.label ?? v;
-    b.onclick = () => {{ state[key] = v.value ?? v; buttons(id, values, key); redraw(); }};
+    b.onclick = () => {{ state[key] = v.value ?? v; buttons(id, values, key); renderCalendars(); redraw(); }};
     if (String(state[key]) === String(v.value ?? v)) b.className = 'active';
     el.appendChild(b);
   }});
 }}
+function aggregatePeriods() {{
+  return ['平日','休日','月','火','水','木','金','土','日'].map(p => ({{label:p, value:p}}));
+}}
 buttons('metric', [{{label:'速度', value:'speed'}}, {{label:'交通量', value:'volume'}}], 'metric');
-buttons('period', DATE_PERIODS.map(d => ({{label: periodLabel(d), value: d}})).concat(['平日','休日','月','火','水','木','金','土','日'].map(p => ({{label:p, value:p}}))), 'period');
+renderMonthbar();
+renderCalendars();
+buttons('period', aggregatePeriods(), 'period');
 buttons('hours', Array.from({{length:24}}, (_, i) => ({{label:String(i).padStart(2,'0'), value:i}})), 'hour');
 redraw();
 </script>
