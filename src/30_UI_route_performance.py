@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import importlib.util
 import json
 import subprocess
@@ -118,12 +119,13 @@ class AnalysisWorker(QObject):
     finished = pyqtSignal(dict)
     failed = pyqtSignal(str)
 
-    def __init__(self, project_dir: str, dates: set[str] | None, hours: set[int] | None, factors: dict[str, float]) -> None:
+    def __init__(self, project_dir: str, dates: set[str] | None, hours: set[int] | None, factors: dict[str, float], max_off_route_m: float) -> None:
         super().__init__()
         self.project_dir = project_dir
         self.dates = dates
         self.hours = hours
         self.factors = factors
+        self.max_off_route_m = max_off_route_m
 
     def run(self) -> None:
         try:
@@ -133,6 +135,7 @@ class AnalysisWorker(QObject):
                 allowed_dates=self.dates,
                 allowed_hours=self.hours,
                 expansion_factors=self.factors,
+                max_off_route_m=self.max_off_route_m,
                 progress_callback=self.progress.emit,
             )
             self.finished.emit(result)
@@ -177,8 +180,16 @@ class MainWindow(QMainWindow):
         self.viewer_button = QPushButton("ビューアーを開く")
         self.viewer_button.clicked.connect(self.open_viewer)
         self.viewer_button.setEnabled(False)
+        self.max_off_route_spin = QDoubleSpinBox()
+        self.max_off_route_spin.setRange(1.0, 500.0)
+        self.max_off_route_spin.setDecimals(1)
+        self.max_off_route_spin.setValue(30.0)
+        self.max_off_route_spin.setSuffix(" m")
+        self.max_off_route_spin.setToolTip("GPS点をルート上とみなす最大離れ距離です。")
         title_row.addWidget(title)
         title_row.addWidget(self.project_label, 1)
+        title_row.addWidget(QLabel("離れ閾値"))
+        title_row.addWidget(self.max_off_route_spin)
         title_row.addWidget(choose)
         title_row.addWidget(self.run_button)
         title_row.addWidget(self.viewer_button)
@@ -254,7 +265,6 @@ class MainWindow(QMainWindow):
             ("phase", "PHASE", "-"),
             ("files", "FILES", "0 / 0"),
             ("rows", "ROWS", "0"),
-            ("dates", "DATES", "0"),
             ("routes", "ROUTES", "0"),
             ("events", "EVENTS", "0"),
         ]
@@ -336,6 +346,14 @@ class MainWindow(QMainWindow):
         self.route_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.route_table.verticalHeader().setDefaultSectionSize(28)
         box.layout().addWidget(self.route_table)
+        buttons = QHBoxLayout()
+        save_factors = QPushButton("拡大係数を保存")
+        load_factors = QPushButton("拡大係数を読込")
+        save_factors.clicked.connect(self.save_expansion_factors)
+        load_factors.clicked.connect(self.load_expansion_factors)
+        buttons.addWidget(save_factors)
+        buttons.addWidget(load_factors)
+        box.layout().addLayout(buttons)
         return box
 
     def _build_log_box(self) -> QFrame:
@@ -362,6 +380,7 @@ class MainWindow(QMainWindow):
         self._last_analysis_log_bucket = -1
         self.route_table.setRowCount(0)
         self.set_factor_inputs_enabled(True)
+        self.max_off_route_spin.setEnabled(True)
         self.available_dates.clear()
         self.selected_date_tokens.clear()
         self.clear_calendar_formats()
@@ -531,6 +550,65 @@ class MainWindow(QMainWindow):
                 factors[name_item.text()] = spin.value()
         return factors
 
+    def default_factor_path(self) -> str:
+        if self.project_dir:
+            return str(Path(self.project_dir) / "30_route_expansion_factors.csv")
+        return "30_route_expansion_factors.csv"
+
+    def save_expansion_factors(self) -> None:
+        if self.route_table.rowCount() == 0:
+            QMessageBox.warning(self, "保存不可", "先にプロジェクトフォルダを選択してルートを読み込んでください。")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "拡大係数を保存",
+            self.default_factor_path(),
+            "CSV files (*.csv);;All files (*.*)",
+        )
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["route", "expansion_factor"])
+            for route, factor in self.expansion_factors().items():
+                writer.writerow([route, factor])
+        self.append_log(f"拡大係数を保存しました: {path}")
+
+    def load_expansion_factors(self) -> None:
+        for row in range(self.route_table.rowCount()):
+            spin = self.route_table.cellWidget(row, 3)
+            if isinstance(spin, QDoubleSpinBox) and not spin.isEnabled():
+                QMessageBox.warning(self, "読込不可", "解析中は拡大係数を変更できません。")
+                return
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "拡大係数を読み込む",
+            self.default_factor_path(),
+            "CSV files (*.csv);;All files (*.*)",
+        )
+        if not path:
+            return
+        loaded: dict[str, float] = {}
+        with open(path, "r", encoding="utf-8-sig", newline="") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                route = (row.get("route") or row.get("ルート名") or row.get("route_name") or "").strip()
+                value = row.get("expansion_factor") or row.get("拡大係数") or row.get("factor") or ""
+                if not route:
+                    continue
+                try:
+                    loaded[route] = float(value)
+                except Exception:
+                    continue
+        applied = 0
+        for row in range(self.route_table.rowCount()):
+            name_item = self.route_table.item(row, 0)
+            spin = self.route_table.cellWidget(row, 3)
+            if name_item and isinstance(spin, QDoubleSpinBox) and name_item.text() in loaded:
+                spin.setValue(loaded[name_item.text()])
+                applied += 1
+        self.append_log(f"拡大係数を読み込みました: {applied}/{self.route_table.rowCount()} 路線 ({path})")
+
     def set_factor_inputs_enabled(self, enabled: bool) -> None:
         for row in range(self.route_table.rowCount()):
             spin = self.route_table.cellWidget(row, 3)
@@ -554,11 +632,12 @@ class MainWindow(QMainWindow):
         self.run_button.setEnabled(False)
         self.viewer_button.setEnabled(False)
         self.set_factor_inputs_enabled(False)
+        self.max_off_route_spin.setEnabled(False)
         self.progress.setValue(0)
         self.progress_label.setText("解析準備中")
-        self.append_log("解析を開始しました。第2スクリーニングCSVを読み込み、全日・全時間を一度だけ集計します。")
+        self.append_log(f"解析を開始しました。第2スクリーニングCSVを読み込み、全日・全時間を一度だけ集計します。離れ閾値={self.max_off_route_spin.value():.1f}m")
         self.thread = QThread()
-        self.worker = AnalysisWorker(self.project_dir, None, None, self.expansion_factors())
+        self.worker = AnalysisWorker(self.project_dir, None, None, self.expansion_factors(), self.max_off_route_spin.value())
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self.update_analysis_progress)
@@ -595,6 +674,8 @@ class MainWindow(QMainWindow):
         self.result = result
         self.run_button.setEnabled(True)
         self.viewer_button.setEnabled(True)
+        self.set_factor_inputs_enabled(True)
+        self.max_off_route_spin.setEnabled(True)
         self.progress.setValue(100)
         self.update_stat("phase", "解析完了")
         self.progress_label.setText(f"解析完了: {result.get('output_dir')}")
@@ -605,6 +686,7 @@ class MainWindow(QMainWindow):
     def analysis_failed(self, message: str) -> None:
         self.run_button.setEnabled(True)
         self.set_factor_inputs_enabled(True)
+        self.max_off_route_spin.setEnabled(True)
         self.progress_label.setText("解析失敗")
         self.append_log(f"解析失敗: {message}")
         QMessageBox.critical(self, "解析失敗", message)
@@ -632,43 +714,120 @@ class MainWindow(QMainWindow):
             }
             for route in routes
         ]
-        all_coords = [pt for route in payload for pt in route["coords"]]
-        center_lat = sum(float(pt[0]) for pt in all_coords) / len(all_coords) if all_coords else 35.6812
-        center_lon = sum(float(pt[1]) for pt in all_coords) / len(all_coords) if all_coords else 139.7671
-        leaflet_css = (SRC_DIR / "leaflet" / "leaflet.css").as_uri()
-        leaflet_js = (SRC_DIR / "leaflet" / "leaflet.js").as_uri()
         html = f"""<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8">
   <title>Route Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="{leaflet_css}">
-  <script src="{leaflet_js}"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" onload="drawLeaflet()"></script>
   <style>
-    html, body, #map {{ height:100%; margin:0; background:#fff; }}
-    .leaflet-container {{ background:#fff; }}
+    html, body {{ height:100%; margin:0; background:#fff; overflow:hidden; }}
+    body {{ font-family:"Segoe UI","Meiryo UI",sans-serif; }}
+    #map {{ position:absolute; inset:0; background:#fff; }}
+    #leafletMap {{ position:absolute; inset:0; display:none; }}
+    svg {{ width:100%; height:100%; display:block; }}
     .panel {{ position:absolute; z-index:1000; left:10px; top:10px; background:#ffffffee; border-radius:6px; padding:8px 10px; font-family:"Segoe UI","Meiryo UI",sans-serif; box-shadow:0 4px 18px #0003; }}
+    .empty {{ position:absolute; inset:0; display:grid; place-items:center; color:#475569; }}
   </style>
 </head>
 <body>
-<div id="map"></div>
+<div id="map"><div id="leafletMap"></div><svg id="svg" role="img" aria-label="route map"></svg></div>
 <div class="panel"><b>ルートマップ</b><br>{len(payload)} 路線を表示中</div>
 <script>
 const ROUTES = {json.dumps(payload, ensure_ascii=False)};
 const COLORS = ['#00a2ff','#22c55e','#f97316','#a855f7','#ef4444','#14b8a6','#eab308','#ec4899','#84cc16','#6366f1'];
-const map = L.map('map').setView([{center_lat:.7f}, {center_lon:.7f}], 12);
-const bounds = [];
-ROUTES.forEach((route, idx) => {{
-  const coords = route.coords || [];
-  if (coords.length < 2) return;
-  const color = COLORS[idx % COLORS.length];
-  const line = L.polyline(coords, {{ color, weight: 5, opacity: 0.9 }})
-    .bindTooltip(`${{idx + 1}}. ${{route.name}}<br>延長 ${{route.length_km}} km / 点数 ${{route.points}}`);
-  line.addTo(map);
-  coords.forEach(pt => bounds.push(pt));
-}});
-if (bounds.length) map.fitBounds(bounds, {{ padding: [24, 24] }});
+const svg = document.getElementById('svg');
+let leafletStarted = false;
+function validPoint(pt) {{
+  return Array.isArray(pt) && Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1]));
+}}
+function draw() {{
+  svg.replaceChildren();
+  const width = Math.max(svg.clientWidth || window.innerWidth, 200);
+  const height = Math.max(svg.clientHeight || window.innerHeight, 200);
+  svg.setAttribute('viewBox', `0 0 ${{width}} ${{height}}`);
+  const all = ROUTES.flatMap(route => (route.coords || []).filter(validPoint).map(pt => [Number(pt[0]), Number(pt[1])]));
+  if (!all.length) {{
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    text.setAttribute('x', width / 2); text.setAttribute('y', height / 2);
+    text.setAttribute('text-anchor', 'middle'); text.setAttribute('fill', '#475569');
+    text.textContent = '表示できる座標がありません';
+    svg.appendChild(text);
+    return;
+  }}
+  let minLat = Math.min(...all.map(pt => pt[0]));
+  let maxLat = Math.max(...all.map(pt => pt[0]));
+  let minLon = Math.min(...all.map(pt => pt[1]));
+  let maxLon = Math.max(...all.map(pt => pt[1]));
+  if (minLat === maxLat) {{ minLat -= 0.001; maxLat += 0.001; }}
+  if (minLon === maxLon) {{ minLon -= 0.001; maxLon += 0.001; }}
+  const pad = 34;
+  const project = ([lat, lon]) => {{
+    const x = pad + (lon - minLon) / (maxLon - minLon) * (width - pad * 2);
+    const y = pad + (maxLat - lat) / (maxLat - minLat) * (height - pad * 2);
+    return `${{x.toFixed(1)}},${{y.toFixed(1)}}`;
+  }};
+  ROUTES.forEach((route, idx) => {{
+    const coords = (route.coords || []).filter(validPoint).map(pt => [Number(pt[0]), Number(pt[1])]);
+    if (coords.length < 2) return;
+    const shadow = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    shadow.setAttribute('points', coords.map(project).join(' '));
+    shadow.setAttribute('fill', 'none');
+    shadow.setAttribute('stroke', '#ffffff');
+    shadow.setAttribute('stroke-width', '9');
+    shadow.setAttribute('stroke-linecap', 'round');
+    shadow.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(shadow);
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    line.setAttribute('points', coords.map(project).join(' '));
+    line.setAttribute('fill', 'none');
+    line.setAttribute('stroke', COLORS[idx % COLORS.length]);
+    line.setAttribute('stroke-width', '4.5');
+    line.setAttribute('stroke-linecap', 'round');
+    line.setAttribute('stroke-linejoin', 'round');
+    line.setAttribute('opacity', '0.95');
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    title.textContent = `${{idx + 1}}. ${{route.name}} / ${{route.length_km}} km / ${{route.points}}点`;
+    line.appendChild(title);
+    svg.appendChild(line);
+  }});
+}}
+window.addEventListener('resize', draw);
+draw();
+function drawLeaflet() {{
+  if (leafletStarted || typeof L === 'undefined') return;
+  leafletStarted = true;
+  const all = ROUTES.flatMap(route => (route.coords || []).filter(validPoint).map(pt => [Number(pt[0]), Number(pt[1])]));
+  if (!all.length) return;
+  try {{
+    const leafletMap = document.getElementById('leafletMap');
+    leafletMap.style.display = 'block';
+    svg.style.display = 'none';
+    const center = [
+      all.reduce((sum, pt) => sum + pt[0], 0) / all.length,
+      all.reduce((sum, pt) => sum + pt[1], 0) / all.length,
+    ];
+    const map = L.map('leafletMap').setView(center, 12);
+    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }}).addTo(map);
+    const bounds = [];
+    ROUTES.forEach((route, idx) => {{
+      const coords = (route.coords || []).filter(validPoint).map(pt => [Number(pt[0]), Number(pt[1])]);
+      if (coords.length < 2) return;
+      L.polyline(coords, {{ color: COLORS[idx % COLORS.length], weight: 5, opacity: 0.9 }})
+        .bindTooltip(`${{idx + 1}}. ${{route.name}}<br>延長 ${{route.length_km}} km / 点数 ${{route.points}}`)
+        .addTo(map);
+      coords.forEach(pt => bounds.push(pt));
+    }});
+    if (bounds.length) map.fitBounds(bounds, {{ padding: [24, 24] }});
+    setTimeout(() => map.invalidateSize(), 0);
+  }} catch (error) {{
+    document.getElementById('leafletMap').style.display = 'none';
+    svg.style.display = 'block';
+    draw();
+  }}
+}}
 </script>
 </body>
 </html>"""
