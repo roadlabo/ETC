@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 SRC_DIR = Path(__file__).resolve().parent
@@ -86,6 +88,7 @@ class ProjectScanWorker(QObject):
                         "path": str(route_path),
                         "length_km": round(route.length_m / 1000, 3),
                         "points": len(route.kp_m),
+                        "coords": list(zip(route.lats, route.lons)),
                     }
                 )
                 self.route_loaded.emit(routes[-1])
@@ -103,7 +106,7 @@ class ProjectScanWorker(QObject):
                 file_rows = 0
                 self.progress.emit(
                     15 + int(80 * (file_idx - 1) / max(len(files), 1)),
-                    f"第2スクリーニング日付抽出 {file_idx}/{len(files)}: {csv_path.name}",
+                    f"第2スクリーニング日付抽出 {file_idx}/{len(files)}",
                     {
                         "phase": "日付抽出",
                         "current_file": csv_path.name,
@@ -124,7 +127,7 @@ class ProjectScanWorker(QObject):
                             pct = 15 + int(80 * (file_idx - 1) / max(len(files), 1))
                             self.progress.emit(
                                 pct,
-                                f"読込中 {csv_path.name}: {file_rows:,} 行",
+                                f"読込中 {file_idx}/{len(files)}: {file_rows:,} 行",
                                 {
                                     "phase": "日付抽出",
                                     "current_file": csv_path.name,
@@ -138,7 +141,7 @@ class ProjectScanWorker(QObject):
                 except Exception as exc:
                     self.progress.emit(
                         15 + int(80 * file_idx / max(len(files), 1)),
-                        f"読込スキップ {csv_path.name}: {exc}",
+                        f"読込スキップ {file_idx}/{len(files)}: {exc}",
                         {
                             "phase": "日付抽出",
                             "current_file": csv_path.name,
@@ -209,7 +212,10 @@ class MainWindow(QMainWindow):
         self.hour_checks: dict[int, QCheckBox] = {}
         self.stats: dict[str, QLabel] = {}
         self.result: dict | None = None
+        self.route_map_path: Path | None = None
         self._syncing_calendars = False
+        self._last_scan_log_bucket = -1
+        self._last_analysis_log_bucket = -1
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -267,7 +273,7 @@ class MainWindow(QMainWindow):
         center_layout.addWidget(self._build_log_box(), 2)
         content.addWidget(center, 1)
 
-        right = self._box("解析後ビューアー")
+        right = self._box("ルートマップ")
         if QWebEngineView is not None:
             self.web = QWebEngineView()
             right.layout().addWidget(self.web, 1)
@@ -319,7 +325,6 @@ class MainWindow(QMainWindow):
             ("rows", "ROWS", "0"),
             ("dates", "DATES", "0"),
             ("routes", "ROUTES", "0"),
-            ("current", "CURRENT", "-"),
             ("events", "EVENTS", "0"),
         ]
         for key, caption, initial in specs:
@@ -333,7 +338,7 @@ class MainWindow(QMainWindow):
             val.setObjectName("statValue")
             box_layout.addWidget(cap)
             box_layout.addWidget(val)
-            layout.addWidget(box)
+            layout.addWidget(box, 1)
             self.stats[key] = val
         return frame
 
@@ -403,10 +408,10 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_log_box(self) -> QFrame:
-        box = self._box("処理ログ")
+        box = self._box("処理ログ (節目のみ)")
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMaximumBlockCount(400)
+        self.log.setMaximumBlockCount(120)
         box.layout().addWidget(self.log)
         return box
 
@@ -422,6 +427,8 @@ class MainWindow(QMainWindow):
         self.result = None
         self.viewer_button.setEnabled(False)
         self.run_button.setEnabled(False)
+        self._last_scan_log_bucket = -1
+        self._last_analysis_log_bucket = -1
         self.route_table.setRowCount(0)
         self.available_dates.clear()
         self.selected_date_tokens.clear()
@@ -444,16 +451,24 @@ class MainWindow(QMainWindow):
 
     def update_scan_progress(self, percent: int, message: str, stats: dict) -> None:
         self.progress.setValue(percent)
-        self.progress_label.setText(message)
+        phase = stats.get("phase", "-")
+        file_index = int(stats.get("file_index", 0) or 0)
+        file_total = int(stats.get("file_total", 0) or 0)
+        rows = int(stats.get("rows", 0) or 0)
+        dates = int(stats.get("dates", 0) or 0)
+        if file_total:
+            self.progress_label.setText(f"{phase}: {file_index}/{file_total} ファイル / {rows:,} 行 / 検出日 {dates}")
+        else:
+            self.progress_label.setText(message)
         self.update_stat("phase", stats.get("phase", "-"))
-        file_index = stats.get("file_index", 0)
-        file_total = stats.get("file_total", 0)
         self.update_stat("files", f"{file_index} / {file_total}" if file_total else "0 / 0")
-        self.update_stat("rows", f"{int(stats.get('rows', 0)):,}")
-        self.update_stat("dates", str(stats.get("dates", 0)))
+        self.update_stat("rows", f"{rows:,}")
+        self.update_stat("dates", str(dates))
         self.update_stat("routes", str(stats.get("routes", 0)))
-        self.update_stat("current", stats.get("current_file", "-"))
-        self.append_log(message)
+        bucket = percent // 5
+        if bucket != self._last_scan_log_bucket or percent >= 100:
+            self._last_scan_log_bucket = bucket
+            self.append_log(self.progress_label.text())
 
     def project_scan_done(self, result: dict) -> None:
         self.run_button.setEnabled(True)
@@ -473,6 +488,7 @@ class MainWindow(QMainWindow):
             f"読込完了: ルート {len(routes)} / 日付 {len(self.available_dates)} / 行 {int(result.get('rows', 0)):,}"
         )
         self.append_log(self.progress_label.text())
+        self.load_route_map(routes)
 
     def project_scan_failed(self, message: str) -> None:
         self.run_button.setEnabled(True)
@@ -601,18 +617,25 @@ class MainWindow(QMainWindow):
     def update_analysis_progress(self, percent: int, message: str, stats: dict) -> None:
         self.progress.setValue(percent)
         route = stats.get("current_route_name") or stats.get("route") or "-"
-        current_file = stats.get("current_file_name") or stats.get("current_file") or "-"
         events = int(stats.get("events", 0))
         valid = int(stats.get("valid_points", 0))
         trips = int(stats.get("trips", stats.get("raw_trips", 0)))
-        self.progress_label.setText(f"{message} / route={route} / file={current_file}")
+        route_index = int(stats.get("current_route", 0) or 0)
+        route_total = int(stats.get("total_routes", 0) or 0)
+        file_index = int(stats.get("current_file", 0) or 0)
+        file_total = int(stats.get("total_files", 0) or 0)
+        self.progress_label.setText(
+            f"解析中: ルート {route_index}/{route_total} / CSV {file_index}/{file_total} / 有効点 {valid:,} / 投入 {events:,}"
+        )
         self.update_stat("phase", "解析中")
-        self.update_stat("files", f"{stats.get('current_file', 0)} / {stats.get('total_files', 0)}")
-        self.update_stat("routes", f"{stats.get('current_route', 0)} / {stats.get('total_routes', 0)}")
+        self.update_stat("files", f"{file_index} / {file_total}")
+        self.update_stat("routes", f"{route_index} / {route_total}")
         self.update_stat("rows", f"{valid:,}")
         self.update_stat("events", f"{events:,}")
-        self.update_stat("current", route)
-        self.append_log(f"{percent:3d}% {message} / 有効点={valid:,} / trip={trips:,} / event={events:,}")
+        bucket = percent // 5
+        if bucket != self._last_analysis_log_bucket or percent >= 100:
+            self._last_analysis_log_bucket = bucket
+            self.append_log(f"{percent:3d}% {route} / 有効点={valid:,} / trip={trips:,} / event={events:,}")
 
     def analysis_done(self, result: dict) -> None:
         self.result = result
@@ -637,6 +660,68 @@ class MainWindow(QMainWindow):
         viewer = self.result.get("viewer")
         if viewer and self.web is not None:
             self.web.load(QUrl.fromLocalFile(str(Path(viewer).resolve())))
+
+    def load_route_map(self, routes: list[dict[str, object]]) -> None:
+        if self.web is None or not routes:
+            return
+        self.route_map_path = self.build_route_map_html(routes)
+        self.web.load(QUrl.fromLocalFile(str(self.route_map_path)))
+
+    def build_route_map_html(self, routes: list[dict[str, object]]) -> Path:
+        payload = [
+            {
+                "name": route.get("name", ""),
+                "length_km": route.get("length_km", 0),
+                "points": route.get("points", 0),
+                "coords": route.get("coords", []),
+            }
+            for route in routes
+        ]
+        all_coords = [pt for route in payload for pt in route["coords"]]
+        center_lat = sum(float(pt[0]) for pt in all_coords) / len(all_coords) if all_coords else 35.6812
+        center_lon = sum(float(pt[1]) for pt in all_coords) / len(all_coords) if all_coords else 139.7671
+        leaflet_css = (SRC_DIR / "leaflet" / "leaflet.css").as_uri()
+        leaflet_js = (SRC_DIR / "leaflet" / "leaflet.js").as_uri()
+        html = f"""<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>Route Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="{leaflet_css}">
+  <script src="{leaflet_js}"></script>
+  <style>
+    html, body, #map {{ height:100%; margin:0; }}
+    .panel {{ position:absolute; z-index:1000; left:10px; top:10px; background:#ffffffee; border-radius:6px; padding:8px 10px; font-family:"Segoe UI","Meiryo UI",sans-serif; box-shadow:0 4px 18px #0003; }}
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel"><b>ルートマップ</b><br>{len(payload)} 路線を表示中</div>
+<script>
+const ROUTES = {json.dumps(payload, ensure_ascii=False)};
+const COLORS = ['#00a2ff','#22c55e','#f97316','#a855f7','#ef4444','#14b8a6','#eab308','#ec4899','#84cc16','#6366f1'];
+const map = L.map('map').setView([{center_lat:.7f}, {center_lon:.7f}], 12);
+L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }}).addTo(map);
+const bounds = [];
+ROUTES.forEach((route, idx) => {{
+  const coords = route.coords || [];
+  if (coords.length < 2) return;
+  const color = COLORS[idx % COLORS.length];
+  const line = L.polyline(coords, {{ color, weight: 5, opacity: 0.9 }})
+    .bindTooltip(`${{idx + 1}}. ${{route.name}}<br>延長 ${{route.length_km}} km / 点数 ${{route.points}}`);
+  line.addTo(map);
+  coords.forEach(pt => bounds.push(pt));
+}});
+if (bounds.length) map.fitBounds(bounds, {{ padding: [24, 24] }});
+</script>
+</body>
+</html>"""
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix="_30_route_map.html")
+        tmp.close()
+        path = Path(tmp.name)
+        path.write_text(html, encoding="utf-8")
+        return path
 
     def open_viewer(self) -> None:
         if not self.result:
