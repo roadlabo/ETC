@@ -1,4 +1,4 @@
-import csv
+﻿import csv
 import importlib.util
 import sys
 import tempfile
@@ -99,6 +99,23 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             self.assertTrue(rows)
             self.assertTrue(all(row["date"] == "20250102" for row in rows))
             self.assertTrue(Path(rebuilt_viewer).exists())
+
+    def test_project_paths_accept_fullwidth_screening_number_and_japanese_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            route_dir = project / "10_ルート(Route)データ"
+            trip_dir = project / "20_第２スクリーニング(ルート)"
+            out_dir = project / "30_ルートパフォーマンス"
+            route_dir.mkdir(parents=True)
+            trip_dir.mkdir()
+            out_dir.mkdir()
+            write_route(route_dir / "route_a.csv")
+
+            resolved_trip, resolved_route, resolved_out = route_performance.resolve_project_paths(project)
+
+            self.assertEqual(resolved_trip, trip_dir)
+            self.assertEqual(resolved_route, route_dir)
+            self.assertEqual(resolved_out, out_dir)
 
 
 if __name__ == "__main__":

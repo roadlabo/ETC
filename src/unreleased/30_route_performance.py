@@ -33,10 +33,16 @@ ROUTE_DIR_CANDIDATES = [
 SCREENING_DIR_CANDIDATES = [
     "20_第2スクリーニング(ルート)",
     "20_第2スクリーニング",
+    "20_第２スクリーニング(ルート)",
+    "20_第２スクリーニング",
     "20_隨ｬ・偵せ繧ｯ繝ｪ繝ｼ繝九Φ繧ｰ(繝ｫ繝ｼ繝・",
     "20_隨ｬ・偵せ繧ｯ繝ｪ繝ｼ繝九Φ繧ｰ",
 ]
 OUTPUT_DIR_NAME = "30_route_performance"
+OUTPUT_DIR_CANDIDATES = [
+    "30_route_performance",
+    "30_ルートパフォーマンス",
+]
 
 ROUTE_LON_COL = 14
 ROUTE_LAT_COL = 15
@@ -357,7 +363,7 @@ def resolve_project_paths(project_dir: str | Path) -> tuple[Path, Path, Path]:
     project = Path(project_dir)
     route_dir = find_first_existing(project, ROUTE_DIR_CANDIDATES)
     screening_dir = find_first_existing(project, SCREENING_DIR_CANDIDATES)
-    out_dir = project / OUTPUT_DIR_NAME
+    out_dir = next((project / name for name in OUTPUT_DIR_CANDIDATES if (project / name).exists()), project / OUTPUT_DIR_NAME)
     out_dir.mkdir(parents=True, exist_ok=True)
     return screening_dir, route_dir, out_dir
 
