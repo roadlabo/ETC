@@ -53,11 +53,12 @@ COL_TRIP_NO = 8
 COL_LON = 14
 COL_LAT = 15
 
-MAX_OFF_ROUTE_M = 35.0
+MAX_OFF_ROUTE_M = 30.0
 MAX_SEGMENT_DISTANCE_M = 350.0
 MAX_SEGMENT_TIME_S = 600.0
 MIN_SEGMENT_DISTANCE_M = 1.0
 MAX_SPEED_KMH = 180.0
+ROUTE_BBOX_MARGIN_DEG = 0.001
 KP_DECIMALS = 3
 
 DIRECTIONS = ("forward", "reverse")
@@ -419,6 +420,7 @@ def analyze_route(
     allowed_dates: Optional[set[str]] = None,
     allowed_hours: Optional[set[int]] = None,
     expansion_factor: float = 1.0,
+    max_off_route_m: float = MAX_OFF_ROUTE_M,
     progress_callback: ProgressCallback = None,
 ) -> dict[str, object]:
     route = load_route(Path(route_path))
@@ -455,7 +457,7 @@ def analyze_route(
             if allowed_dates is not None and dt.strftime("%Y%m%d") not in allowed_dates:
                 continue
             projection = route.project(lon, lat)
-            if projection.off_m > MAX_OFF_ROUTE_M:
+            if projection.off_m > max_off_route_m:
                 continue
             projected[trip_key(path, row, row_index)].append((dt, projection.s_m, projection.off_m))
             valid_points += 1
@@ -540,6 +542,95 @@ def analyze_route(
     }
 
 
+def finalize_projected_route(
+    route: RouteModel,
+    aggregator: RouteAggregator,
+    projected: dict[str, list[tuple[datetime, float, float]]],
+    output_dir: str | Path,
+    allowed_hours: Optional[set[int]],
+    valid_points: int,
+    expansion_factor: float,
+    progress_callback: ProgressCallback = None,
+) -> dict[str, object]:
+    skipped = 0
+    trips = list(projected.items())
+    for trip_index, (trip, points) in enumerate(trips, start=1):
+        if progress_callback and (trip_index == 1 or trip_index % 100 == 0 or trip_index == len(trips)):
+            progress_callback(0, f"バケツ投入中 {trip_index}/{len(trips)}", {"trips": len(trips), "valid_points": valid_points, "events": len(aggregator.events)})
+        points.sort(key=lambda x: x[0])
+        for (t1, s1, _off1), (t2, s2, _off2) in zip(points, points[1:]):
+            dt_s = (t2 - t1).total_seconds()
+            ds = s2 - s1
+            abs_ds = abs(ds)
+            if dt_s <= 0 or abs_ds < MIN_SEGMENT_DISTANCE_M:
+                skipped += 1
+                continue
+            if abs_ds > MAX_SEGMENT_DISTANCE_M or dt_s > MAX_SEGMENT_TIME_S:
+                skipped += 1
+                continue
+            speed = abs_ds / dt_s * 3.6
+            if speed > MAX_SPEED_KMH:
+                skipped += 1
+                continue
+            direction = "forward" if ds > 0 else "reverse"
+            for bucket_idx in crossed_bucket_indices(route.kp_m, s1, s2):
+                event = interpolate_event(route, trip, bucket_idx, direction, t1, s1, t2, s2)
+                if allowed_hours is not None and event.pass_dt.hour not in allowed_hours:
+                    continue
+                aggregator.add_event(event)
+
+    route_dir = Path(output_dir) / safe_name(route.name)
+    route_dir.mkdir(parents=True, exist_ok=True)
+    summary_csv = route_dir / f"{safe_name(route.name)}_performance.csv"
+    daily_hourly_csv = route_dir / f"{safe_name(route.name)}_daily_hourly_performance.csv"
+    event_csv = route_dir / f"{safe_name(route.name)}_events.csv"
+    xlsx_path = route_dir / f"{safe_name(route.name)}_performance.xlsx"
+    json_path = route_dir / f"{safe_name(route.name)}_viewer.json"
+
+    summary_df = pd.DataFrame(aggregator.summary_rows())
+    daily_hourly_df = summary_df[summary_df["date"].astype(str).str.fullmatch(r"\d{8}", na=False)].copy()
+    events_df = pd.DataFrame([event.__dict__ | {"pass_dt": event.pass_dt.isoformat()} for event in aggregator.events])
+    summary_df.to_csv(summary_csv, index=False, encoding="utf-8-sig")
+    daily_hourly_df.to_csv(daily_hourly_csv, index=False, encoding="utf-8-sig")
+    events_df.to_csv(event_csv, index=False, encoding="utf-8-sig")
+
+    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
+        summary_df.to_excel(writer, sheet_name="summary_long", index=False)
+        daily_hourly_df.to_excel(writer, sheet_name="daily_hourly", index=False)
+        events_df.to_excel(writer, sheet_name="events", index=False)
+        for direction in DIRECTIONS:
+            aggregator.pivot(direction, "speed").to_excel(writer, sheet_name=f"{DIRECTION_LABEL[direction]}_速度", index=False)
+            aggregator.pivot(direction, "volume").to_excel(writer, sheet_name=f"{DIRECTION_LABEL[direction]}_交通量", index=False)
+            aggregator.pivot(direction, "count").to_excel(writer, sheet_name=f"{DIRECTION_LABEL[direction]}_実トリップ数", index=False)
+            aggregator.pivot(direction, "time").to_excel(writer, sheet_name=f"{DIRECTION_LABEL[direction]}_通過時刻", index=False)
+
+    viewer_payload = {
+        "route": route.name,
+        "expansion_factor": expansion_factor,
+        "points": [
+            {"bucket_index": i, "kp_km": round(kp / 1000, KP_DECIMALS), "lat": route.lats[i], "lon": route.lons[i]}
+            for i, kp in enumerate(route.kp_m)
+        ],
+        "summary": summary_df.to_dict(orient="records"),
+    }
+    json_path.write_text(json.dumps(viewer_payload, ensure_ascii=False), encoding="utf-8")
+
+    return {
+        "route": route.name,
+        "route_path": str(route.path),
+        "xlsx": str(xlsx_path),
+        "summary_csv": str(summary_csv),
+        "daily_hourly_csv": str(daily_hourly_csv),
+        "events_csv": str(event_csv),
+        "viewer_json": str(json_path),
+        "events": len(aggregator.events),
+        "trips": len(trips),
+        "valid_points": valid_points,
+        "skipped_segments": skipped,
+        "expansion_factor": expansion_factor,
+    }
+
+
 def color_for_speed(speed: object) -> str:
     try:
         v = float(speed)
@@ -582,17 +673,16 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
     center_lat = sum(p["lat"] for p in all_points) / len(all_points) if all_points else 35.6812
     center_lon = sum(p["lon"] for p in all_points) / len(all_points) if all_points else 139.7671
     html_path = out_dir / "30_route_performance_viewer.html"
-    leaflet_css = (SRC_DIR / "leaflet" / "leaflet.css").as_uri()
-    leaflet_js = (SRC_DIR / "leaflet" / "leaflet.js").as_uri()
+    leaflet_css = (SRC_DIR / "leaflet" / "leaflet.css").read_text(encoding="utf-8")
+    leaflet_js = (SRC_DIR / "leaflet" / "leaflet.js").read_text(encoding="utf-8")
     html = f"""<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8">
   <title>30 Route Performance Viewer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="{leaflet_css}">
-  <script src="{leaflet_js}"></script>
   <style>
+    {leaflet_css}
     html, body, #map {{ height:100%; margin:0; background:#fff; font-family: "Segoe UI", "Meiryo UI", sans-serif; }}
     .leaflet-container {{ background:#fff; }}
     .panel {{ position:absolute; z-index:1000; left:12px; top:12px; width:min(560px, calc(100vw - 24px)); background:#ffffffee; border-radius:8px; box-shadow:0 8px 24px #0003; padding:10px; }}
@@ -610,6 +700,7 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
     .hit.active {{ background:#0f766e; color:#fff; }}
     .legend span {{ display:inline-block; width:14px; height:10px; margin-right:4px; }}
   </style>
+  <script>{leaflet_js}</script>
 </head>
 <body>
 <div id="map"></div>
@@ -628,6 +719,7 @@ const DATE_PERIODS = Array.from(new Set(DATA.flatMap(payload => payload.summary.
 const HIT_DATES = new Set(DATE_PERIODS);
 const HIT_MONTHS = Array.from(new Set(DATE_PERIODS.map(d => d.slice(0, 6)))).sort();
 const map = L.map('map').setView([{center_lat:.7f}, {center_lon:.7f}], 13);
+L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }}).addTo(map);
 const state = {{metric:'speed', period: DATE_PERIODS[0] || '平日', hour:8}};
 let monthIndex = 0;
 let layers = [];
@@ -781,38 +873,157 @@ def analyze_project(
     allowed_dates: Optional[set[str]] = None,
     allowed_hours: Optional[set[int]] = None,
     expansion_factors: Optional[dict[str, float]] = None,
+    max_off_route_m: float = MAX_OFF_ROUTE_M,
     progress_callback: ProgressCallback = None,
 ) -> dict[str, object]:
     input_dir, route_dir, output_dir = resolve_project_paths(project_dir)
-    routes = list_route_csvs(route_dir)
-    if not routes:
+    route_paths = list_route_csvs(route_dir)
+    if not route_paths:
         raise FileNotFoundError(f"ルートCSVが見つかりません: {route_dir}")
-    results: list[dict[str, object]] = []
-    for route_index, route_path in enumerate(routes, start=1):
+    files = list_input_csvs(input_dir, recursive)
+    routes = [load_route(path) for path in route_paths]
+    bbox_margin_deg = max(ROUTE_BBOX_MARGIN_DEG, float(max_off_route_m) / 111_320 + 0.0002)
+    route_bounds = [
+        (
+            min(route.lats) - bbox_margin_deg,
+            max(route.lats) + bbox_margin_deg,
+            min(route.lons) - bbox_margin_deg,
+            max(route.lons) + bbox_margin_deg,
+        )
+        for route in routes
+    ]
+    factors: list[float] = []
+    for route, route_path in zip(routes, route_paths):
         factor = 1.0
         if expansion_factors:
-            factor = float(expansion_factors.get(route_path.stem, expansion_factors.get(route_path.name, 1.0)))
+            factor = float(
+                expansion_factors.get(
+                    route.name,
+                    expansion_factors.get(route_path.stem, expansion_factors.get(route_path.name, 1.0)),
+                )
+            )
+        factors.append(factor)
 
-        def route_progress(percent: int, message: str, stats: dict) -> None:
-            overall = int(((route_index - 1) * 100 + percent) / max(len(routes), 1))
+    aggregators = [RouteAggregator(route, factor) for route, factor in zip(routes, factors)]
+    projected_by_route: list[dict[str, list[tuple[datetime, float, float]]]] = [defaultdict(list) for _ in routes]
+    valid_points_by_route = [0 for _ in routes]
+    total_rows = 0
+
+    def emit(percent: int, message: str, stats: dict[str, object]) -> None:
+        if progress_callback:
+            progress_callback(percent, message, stats)
+
+    emit(
+        0,
+        f"CSV走査を開始します: {len(files)}ファイル / {len(routes)}路線",
+        {"phase": "CSV走査", "total_files": len(files), "total_routes": len(routes), "current_file": 0, "current_route": 0},
+    )
+    for file_index, path in enumerate(files, start=1):
+        emit(
+            int(60 * (file_index - 1) / max(len(files), 1)),
+            f"CSV走査中 {file_index}/{len(files)}",
+            {
+                "phase": "CSV走査",
+                "current_file": file_index,
+                "total_files": len(files),
+                "current_route": 0,
+                "total_routes": len(routes),
+                "rows": total_rows,
+                "valid_points": sum(valid_points_by_route),
+                "events": sum(len(agg.events) for agg in aggregators),
+            },
+        )
+        for row_index, row in enumerate(read_csv_rows(path)):
+            total_rows += 1
+            try:
+                lon = float(row[COL_LON])
+                lat = float(row[COL_LAT])
+            except Exception:
+                continue
+            dt = parse_datetime_from_row(row)
+            if dt is None:
+                continue
+            if allowed_dates is not None and dt.strftime("%Y%m%d") not in allowed_dates:
+                continue
+            trip = trip_key(path, row, row_index)
+            for route_index, route in enumerate(routes):
+                min_lat, max_lat, min_lon, max_lon = route_bounds[route_index]
+                if lat < min_lat or lat > max_lat or lon < min_lon or lon > max_lon:
+                    continue
+                projection = route.project(lon, lat)
+                if projection.off_m > max_off_route_m:
+                    continue
+                projected_by_route[route_index][trip].append((dt, projection.s_m, projection.off_m))
+                valid_points_by_route[route_index] += 1
+
+    results: list[dict[str, object]] = []
+    for route_index, (route, aggregator, projected, factor) in enumerate(zip(routes, aggregators, projected_by_route, factors), start=1):
+        route_start = 60 + int(35 * (route_index - 1) / max(len(routes), 1))
+        route_end = 60 + int(35 * route_index / max(len(routes), 1))
+
+        def route_progress(_percent: int, message: str, stats: dict) -> None:
             stats = dict(stats or {})
-            stats.update({"current_route": route_index, "total_routes": len(routes), "current_route_name": route_path.name})
-            if progress_callback:
-                progress_callback(overall, f"[{route_index}/{len(routes)}] {route_path.name}: {message}", stats)
+            stats.update(
+                {
+                    "phase": "バケツ投入",
+                    "current_route": route_index,
+                    "total_routes": len(routes),
+                    "current_route_name": route.name,
+                    "current_file": len(files),
+                    "total_files": len(files),
+                    "rows": total_rows,
+                    "valid_points": valid_points_by_route[route_index - 1],
+                    "events": len(aggregator.events),
+                }
+            )
+            emit(route_start, f"[{route_index}/{len(routes)}] {route.name}: {message}", stats)
 
+        emit(
+            route_start,
+            f"バケツ投入中 {route_index}/{len(routes)}: {route.name}",
+            {
+                "phase": "バケツ投入",
+                "current_route": route_index,
+                "total_routes": len(routes),
+                "current_route_name": route.name,
+                "current_file": len(files),
+                "total_files": len(files),
+                "rows": total_rows,
+                "valid_points": valid_points_by_route[route_index - 1],
+                "events": len(aggregator.events),
+            },
+        )
         results.append(
-            analyze_route(
-                input_dir,
-                route_path,
+            finalize_projected_route(
+                route,
+                aggregator,
+                projected,
                 output_dir,
-                recursive=recursive,
-                allowed_dates=allowed_dates,
                 allowed_hours=allowed_hours,
+                valid_points=valid_points_by_route[route_index - 1],
                 expansion_factor=factor,
                 progress_callback=route_progress,
             )
         )
+        emit(
+            route_end,
+            f"出力完了 {route_index}/{len(routes)}: {route.name}",
+            {
+                "phase": "出力",
+                "current_route": route_index,
+                "total_routes": len(routes),
+                "current_route_name": route.name,
+                "current_file": len(files),
+                "total_files": len(files),
+                "rows": total_rows,
+                "valid_points": valid_points_by_route[route_index - 1],
+                "events": results[-1]["events"],
+                "trips": results[-1]["trips"],
+            },
+        )
+    emit(98, "ビューアを作成中", {"phase": "ビューア作成", "current_file": len(files), "total_files": len(files), "current_route": len(routes), "total_routes": len(routes)})
     viewer = build_viewer(output_dir, results)
+    emit(100, "解析完了", {"phase": "解析完了", "current_file": len(files), "total_files": len(files), "current_route": len(routes), "total_routes": len(routes), "rows": total_rows})
     return {"project_dir": str(project_dir), "input_dir": str(input_dir), "route_dir": str(route_dir), "output_dir": str(output_dir), "viewer": str(viewer), "results": results}
 
 
@@ -844,6 +1055,7 @@ def main() -> None:
     parser.add_argument("--build-viewer", help="Existing 30_route_performance output folder; rebuild viewer without reanalysis")
     parser.add_argument("--dates", help="Target dates, comma-separated YYYYMMDD")
     parser.add_argument("--hours", help="Target hours, comma-separated or ranges, e.g. 7,8,17-19")
+    parser.add_argument("--max-off-route-m", type=float, default=MAX_OFF_ROUTE_M, help="Maximum distance from route in meters (default: 30)")
     parser.add_argument("--recursive", action="store_true", default=True)
     args = parser.parse_args()
     if args.build_viewer:
@@ -852,7 +1064,7 @@ def main() -> None:
         return
     if not args.project:
         parser.error("--project or --build-viewer is required")
-    result = analyze_project(args.project, args.recursive, parse_dates(args.dates), parse_hours(args.hours))
+    result = analyze_project(args.project, args.recursive, parse_dates(args.dates), parse_hours(args.hours), max_off_route_m=args.max_off_route_m)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
