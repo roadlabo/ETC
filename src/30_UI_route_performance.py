@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import importlib.util
 import json
 import subprocess
@@ -60,11 +59,6 @@ def qdate_to_token(qdate: QDate) -> str:
     return qdate.toString("yyyyMMdd")
 
 
-def iter_csv_rows(path: Path):
-    with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as fh:
-        yield from csv.reader(fh)
-
-
 class ProjectScanWorker(QObject):
     progress = pyqtSignal(int, str, dict)
     route_loaded = pyqtSignal(dict)
@@ -93,69 +87,15 @@ class ProjectScanWorker(QObject):
                 )
                 self.route_loaded.emit(routes[-1])
                 self.progress.emit(
-                    min(15, int(15 * idx / max(len(route_files), 1))),
-                    f"ルート読込 {idx}/{len(route_files)}: {route.name}",
+                    int(100 * idx / max(len(route_files), 1)),
+                    f"ルート読込 {idx}/{len(route_files)}",
                     {"phase": "ルート読込", "routes": len(routes), "route_total": len(route_files)},
                 )
 
-            files = perf.list_input_csvs(input_dir, True)
-            dates: set[str] = set()
-            rows = 0
-            readable_files = 0
-            for file_idx, csv_path in enumerate(files, start=1):
-                file_rows = 0
-                self.progress.emit(
-                    15 + int(80 * (file_idx - 1) / max(len(files), 1)),
-                    f"第2スクリーニング日付抽出 {file_idx}/{len(files)}",
-                    {
-                        "phase": "日付抽出",
-                        "current_file": csv_path.name,
-                        "file_index": file_idx,
-                        "file_total": len(files),
-                        "rows": rows,
-                        "dates": len(dates),
-                    },
-                )
-                try:
-                    for row in iter_csv_rows(csv_path):
-                        rows += 1
-                        file_rows += 1
-                        dt = perf.parse_datetime_from_row(row)
-                        if dt is not None:
-                            dates.add(dt.strftime("%Y%m%d"))
-                        if file_rows % 20000 == 0:
-                            pct = 15 + int(80 * (file_idx - 1) / max(len(files), 1))
-                            self.progress.emit(
-                                pct,
-                                f"読込中 {file_idx}/{len(files)}: {file_rows:,} 行",
-                                {
-                                    "phase": "日付抽出",
-                                    "current_file": csv_path.name,
-                                    "file_index": file_idx,
-                                    "file_total": len(files),
-                                    "rows": rows,
-                                    "dates": len(dates),
-                                },
-                            )
-                    readable_files += 1
-                except Exception as exc:
-                    self.progress.emit(
-                        15 + int(80 * file_idx / max(len(files), 1)),
-                        f"読込スキップ {file_idx}/{len(files)}: {exc}",
-                        {
-                            "phase": "日付抽出",
-                            "current_file": csv_path.name,
-                            "file_index": file_idx,
-                            "file_total": len(files),
-                            "rows": rows,
-                            "dates": len(dates),
-                        },
-                    )
-
             self.progress.emit(
                 100,
-                f"プロジェクト読込完了: ルート {len(routes)} / 日付 {len(dates)} / 行 {rows:,}",
-                {"phase": "読込完了", "rows": rows, "dates": len(dates), "file_total": len(files)},
+                f"ルート読込完了: {len(routes)}路線",
+                {"phase": "ルート読込完了", "routes": len(routes), "route_total": len(route_files)},
             )
             self.finished.emit(
                 {
@@ -163,10 +103,10 @@ class ProjectScanWorker(QObject):
                     "route_dir": str(route_dir),
                     "output_dir": str(output_dir),
                     "routes": routes,
-                    "dates": sorted(dates),
-                    "files": len(files),
-                    "readable_files": readable_files,
-                    "rows": rows,
+                    "dates": [],
+                    "files": 0,
+                    "readable_files": 0,
+                    "rows": 0,
                 }
             )
         except Exception as exc:
@@ -255,22 +195,13 @@ class MainWindow(QMainWindow):
         content.setSpacing(8)
         main.addLayout(content, 1)
 
-        left = QWidget()
-        left.setMinimumWidth(560)
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(8)
-        left_layout.addWidget(self._build_calendar_box(), 2)
-        left_layout.addWidget(self._build_hour_box(), 3)
-        content.addWidget(left, 0)
-
         center = QWidget()
-        center.setMinimumWidth(520)
+        center.setMinimumWidth(620)
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(0, 0, 0, 0)
         center_layout.setSpacing(8)
-        center_layout.addWidget(self._build_route_box(), 3)
-        center_layout.addWidget(self._build_log_box(), 2)
+        center_layout.addWidget(self._build_route_box(), 5)
+        center_layout.addWidget(self._build_log_box(), 1)
         content.addWidget(center, 1)
 
         right = self._box("ルートマップ")
@@ -430,13 +361,14 @@ class MainWindow(QMainWindow):
         self._last_scan_log_bucket = -1
         self._last_analysis_log_bucket = -1
         self.route_table.setRowCount(0)
+        self.set_factor_inputs_enabled(True)
         self.available_dates.clear()
         self.selected_date_tokens.clear()
         self.clear_calendar_formats()
         self.progress.setValue(0)
         self.log.clear()
-        self.append_log("プロジェクト読込を開始しました。第2スクリーニングCSVをバックグラウンドで確認します。")
-        self.update_stat("phase", "読込開始")
+        self.append_log("プロジェクト読込を開始しました。ここではルートファイルだけを確認します。")
+        self.update_stat("phase", "ルート読込")
         self.scan_thread = QThread()
         self.scan_worker = ProjectScanWorker(self.project_dir)
         self.scan_worker.moveToThread(self.scan_thread)
@@ -456,15 +388,19 @@ class MainWindow(QMainWindow):
         file_total = int(stats.get("file_total", 0) or 0)
         rows = int(stats.get("rows", 0) or 0)
         dates = int(stats.get("dates", 0) or 0)
+        route_total = int(stats.get("route_total", 0) or 0)
+        routes = int(stats.get("routes", 0) or 0)
         if file_total:
             self.progress_label.setText(f"{phase}: {file_index}/{file_total} ファイル / {rows:,} 行 / 検出日 {dates}")
+        elif route_total:
+            self.progress_label.setText(f"{phase}: {routes}/{route_total} 路線")
         else:
             self.progress_label.setText(message)
         self.update_stat("phase", stats.get("phase", "-"))
         self.update_stat("files", f"{file_index} / {file_total}" if file_total else "0 / 0")
         self.update_stat("rows", f"{rows:,}")
         self.update_stat("dates", str(dates))
-        self.update_stat("routes", str(stats.get("routes", 0)))
+        self.update_stat("routes", f"{routes} / {route_total}" if route_total else str(routes))
         bucket = percent // 5
         if bucket != self._last_scan_log_bucket or percent >= 100:
             self._last_scan_log_bucket = bucket
@@ -473,20 +409,18 @@ class MainWindow(QMainWindow):
     def project_scan_done(self, result: dict) -> None:
         self.run_button.setEnabled(True)
         self.progress.setValue(100)
-        self.available_dates = set(result.get("dates", []))
-        self.selected_date_tokens = set(self.available_dates)
+        self.available_dates = set()
+        self.selected_date_tokens = set()
         routes = result.get("routes", [])
         if self.route_table.rowCount() != len(routes):
             self.populate_routes(routes)
         self.refresh_calendar_formats()
         self.update_stat("phase", "読込完了")
-        self.update_stat("files", f"{result.get('readable_files', 0)} / {result.get('files', 0)}")
-        self.update_stat("rows", f"{int(result.get('rows', 0)):,}")
-        self.update_stat("dates", str(len(self.available_dates)))
+        self.update_stat("files", "解析時に読込")
+        self.update_stat("rows", "解析時に集計")
+        self.update_stat("dates", "ビューアで選択")
         self.update_stat("routes", str(len(routes)))
-        self.progress_label.setText(
-            f"読込完了: ルート {len(routes)} / 日付 {len(self.available_dates)} / 行 {int(result.get('rows', 0)):,}"
-        )
+        self.progress_label.setText(f"ルート読込完了: {len(routes)}路線。拡大係数を確認してから解析開始してください。")
         self.append_log(self.progress_label.text())
         self.load_route_map(routes)
 
@@ -533,6 +467,9 @@ class MainWindow(QMainWindow):
         self._syncing_calendars = False
 
     def clear_calendar_formats(self) -> None:
+        if not hasattr(self, "calendar_a") or not hasattr(self, "calendar_b"):
+            self.formatted_dates.clear()
+            return
         default_format = QTextCharFormat()
         for token in self.formatted_dates:
             qdate = date_token_to_qdate(token)
@@ -594,17 +531,34 @@ class MainWindow(QMainWindow):
                 factors[name_item.text()] = spin.value()
         return factors
 
+    def set_factor_inputs_enabled(self, enabled: bool) -> None:
+        for row in range(self.route_table.rowCount()):
+            spin = self.route_table.cellWidget(row, 3)
+            if isinstance(spin, QDoubleSpinBox):
+                spin.setEnabled(enabled)
+
     def start_analysis(self) -> None:
         if not self.project_dir:
             QMessageBox.warning(self, "未選択", "先にプロジェクトフォルダを選択してください。")
             return
+        reply = QMessageBox.question(
+            self,
+            "拡大係数確認",
+            "拡大係数を入力しましたか？\n「はい」で解析開始、「いいえ」でキャンセルします。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            self.append_log("解析開始をキャンセルしました。拡大係数を確認してください。")
+            return
         self.run_button.setEnabled(False)
         self.viewer_button.setEnabled(False)
+        self.set_factor_inputs_enabled(False)
         self.progress.setValue(0)
         self.progress_label.setText("解析準備中")
-        self.append_log("解析を開始しました。ルートごとに投影、バケツ投入、Excel/JSON出力を進めます。")
+        self.append_log("解析を開始しました。第2スクリーニングCSVを読み込み、全日・全時間を一度だけ集計します。")
         self.thread = QThread()
-        self.worker = AnalysisWorker(self.project_dir, self.selected_dates(), self.selected_hours(), self.expansion_factors())
+        self.worker = AnalysisWorker(self.project_dir, None, None, self.expansion_factors())
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self.update_analysis_progress)
@@ -650,6 +604,7 @@ class MainWindow(QMainWindow):
 
     def analysis_failed(self, message: str) -> None:
         self.run_button.setEnabled(True)
+        self.set_factor_inputs_enabled(True)
         self.progress_label.setText("解析失敗")
         self.append_log(f"解析失敗: {message}")
         QMessageBox.critical(self, "解析失敗", message)
@@ -691,7 +646,8 @@ class MainWindow(QMainWindow):
   <link rel="stylesheet" href="{leaflet_css}">
   <script src="{leaflet_js}"></script>
   <style>
-    html, body, #map {{ height:100%; margin:0; }}
+    html, body, #map {{ height:100%; margin:0; background:#fff; }}
+    .leaflet-container {{ background:#fff; }}
     .panel {{ position:absolute; z-index:1000; left:10px; top:10px; background:#ffffffee; border-radius:6px; padding:8px 10px; font-family:"Segoe UI","Meiryo UI",sans-serif; box-shadow:0 4px 18px #0003; }}
   </style>
 </head>
@@ -702,7 +658,6 @@ class MainWindow(QMainWindow):
 const ROUTES = {json.dumps(payload, ensure_ascii=False)};
 const COLORS = ['#00a2ff','#22c55e','#f97316','#a855f7','#ef4444','#14b8a6','#eab308','#ec4899','#84cc16','#6366f1'];
 const map = L.map('map').setView([{center_lat:.7f}, {center_lon:.7f}], 12);
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }}).addTo(map);
 const bounds = [];
 ROUTES.forEach((route, idx) => {{
   const coords = route.coords || [];
