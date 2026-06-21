@@ -352,6 +352,67 @@ class RouteAggregator:
             data.append(row)
         return pd.DataFrame(data, columns=["bucket_index", "KP[km]", "lon", "lat"] + columns)
 
+    def daily_wide_rows(self, date_token: str, direction: str, metric: str, hours: Iterable[int]) -> list[dict[str, object]]:
+        hour_list = list(hours)
+        rows: list[dict[str, object]] = []
+        for i, kp in enumerate(self.route.kp_m):
+            row: dict[str, object] = {
+                "bucket_index": i,
+                "KP[km]": round(kp / 1000, KP_DECIMALS),
+                "lon": self.route.lons[i],
+                "lat": self.route.lats[i],
+            }
+            weighted_speed_sum = 0.0
+            volume_sum = 0.0
+            for hour in hour_list:
+                key = (direction, i, date_token, hour)
+                speeds = self.speed_values.get(key, [])
+                count = self.counts.get(key, 0)
+                volume = count * self.expansion_factor
+                if metric == "speed":
+                    avg_speed = sum(speeds) / len(speeds) if speeds else None
+                    row[f"{hour:02d}"] = round(avg_speed, 1) if avg_speed is not None else ""
+                    if avg_speed is not None and volume > 0:
+                        weighted_speed_sum += avg_speed * volume
+                        volume_sum += volume
+                else:
+                    row[f"{hour:02d}"] = round(volume, 1) if volume else ""
+                    volume_sum += volume
+            row["daily"] = round(weighted_speed_sum / volume_sum, 1) if metric == "speed" and volume_sum else (
+                round(volume_sum, 1) if metric != "speed" and volume_sum else ""
+            )
+            rows.append(row)
+        return rows
+
+    def three_hour_rows(self, date_token: str, direction: str, metric: str) -> list[dict[str, object]]:
+        groups = [(start, list(range(start, min(start + 3, 24)))) for start in range(0, 24, 3)]
+        rows: list[dict[str, object]] = []
+        for i, kp in enumerate(self.route.kp_m):
+            row: dict[str, object] = {
+                "bucket_index": i,
+                "KP[km]": round(kp / 1000, KP_DECIMALS),
+                "lon": self.route.lons[i],
+                "lat": self.route.lats[i],
+            }
+            for start, hours in groups:
+                weighted_speed_sum = 0.0
+                volume_sum = 0.0
+                for hour in hours:
+                    key = (direction, i, date_token, hour)
+                    speeds = self.speed_values.get(key, [])
+                    count = self.counts.get(key, 0)
+                    volume = count * self.expansion_factor
+                    if metric == "speed" and speeds and volume > 0:
+                        weighted_speed_sum += (sum(speeds) / len(speeds)) * volume
+                    volume_sum += volume
+                col = f"{start:02d}-{hours[-1]:02d}"
+                if metric == "speed":
+                    row[col] = round(weighted_speed_sum / volume_sum, 1) if volume_sum else ""
+                else:
+                    row[col] = round(volume_sum, 1) if volume_sum else ""
+            rows.append(row)
+        return rows
+
 
 def find_first_existing(project_dir: Path, candidates: list[str]) -> Path:
     for name in candidates:
@@ -410,6 +471,126 @@ def interpolate_event(
     pass_dt = t1 + timedelta(seconds=dt_s * ratio)
     dist_m = abs(ds)
     return Event(route.name, trip, bucket_idx, direction, pass_dt, dist_m / dt_s * 3.6, dist_m, dt_s)
+
+
+def write_route_outputs(
+    aggregator: RouteAggregator,
+    output_dir: str | Path,
+    expansion_factor: float,
+) -> dict[str, object]:
+    route = aggregator.route
+    route_dir = Path(output_dir) / safe_name(route.name)
+    route_dir.mkdir(parents=True, exist_ok=True)
+    summary_csv = route_dir / f"{safe_name(route.name)}_performance.csv"
+    daily_hourly_csv = route_dir / f"{safe_name(route.name)}_daily_hourly_performance.csv"
+    event_csv = route_dir / f"{safe_name(route.name)}_events.csv"
+    index_xlsx = route_dir / f"{safe_name(route.name)}_performance_index.xlsx"
+    json_path = route_dir / f"{safe_name(route.name)}_viewer.json"
+
+    summary_rows = aggregator.summary_rows()
+    summary_fields = [
+        "route",
+        "bucket_index",
+        "kp_km",
+        "lon",
+        "lat",
+        "direction",
+        "direction_label",
+        "period",
+        "date",
+        "hour",
+        "avg_speed_kmh",
+        "median_speed_kmh",
+        "trip_count",
+        "expanded_volume",
+        "avg_pass_time",
+    ]
+    event_fields = [
+        "route",
+        "trip",
+        "bucket_idx",
+        "direction",
+        "pass_dt",
+        "speed_kmh",
+        "segment_distance_m",
+        "segment_time_s",
+    ]
+    with summary_csv.open("w", encoding="utf-8-sig", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=summary_fields)
+        writer.writeheader()
+        writer.writerows(summary_rows)
+    with daily_hourly_csv.open("w", encoding="utf-8-sig", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=summary_fields)
+        writer.writeheader()
+        writer.writerows(row for row in summary_rows if str(row["date"]).isdigit())
+    with event_csv.open("w", encoding="utf-8-sig", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=event_fields)
+        writer.writeheader()
+        for event in aggregator.events:
+            row = event.__dict__.copy()
+            row["pass_dt"] = event.pass_dt.isoformat()
+            writer.writerow(row)
+
+    daily_xlsx_files: list[str] = []
+    hours = range(24)
+    for date_token in sorted(aggregator.date_tokens):
+        daily_xlsx = route_dir / f"{safe_name(route.name)}_{date_token}.xlsx"
+        with pd.ExcelWriter(daily_xlsx, engine="openpyxl") as writer:
+            for direction in DIRECTIONS:
+                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "speed", hours)).to_excel(
+                    writer, sheet_name=f"speed_{direction}", index=False
+                )
+                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "volume", hours)).to_excel(
+                    writer, sheet_name=f"volume_{direction}", index=False
+                )
+                pd.DataFrame(aggregator.three_hour_rows(date_token, direction, "speed")).to_excel(
+                    writer, sheet_name=f"speed3h_{direction}", index=False
+                )
+                pd.DataFrame(aggregator.three_hour_rows(date_token, direction, "volume")).to_excel(
+                    writer, sheet_name=f"volume3h_{direction}", index=False
+                )
+        daily_xlsx_files.append(str(daily_xlsx))
+
+    with pd.ExcelWriter(index_xlsx, engine="openpyxl") as writer:
+        pd.DataFrame(
+            [
+                {"item": "route", "value": route.name},
+                {"item": "expansion_factor", "value": expansion_factor},
+                {"item": "date_count", "value": len(aggregator.date_tokens)},
+                {"item": "event_count", "value": len(aggregator.events)},
+                {"item": "daily_xlsx_folder", "value": str(route_dir)},
+            ]
+        ).to_excel(writer, sheet_name="index", index=False)
+        pd.DataFrame({"date": sorted(aggregator.date_tokens), "xlsx": daily_xlsx_files}).to_excel(
+            writer, sheet_name="daily_files", index=False
+        )
+        pd.DataFrame(
+            [
+                {"note": "巨大な縦長明細はExcel上限を避けるためCSVへ保存します。"},
+                {"note": "日別Excelは、行=路線バケツ、列=00-23時、daily=交通量重み付き日平均速度または日交通量です。"},
+                {"note": "3時間速度は、時間平均速度×時間交通量の和を3時間交通量合計で割っています。"},
+            ]
+        ).to_excel(writer, sheet_name="readme", index=False)
+
+    viewer_payload = {
+        "route": route.name,
+        "expansion_factor": expansion_factor,
+        "points": [
+            {"bucket_index": i, "kp_km": round(kp / 1000, KP_DECIMALS), "lat": route.lats[i], "lon": route.lons[i]}
+            for i, kp in enumerate(route.kp_m)
+        ],
+        "summary": summary_rows,
+    }
+    json_path.write_text(json.dumps(viewer_payload, ensure_ascii=False), encoding="utf-8")
+
+    return {
+        "xlsx": str(index_xlsx),
+        "summary_csv": str(summary_csv),
+        "daily_hourly_csv": str(daily_hourly_csv),
+        "events_csv": str(event_csv),
+        "viewer_json": str(json_path),
+        "daily_xlsx_files": daily_xlsx_files,
+    }
 
 
 def analyze_route(
@@ -489,51 +670,13 @@ def analyze_route(
                     continue
                 aggregator.add_event(event)
 
-    route_dir = Path(output_dir) / safe_name(route.name)
-    route_dir.mkdir(parents=True, exist_ok=True)
-    summary_csv = route_dir / f"{safe_name(route.name)}_performance.csv"
-    daily_hourly_csv = route_dir / f"{safe_name(route.name)}_daily_hourly_performance.csv"
-    event_csv = route_dir / f"{safe_name(route.name)}_events.csv"
-    xlsx_path = route_dir / f"{safe_name(route.name)}_performance.xlsx"
-    json_path = route_dir / f"{safe_name(route.name)}_viewer.json"
-
-    summary_df = pd.DataFrame(aggregator.summary_rows())
-    daily_hourly_df = summary_df[summary_df["date"].astype(str).str.fullmatch(r"\d{8}", na=False)].copy()
-    events_df = pd.DataFrame([event.__dict__ | {"pass_dt": event.pass_dt.isoformat()} for event in aggregator.events])
-    summary_df.to_csv(summary_csv, index=False, encoding="utf-8-sig")
-    daily_hourly_df.to_csv(daily_hourly_csv, index=False, encoding="utf-8-sig")
-    events_df.to_csv(event_csv, index=False, encoding="utf-8-sig")
-
-    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
-        summary_df.to_excel(writer, sheet_name="summary_long", index=False)
-        daily_hourly_df.to_excel(writer, sheet_name="daily_hourly", index=False)
-        events_df.to_excel(writer, sheet_name="events", index=False)
-        for direction in DIRECTIONS:
-            aggregator.pivot(direction, "speed").to_excel(writer, sheet_name=f"{DIRECTION_LABEL[direction]}_速度", index=False)
-            aggregator.pivot(direction, "volume").to_excel(writer, sheet_name=f"{DIRECTION_LABEL[direction]}_交通量", index=False)
-            aggregator.pivot(direction, "count").to_excel(writer, sheet_name=f"{DIRECTION_LABEL[direction]}_実トリップ数", index=False)
-            aggregator.pivot(direction, "time").to_excel(writer, sheet_name=f"{DIRECTION_LABEL[direction]}_通過時刻", index=False)
-
-    viewer_payload = {
-        "route": route.name,
-        "expansion_factor": expansion_factor,
-        "points": [
-            {"bucket_index": i, "kp_km": round(kp / 1000, KP_DECIMALS), "lat": route.lats[i], "lon": route.lons[i]}
-            for i, kp in enumerate(route.kp_m)
-        ],
-        "summary": summary_df.to_dict(orient="records"),
-    }
-    json_path.write_text(json.dumps(viewer_payload, ensure_ascii=False), encoding="utf-8")
+    outputs = write_route_outputs(aggregator, output_dir, expansion_factor)
 
     progress(100, "出力完了", trips=len(trips), skipped_segments=skipped)
     return {
         "route": route.name,
         "route_path": str(route.path),
-        "xlsx": str(xlsx_path),
-        "summary_csv": str(summary_csv),
-        "daily_hourly_csv": str(daily_hourly_csv),
-        "events_csv": str(event_csv),
-        "viewer_json": str(json_path),
+        **outputs,
         "events": len(aggregator.events),
         "trips": len(trips),
         "valid_points": valid_points,
@@ -579,50 +722,12 @@ def finalize_projected_route(
                     continue
                 aggregator.add_event(event)
 
-    route_dir = Path(output_dir) / safe_name(route.name)
-    route_dir.mkdir(parents=True, exist_ok=True)
-    summary_csv = route_dir / f"{safe_name(route.name)}_performance.csv"
-    daily_hourly_csv = route_dir / f"{safe_name(route.name)}_daily_hourly_performance.csv"
-    event_csv = route_dir / f"{safe_name(route.name)}_events.csv"
-    xlsx_path = route_dir / f"{safe_name(route.name)}_performance.xlsx"
-    json_path = route_dir / f"{safe_name(route.name)}_viewer.json"
-
-    summary_df = pd.DataFrame(aggregator.summary_rows())
-    daily_hourly_df = summary_df[summary_df["date"].astype(str).str.fullmatch(r"\d{8}", na=False)].copy()
-    events_df = pd.DataFrame([event.__dict__ | {"pass_dt": event.pass_dt.isoformat()} for event in aggregator.events])
-    summary_df.to_csv(summary_csv, index=False, encoding="utf-8-sig")
-    daily_hourly_df.to_csv(daily_hourly_csv, index=False, encoding="utf-8-sig")
-    events_df.to_csv(event_csv, index=False, encoding="utf-8-sig")
-
-    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
-        summary_df.to_excel(writer, sheet_name="summary_long", index=False)
-        daily_hourly_df.to_excel(writer, sheet_name="daily_hourly", index=False)
-        events_df.to_excel(writer, sheet_name="events", index=False)
-        for direction in DIRECTIONS:
-            aggregator.pivot(direction, "speed").to_excel(writer, sheet_name=f"{DIRECTION_LABEL[direction]}_速度", index=False)
-            aggregator.pivot(direction, "volume").to_excel(writer, sheet_name=f"{DIRECTION_LABEL[direction]}_交通量", index=False)
-            aggregator.pivot(direction, "count").to_excel(writer, sheet_name=f"{DIRECTION_LABEL[direction]}_実トリップ数", index=False)
-            aggregator.pivot(direction, "time").to_excel(writer, sheet_name=f"{DIRECTION_LABEL[direction]}_通過時刻", index=False)
-
-    viewer_payload = {
-        "route": route.name,
-        "expansion_factor": expansion_factor,
-        "points": [
-            {"bucket_index": i, "kp_km": round(kp / 1000, KP_DECIMALS), "lat": route.lats[i], "lon": route.lons[i]}
-            for i, kp in enumerate(route.kp_m)
-        ],
-        "summary": summary_df.to_dict(orient="records"),
-    }
-    json_path.write_text(json.dumps(viewer_payload, ensure_ascii=False), encoding="utf-8")
+    outputs = write_route_outputs(aggregator, output_dir, expansion_factor)
 
     return {
         "route": route.name,
         "route_path": str(route.path),
-        "xlsx": str(xlsx_path),
-        "summary_csv": str(summary_csv),
-        "daily_hourly_csv": str(daily_hourly_csv),
-        "events_csv": str(event_csv),
-        "viewer_json": str(json_path),
+        **outputs,
         "events": len(aggregator.events),
         "trips": len(trips),
         "valid_points": valid_points,

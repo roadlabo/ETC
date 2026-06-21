@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from openpyxl import load_workbook
+
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "src" / "30_route_performance.py"
 if not MODULE_PATH.exists():
@@ -91,13 +93,22 @@ class RoutePerformanceLogicTest(unittest.TestCase):
 
             result = route_performance.analyze_project(project, allowed_dates={"20250102"}, allowed_hours={8})
             daily_csv = Path(result["results"][0]["daily_hourly_csv"])
+            daily_xlsx = Path(result["results"][0]["daily_xlsx_files"][0])
             rebuilt_viewer = route_performance.build_viewer_from_output(result["output_dir"])
 
             self.assertTrue(daily_csv.exists())
+            self.assertTrue(daily_xlsx.exists())
             with daily_csv.open("r", encoding="utf-8-sig", newline="") as fh:
                 rows = list(csv.DictReader(fh))
             self.assertTrue(rows)
             self.assertTrue(all(row["date"] == "20250102" for row in rows))
+            wb = load_workbook(daily_xlsx, read_only=True)
+            self.assertIn("speed_forward", wb.sheetnames)
+            self.assertIn("volume_forward", wb.sheetnames)
+            self.assertIn("speed3h_forward", wb.sheetnames)
+            self.assertEqual(wb["speed_forward"].max_column, 29)
+            self.assertEqual(wb["volume_forward"].max_column, 29)
+            wb.close()
             self.assertTrue(Path(rebuilt_viewer).exists())
 
     def test_project_paths_accept_fullwidth_screening_number_and_japanese_output(self):
