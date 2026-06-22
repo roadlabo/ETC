@@ -272,14 +272,14 @@ class RouteAggregator:
         self.counts: dict[tuple[str, int, str, int], int] = defaultdict(int)
         self.seen_trip_bucket: set[tuple[str, int]] = set()
         self.date_tokens: set[str] = set()
-        self.events: list[Event] = []
+        self.event_count = 0
 
     def add_event(self, event: Event) -> bool:
         unique_key = (event.trip, event.bucket_idx)
         if unique_key in self.seen_trip_bucket:
             return False
         self.seen_trip_bucket.add(unique_key)
-        self.events.append(event)
+        self.event_count += 1
         sec = event.pass_dt.hour * 3600 + event.pass_dt.minute * 60 + event.pass_dt.second + event.pass_dt.microsecond / 1_000_000
         date_token = event.pass_dt.strftime("%Y%m%d")
         self.date_tokens.add(date_token)
@@ -293,16 +293,20 @@ class RouteAggregator:
     def summary_periods(self) -> list[str]:
         return PERIODS + sorted(self.date_tokens)
 
-    def summary_rows(self) -> list[dict[str, object]]:
+    def summary_rows(self, include_empty: bool = True, date_only: bool = False) -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
         for i, kp in enumerate(self.route.kp_m):
             for direction in DIRECTIONS:
                 for period in self.summary_periods():
+                    if date_only and not re.fullmatch(r"\d{8}", period):
+                        continue
                     for hour in range(24):
                         key = (direction, i, period, hour)
                         speeds = self.speed_values.get(key, [])
                         times = self.time_values.get(key, [])
                         count = self.counts.get(key, 0)
+                        if not include_empty and not count:
+                            continue
                         rows.append(
                             {
                                 "route": self.route.name,
@@ -483,11 +487,11 @@ def write_route_outputs(
     route_dir.mkdir(parents=True, exist_ok=True)
     summary_csv = route_dir / f"{safe_name(route.name)}_performance.csv"
     daily_hourly_csv = route_dir / f"{safe_name(route.name)}_daily_hourly_performance.csv"
-    event_csv = route_dir / f"{safe_name(route.name)}_events.csv"
     index_xlsx = route_dir / f"{safe_name(route.name)}_performance_index.xlsx"
     json_path = route_dir / f"{safe_name(route.name)}_viewer.json"
 
-    summary_rows = aggregator.summary_rows()
+    summary_rows = aggregator.summary_rows(include_empty=False)
+    daily_summary_rows = aggregator.summary_rows(include_empty=False, date_only=True)
     summary_fields = [
         "route",
         "bucket_index",
@@ -505,16 +509,6 @@ def write_route_outputs(
         "expanded_volume",
         "avg_pass_time",
     ]
-    event_fields = [
-        "route",
-        "trip",
-        "bucket_idx",
-        "direction",
-        "pass_dt",
-        "speed_kmh",
-        "segment_distance_m",
-        "segment_time_s",
-    ]
     with summary_csv.open("w", encoding="utf-8-sig", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=summary_fields)
         writer.writeheader()
@@ -522,14 +516,7 @@ def write_route_outputs(
     with daily_hourly_csv.open("w", encoding="utf-8-sig", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=summary_fields)
         writer.writeheader()
-        writer.writerows(row for row in summary_rows if str(row["date"]).isdigit())
-    with event_csv.open("w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=event_fields)
-        writer.writeheader()
-        for event in aggregator.events:
-            row = event.__dict__.copy()
-            row["pass_dt"] = event.pass_dt.isoformat()
-            writer.writerow(row)
+        writer.writerows(daily_summary_rows)
 
     daily_xlsx_files: list[str] = []
     hours = range(24)
@@ -557,7 +544,7 @@ def write_route_outputs(
                 {"item": "route", "value": route.name},
                 {"item": "expansion_factor", "value": expansion_factor},
                 {"item": "date_count", "value": len(aggregator.date_tokens)},
-                {"item": "event_count", "value": len(aggregator.events)},
+                {"item": "event_count", "value": aggregator.event_count},
                 {"item": "daily_xlsx_folder", "value": str(route_dir)},
             ]
         ).to_excel(writer, sheet_name="index", index=False)
@@ -579,7 +566,7 @@ def write_route_outputs(
             {"bucket_index": i, "kp_km": round(kp / 1000, KP_DECIMALS), "lat": route.lats[i], "lon": route.lons[i]}
             for i, kp in enumerate(route.kp_m)
         ],
-        "summary": summary_rows,
+        "summary": daily_summary_rows,
     }
     json_path.write_text(json.dumps(viewer_payload, ensure_ascii=False), encoding="utf-8")
 
@@ -587,7 +574,7 @@ def write_route_outputs(
         "xlsx": str(index_xlsx),
         "summary_csv": str(summary_csv),
         "daily_hourly_csv": str(daily_hourly_csv),
-        "events_csv": str(event_csv),
+        "events_csv": "",
         "viewer_json": str(json_path),
         "daily_xlsx_files": daily_xlsx_files,
     }
@@ -614,7 +601,7 @@ def analyze_route(
         payload = {
             "route": route.name,
             "total_files": len(files),
-            "events": len(aggregator.events),
+            "events": aggregator.event_count,
             "valid_points": valid_points,
             **stats,
         }
@@ -677,7 +664,7 @@ def analyze_route(
         "route": route.name,
         "route_path": str(route.path),
         **outputs,
-        "events": len(aggregator.events),
+        "events": aggregator.event_count,
         "trips": len(trips),
         "valid_points": valid_points,
         "skipped_segments": skipped,
@@ -699,7 +686,7 @@ def finalize_projected_route(
     trips = list(projected.items())
     for trip_index, (trip, points) in enumerate(trips, start=1):
         if progress_callback and (trip_index == 1 or trip_index % 100 == 0 or trip_index == len(trips)):
-            progress_callback(0, f"バケツ投入中 {trip_index}/{len(trips)}", {"trips": len(trips), "valid_points": valid_points, "events": len(aggregator.events)})
+            progress_callback(0, f"バケツ投入中 {trip_index}/{len(trips)}", {"trips": len(trips), "valid_points": valid_points, "events": aggregator.event_count})
         points.sort(key=lambda x: x[0])
         for (t1, s1, _off1), (t2, s2, _off2) in zip(points, points[1:]):
             dt_s = (t2 - t1).total_seconds()
@@ -728,7 +715,7 @@ def finalize_projected_route(
         "route": route.name,
         "route_path": str(route.path),
         **outputs,
-        "events": len(aggregator.events),
+        "events": aggregator.event_count,
         "trips": len(trips),
         "valid_points": valid_points,
         "skipped_segments": skipped,
@@ -828,6 +815,10 @@ L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ max
 const state = {{metric:'speed', period: DATE_PERIODS[0] || '平日', hour:8}};
 let monthIndex = 0;
 let layers = [];
+DATA.forEach(payload => {{
+  payload.summaryIndex = new Map();
+  payload.summary.forEach(r => payload.summaryIndex.set(`${{r.bucket_index}}|${{r.direction}}|${{r.period}}|${{Number(r.hour)}}`, r));
+}});
 function periodLabel(period) {{
   period = String(period);
   if (/^\\d{{8}}$/.test(period)) return `${{period.slice(0,4)}}-${{period.slice(4,6)}}-${{period.slice(6,8)}}`;
@@ -898,7 +889,7 @@ function offsetPoint(a, b, side, meters) {{
   ];
 }}
 function findSummary(payload, bucket, direction) {{
-  return payload.summary.find(r => r.bucket_index === bucket && r.direction === direction && r.period === state.period && Number(r.hour) === state.hour) || {{}};
+  return payload.summaryIndex.get(`${{bucket}}|${{direction}}|${{state.period}}|${{state.hour}}`) || {{}};
 }}
 function speedColor(v) {{
   v = Number(v); if (!Number.isFinite(v)) return '#9ca3af';
@@ -1050,7 +1041,7 @@ def analyze_project(
                 "valid_points": sum(valid_points_by_route),
                 "route_names": [route.name for route in routes],
                 "route_valid_points": list(valid_points_by_route),
-                "events": sum(len(agg.events) for agg in aggregators),
+                "events": sum(agg.event_count for agg in aggregators),
             },
         )
         for row_index, row in enumerate(read_csv_rows(path)):
@@ -1089,7 +1080,7 @@ def analyze_project(
                         "valid_points": sum(valid_points_by_route),
                         "route_names": [route.name for route in routes],
                         "route_valid_points": list(valid_points_by_route),
-                        "events": sum(len(agg.events) for agg in aggregators),
+                        "events": sum(agg.event_count for agg in aggregators),
                     },
                 )
 
@@ -1112,7 +1103,7 @@ def analyze_project(
                     "valid_points": valid_points_by_route[route_index - 1],
                     "route_names": [route.name for route in routes],
                     "route_valid_points": list(valid_points_by_route),
-                    "events": len(aggregator.events),
+                    "events": aggregator.event_count,
                 }
             )
             emit(route_start, f"[{route_index}/{len(routes)}] {route.name}: {message}", stats)
@@ -1131,7 +1122,7 @@ def analyze_project(
                 "valid_points": valid_points_by_route[route_index - 1],
                 "route_names": [route.name for route in routes],
                 "route_valid_points": list(valid_points_by_route),
-                "events": len(aggregator.events),
+                "events": aggregator.event_count,
             },
         )
         results.append(

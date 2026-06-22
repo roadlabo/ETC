@@ -75,11 +75,13 @@ class RoutePerformanceLogicTest(unittest.TestCase):
 
             result = route_performance.analyze_project(project, allowed_dates={"20250102"}, allowed_hours={8})
 
-            event_csv = Path(result["results"][0]["events_csv"])
-            with event_csv.open("r", encoding="utf-8-sig", newline="") as fh:
+            self.assertEqual(result["results"][0]["events_csv"], "")
+            daily_csv = Path(result["results"][0]["daily_hourly_csv"])
+            with daily_csv.open("r", encoding="utf-8-sig", newline="") as fh:
                 rows = list(csv.DictReader(fh))
-            bucket_one_events = [row for row in rows if row["bucket_idx"] == "1"]
-            self.assertEqual(len(bucket_one_events), 1)
+            bucket_one_rows = [row for row in rows if row["bucket_index"] == "1" and row["date"] == "20250102"]
+            self.assertTrue(bucket_one_rows)
+            self.assertTrue(all(row["trip_count"] == "1" for row in bucket_one_rows))
 
     def test_daily_hourly_summary_and_viewer_can_be_rebuilt_later(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -97,6 +99,7 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             rebuilt_viewer = route_performance.build_viewer_from_output(result["output_dir"])
 
             self.assertTrue(daily_csv.exists())
+            self.assertEqual(result["results"][0]["events_csv"], "")
             self.assertTrue(daily_xlsx.exists())
             with daily_csv.open("r", encoding="utf-8-sig", newline="") as fh:
                 rows = list(csv.DictReader(fh))
