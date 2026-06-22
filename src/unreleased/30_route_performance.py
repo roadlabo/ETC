@@ -379,12 +379,18 @@ class RouteAggregator:
                     if avg_speed is not None and volume > 0:
                         weighted_speed_sum += avg_speed * volume
                         volume_sum += volume
-                else:
+                elif metric == "volume":
                     row[f"{hour:02d}"] = round(volume, 1) if volume else ""
                     volume_sum += volume
-            row["daily"] = round(weighted_speed_sum / volume_sum, 1) if metric == "speed" and volume_sum else (
-                round(volume_sum, 1) if metric != "speed" and volume_sum else ""
-            )
+                else:
+                    row[f"{hour:02d}"] = count if count else ""
+                    volume_sum += count
+            if metric == "speed":
+                row["daily"] = round(weighted_speed_sum / volume_sum, 1) if volume_sum else ""
+            elif metric == "volume":
+                row["daily"] = round(volume_sum, 1) if volume_sum else ""
+            else:
+                row["daily"] = int(volume_sum) if volume_sum else ""
             rows.append(row)
         return rows
 
@@ -497,6 +503,9 @@ def write_route_outputs(
                 pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "speed", hours)).to_excel(
                     writer, sheet_name=f"speed_{direction}", index=False
                 )
+                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "trip", hours)).to_excel(
+                    writer, sheet_name=f"trip_{direction}", index=False
+                )
                 pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "volume", hours)).to_excel(
                     writer, sheet_name=f"volume_{direction}", index=False
                 )
@@ -518,7 +527,7 @@ def write_route_outputs(
         pd.DataFrame(
             [
                 {"note": "巨大な縦長明細はExcel上限を避けるためCSVへ保存します。"},
-                {"note": "日別Excelは、行=路線バケツ、列=00-23時、daily=交通量重み付き日平均速度または日交通量です。"},
+                {"note": "日別Excelは、速度・トリップ数・拡大交通量を順方向/逆方向の6シートで保存します。"},
                 {"note": "3時間など任意の時間帯平均は、ビューアで選択時間の根拠値から計算します。"},
             ]
         ).to_excel(writer, sheet_name="readme", index=False)
@@ -892,17 +901,18 @@ function speedColor(v) {{
   return SPEED_BREAKS.find(([limit]) => v <= limit)[1];
 }}
 const TRIP_COLORS = ['#f3e8ff', '#d8b4fe', '#c084fc', '#9333ea', '#4c1d95'];
-function tripBreaks(maxTrip) {{
-  maxTrip = Math.max(0, Number(maxTrip) || 0);
-  if (maxTrip <= 0) return [];
-  const step = Math.max(1, Math.ceil(maxTrip / TRIP_COLORS.length));
-  return TRIP_COLORS.map((color, idx) => {{
+const VOLUME_COLORS = ['#dcfce7', '#86efac', '#22c55e', '#15803d', '#064e3b'];
+function autoBreaks(maxValue, colors) {{
+  maxValue = Math.max(0, Number(maxValue) || 0);
+  if (maxValue <= 0) return [];
+  const step = Math.max(1, Math.ceil(maxValue / colors.length));
+  return colors.map((color, idx) => {{
     const min = idx * step + 1;
-    const max = idx === TRIP_COLORS.length - 1 ? maxTrip : Math.min(maxTrip, (idx + 1) * step);
+    const max = idx === colors.length - 1 ? maxValue : Math.min(maxValue, (idx + 1) * step);
     return {{min, max, color}};
-  }}).filter(b => b.min <= maxTrip);
+  }}).filter(b => b.min <= maxValue);
 }}
-function tripColor(v, breaks) {{
+function rangedColor(v, breaks) {{
   v = Number(v); if (!Number.isFinite(v) || v <= 0) return '#9ca3af';
   const bucket = breaks.find(b => v <= b.max) || breaks[breaks.length - 1];
   return bucket ? bucket.color : '#9ca3af';
@@ -911,24 +921,29 @@ function redraw() {{
   layers.forEach(l => map.removeLayer(l)); layers = [];
   renderSelectionStatus();
   let maxTrip = 0;
+  let maxVolume = 0;
   DATA.forEach(payload => {{
     const pts = payload.points;
     for (let i = 1; i < pts.length; i++) {{
       [['forward', i], ['reverse', i-1]].forEach(([dir, bucket]) => {{
-        maxTrip = Math.max(maxTrip, Number(findSummary(payload, bucket, dir).trip_count) || 0);
+        const s = findSummary(payload, bucket, dir);
+        maxTrip = Math.max(maxTrip, Number(s.trip_count) || 0);
+        maxVolume = Math.max(maxVolume, Number(s.expanded_volume) || 0);
       }});
     }}
   }});
-  const tripRanges = tripBreaks(maxTrip);
+  const tripRanges = autoBreaks(maxTrip, TRIP_COLORS);
+  const volumeRanges = autoBreaks(maxVolume, VOLUME_COLORS);
   DATA.forEach(payload => {{
     const pts = payload.points;
     for (let i = 1; i < pts.length; i++) {{
         const a = pts[i-1], b = pts[i];
         [['forward', 1, i], ['reverse', -1, i-1]].forEach(([dir, side, bucket]) => {{
         const s = findSummary(payload, bucket, dir);
-        const value = state.metric === 'speed' ? s.avg_speed_kmh : s.trip_count;
-        const color = state.metric === 'speed' ? speedColor(value) : tripColor(value, tripRanges);
-        const width = state.metric === 'speed' ? 7 : Math.max(5, Math.min(15, 5 + (Number(value) || 0) / Math.max(maxTrip, 1) * 10));
+        const value = state.metric === 'speed' ? s.avg_speed_kmh : (state.metric === 'trip' ? s.trip_count : s.expanded_volume);
+        const color = state.metric === 'speed' ? speedColor(value) : (state.metric === 'trip' ? rangedColor(value, tripRanges) : rangedColor(value, volumeRanges));
+        const maxValue = state.metric === 'trip' ? maxTrip : maxVolume;
+        const width = state.metric === 'speed' ? 7 : Math.max(5, Math.min(15, 5 + (Number(value) || 0) / Math.max(maxValue, 1) * 10));
         const speedText = Number.isFinite(Number(s.avg_speed_kmh)) ? Number(s.avg_speed_kmh).toFixed(1) : 'なし';
         const volumeText = Number.isFinite(Number(s.expanded_volume)) ? Number(s.expanded_volume).toFixed(1) : 'なし';
         const line = L.polyline(offsetPoint(a, b, side, 7), {{color, weight:width, opacity:.92}})
@@ -939,7 +954,9 @@ function redraw() {{
   }});
   document.getElementById('legend').innerHTML = state.metric === 'speed'
     ? SPEED_BREAKS.map(([limit, color, label]) => `<span style="background:${{color}}"></span>${{label}}`).join(' ')
-    : (tripRanges.length ? tripRanges.map(b => `<span style="background:${{b.color}}"></span>${{b.min}}-${{b.max}}`).join(' ') : '<span style="background:#9ca3af"></span>トリップなし');
+    : (state.metric === 'trip'
+      ? (tripRanges.length ? tripRanges.map(b => `<span style="background:${{b.color}}"></span>${{b.min}}-${{b.max}}トリップ/日`).join(' ') : '<span style="background:#9ca3af"></span>トリップなし')
+      : (volumeRanges.length ? volumeRanges.map(b => `<span style="background:${{b.color}}"></span>${{b.min}}-${{b.max}}台/日`).join(' ') : '<span style="background:#9ca3af"></span>交通量なし'));
 }}
 function renderSelectionStatus() {{
   document.getElementById('selectedDate').textContent = state.period ? `対象日: ${{periodLabel(state.period)}}` : '対象日なし';
@@ -984,7 +1001,7 @@ function renderHours() {{
     tools.appendChild(b);
   }});
 }}
-buttons('metric', [{{label:'速度', value:'speed'}}, {{label:'トリップ数', value:'trip'}}], 'metric');
+buttons('metric', [{{label:'速度', value:'speed'}}, {{label:'トリップ(トリップ/日)', value:'trip'}}, {{label:'交通量(台/日)', value:'volume'}}], 'metric');
 renderMonthbar();
 renderCalendars();
 renderHours();

@@ -107,10 +107,12 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             self.assertTrue(all(row["date"] == "20250102" for row in rows))
             wb = load_workbook(daily_xlsx, read_only=True)
             self.assertIn("speed_forward", wb.sheetnames)
+            self.assertIn("trip_forward", wb.sheetnames)
             self.assertIn("volume_forward", wb.sheetnames)
             self.assertNotIn("speed3h_forward", wb.sheetnames)
             self.assertNotIn("volume3h_forward", wb.sheetnames)
             self.assertEqual(wb["speed_forward"].max_column, 29)
+            self.assertEqual(wb["trip_forward"].max_column, 29)
             self.assertEqual(wb["volume_forward"].max_column, 29)
             wb.close()
             viewer_html = rebuilt_viewer.read_text(encoding="utf-8")
@@ -118,7 +120,9 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             self.assertIn("redrawButton", viewer_html)
             self.assertIn("SPEED_BREAKS", viewer_html)
             self.assertIn("TRIP_COLORS", viewer_html)
-            self.assertIn("トリップ数", viewer_html)
+            self.assertIn("VOLUME_COLORS", viewer_html)
+            self.assertIn("トリップ", viewer_html)
+            self.assertIn("交通量", viewer_html)
             self.assertTrue(Path(rebuilt_viewer).exists())
 
     def test_project_paths_accept_fullwidth_screening_number_and_japanese_output(self):
