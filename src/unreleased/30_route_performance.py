@@ -388,36 +388,6 @@ class RouteAggregator:
             rows.append(row)
         return rows
 
-    def three_hour_rows(self, date_token: str, direction: str, metric: str) -> list[dict[str, object]]:
-        groups = [(start, list(range(start, min(start + 3, 24)))) for start in range(0, 24, 3)]
-        rows: list[dict[str, object]] = []
-        for i, kp in enumerate(self.route.kp_m):
-            row: dict[str, object] = {
-                "bucket_index": i,
-                "KP[km]": round(kp / 1000, KP_DECIMALS),
-                "lon": self.route.lons[i],
-                "lat": self.route.lats[i],
-            }
-            for start, hours in groups:
-                weighted_speed_sum = 0.0
-                volume_sum = 0.0
-                for hour in hours:
-                    key = (direction, i, date_token, hour)
-                    speeds = self.speed_values.get(key, [])
-                    count = self.counts.get(key, 0)
-                    volume = count * self.expansion_factor
-                    if metric == "speed" and speeds and volume > 0:
-                        weighted_speed_sum += (sum(speeds) / len(speeds)) * volume
-                    volume_sum += volume
-                col = f"{start:02d}-{hours[-1]:02d}"
-                if metric == "speed":
-                    row[col] = round(weighted_speed_sum / volume_sum, 1) if volume_sum else ""
-                else:
-                    row[col] = round(volume_sum, 1) if volume_sum else ""
-            rows.append(row)
-        return rows
-
-
 def find_first_existing(project_dir: Path, candidates: list[str]) -> Path:
     for name in candidates:
         path = project_dir / name
@@ -530,12 +500,6 @@ def write_route_outputs(
                 pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "volume", hours)).to_excel(
                     writer, sheet_name=f"volume_{direction}", index=False
                 )
-                pd.DataFrame(aggregator.three_hour_rows(date_token, direction, "speed")).to_excel(
-                    writer, sheet_name=f"speed3h_{direction}", index=False
-                )
-                pd.DataFrame(aggregator.three_hour_rows(date_token, direction, "volume")).to_excel(
-                    writer, sheet_name=f"volume3h_{direction}", index=False
-                )
         daily_xlsx_files.append(str(daily_xlsx))
 
     with pd.ExcelWriter(index_xlsx, engine="openpyxl") as writer:
@@ -555,7 +519,7 @@ def write_route_outputs(
             [
                 {"note": "巨大な縦長明細はExcel上限を避けるためCSVへ保存します。"},
                 {"note": "日別Excelは、行=路線バケツ、列=00-23時、daily=交通量重み付き日平均速度または日交通量です。"},
-                {"note": "3時間速度は、時間平均速度×時間交通量の和を3時間交通量合計で割っています。"},
+                {"note": "3時間など任意の時間帯平均は、ビューアで選択時間の根拠値から計算します。"},
             ]
         ).to_excel(writer, sheet_name="readme", index=False)
 
@@ -801,8 +765,9 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
   <div class="row" id="metric"></div>
   <div class="row" id="monthbar"></div>
   <div class="calendars" id="calendars"></div>
-  <div class="row" id="period"></div>
+  <div class="row"><b id="selectedDate"></b><span id="selectedHours"></span></div>
   <div class="row" id="hours"></div>
+  <div class="row" id="hourtools"></div>
   <div class="row legend" id="legend"></div>
 </div>
 <script>
@@ -812,7 +777,7 @@ const HIT_DATES = new Set(DATE_PERIODS);
 const HIT_MONTHS = Array.from(new Set(DATE_PERIODS.map(d => d.slice(0, 6)))).sort();
 const map = L.map('map').setView([{center_lat:.7f}, {center_lon:.7f}], 13);
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }}).addTo(map);
-const state = {{metric:'speed', period: DATE_PERIODS[0] || '平日', hour:8}};
+const state = {{metric:'speed', period: DATE_PERIODS[0] || '', hours:new Set([8])}};
 let monthIndex = 0;
 let layers = [];
 DATA.forEach(payload => {{
@@ -863,7 +828,7 @@ function renderCalendars() {{
       b.textContent = String(day);
       if (HIT_DATES.has(token)) {{
         b.className += ' hit';
-        b.onclick = () => {{ state.period = token; renderCalendars(); buttons('period', aggregatePeriods(), 'period'); redraw(); }};
+        b.onclick = () => {{ state.period = token; renderCalendars(); redraw(); }};
         if (state.period === token) b.className += ' active';
       }} else {{
         b.disabled = true;
@@ -889,7 +854,24 @@ function offsetPoint(a, b, side, meters) {{
   ];
 }}
 function findSummary(payload, bucket, direction) {{
-  return payload.summaryIndex.get(`${{bucket}}|${{direction}}|${{state.period}}|${{state.hour}}`) || {{}};
+  let speedNumerator = 0;
+  let volume = 0;
+  let trips = 0;
+  state.hours.forEach(hour => {{
+    const row = payload.summaryIndex.get(`${{bucket}}|${{direction}}|${{state.period}}|${{hour}}`);
+    if (!row) return;
+    const rowVolume = Number(row.expanded_volume) || 0;
+    const rowTrips = Number(row.trip_count) || 0;
+    const rowSpeed = Number(row.avg_speed_kmh);
+    volume += rowVolume;
+    trips += rowTrips;
+    if (Number.isFinite(rowSpeed) && rowVolume > 0) speedNumerator += rowSpeed * rowVolume;
+  }});
+  return {{
+    avg_speed_kmh: volume > 0 ? speedNumerator / volume : '',
+    expanded_volume: volume || '',
+    trip_count: trips || '',
+  }};
 }}
 function speedColor(v) {{
   v = Number(v); if (!Number.isFinite(v)) return '#9ca3af';
@@ -901,10 +883,18 @@ function volumeColor(v, maxV) {{
 }}
 function redraw() {{
   layers.forEach(l => map.removeLayer(l)); layers = [];
+  document.getElementById('selectedDate').textContent = state.period ? `対象日: ${{periodLabel(state.period)}}` : '対象日なし';
+  const hourText = Array.from(state.hours).sort((a,b) => a-b).map(h => `${{String(h).padStart(2,'0')}}:00`).join(', ');
+  document.getElementById('selectedHours').textContent = `対象時間: ${{hourText || '未選択'}}`;
   let maxVol = 0;
-  DATA.forEach(payload => payload.summary.forEach(r => {{
-    if (r.period === state.period && Number(r.hour) === state.hour) maxVol = Math.max(maxVol, Number(r.expanded_volume) || 0);
-  }}));
+  DATA.forEach(payload => {{
+    const pts = payload.points;
+    for (let i = 1; i < pts.length; i++) {{
+      [['forward', i], ['reverse', i-1]].forEach(([dir, bucket]) => {{
+        maxVol = Math.max(maxVol, Number(findSummary(payload, bucket, dir).expanded_volume) || 0);
+      }});
+    }}
+  }});
   DATA.forEach(payload => {{
     const pts = payload.points;
     for (let i = 1; i < pts.length; i++) {{
@@ -915,7 +905,7 @@ function redraw() {{
         const color = state.metric === 'speed' ? speedColor(value) : volumeColor(value, maxVol);
         const width = state.metric === 'speed' ? 7 : Math.max(4, Math.min(14, 4 + (Number(value) || 0) / Math.max(maxVol, 1) * 10));
         const line = L.polyline(offsetPoint(a, b, side, 5), {{color, weight:width, opacity:.9}})
-          .bindTooltip(`${{payload.route}}<br>${{dir === 'forward' ? '順方向' : '逆方向'}} bucket=${{bucket}}<br>${{state.metric === 'speed' ? '速度' : '交通量'}}: ${{value || 'なし'}}`);
+          .bindTooltip(`${{payload.route}}<br>${{dir === 'forward' ? '順方向' : '逆方向'}} bucket=${{bucket}}<br>速度: ${{Number(s.avg_speed_kmh) ? Number(s.avg_speed_kmh).toFixed(1) : 'なし'}} km/h<br>交通量: ${{Number(s.expanded_volume) ? Number(s.expanded_volume).toFixed(1) : 'なし'}}<br>実トリップ数: ${{s.trip_count || 'なし'}}`);
         line.addTo(map); layers.push(line);
       }});
     }}
@@ -935,14 +925,37 @@ function buttons(id, values, key) {{
     el.appendChild(b);
   }});
 }}
-function aggregatePeriods() {{
-  return ['平日','休日','月','火','水','木','金','土','日'].map(p => ({{label:p, value:p}}));
+function renderHours() {{
+  const el = document.getElementById('hours');
+  el.innerHTML = '';
+  for (let i = 0; i < 24; i++) {{
+    const b = document.createElement('button');
+    b.textContent = `${{String(i).padStart(2,'0')}}`;
+    b.onclick = () => {{
+      if (state.hours.has(i)) state.hours.delete(i); else state.hours.add(i);
+      renderHours(); redraw();
+    }};
+    if (state.hours.has(i)) b.className = 'active';
+    el.appendChild(b);
+  }}
+  const tools = document.getElementById('hourtools');
+  tools.innerHTML = '';
+  [
+    ['全時間ON', Array.from({{length:24}}, (_, i) => i)],
+    ['朝夕', [7,8,9,17,18,19]],
+    ['3時間: 7-9', [7,8,9]],
+    ['全時間OFF', []],
+  ].forEach(([label, hours]) => {{
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = () => {{ state.hours = new Set(hours); renderHours(); redraw(); }};
+    tools.appendChild(b);
+  }});
 }}
 buttons('metric', [{{label:'速度', value:'speed'}}, {{label:'交通量', value:'volume'}}], 'metric');
 renderMonthbar();
 renderCalendars();
-buttons('period', aggregatePeriods(), 'period');
-buttons('hours', Array.from({{length:24}}, (_, i) => ({{label:String(i).padStart(2,'0'), value:i}})), 'hour');
+renderHours();
 redraw();
 </script>
 </body>

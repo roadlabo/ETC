@@ -108,10 +108,12 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             wb = load_workbook(daily_xlsx, read_only=True)
             self.assertIn("speed_forward", wb.sheetnames)
             self.assertIn("volume_forward", wb.sheetnames)
-            self.assertIn("speed3h_forward", wb.sheetnames)
+            self.assertNotIn("speed3h_forward", wb.sheetnames)
+            self.assertNotIn("volume3h_forward", wb.sheetnames)
             self.assertEqual(wb["speed_forward"].max_column, 29)
             self.assertEqual(wb["volume_forward"].max_column, 29)
             wb.close()
+            self.assertIn("state.hours", rebuilt_viewer.read_text(encoding="utf-8"))
             self.assertTrue(Path(rebuilt_viewer).exists())
 
     def test_project_paths_accept_fullwidth_screening_number_and_japanese_output(self):
