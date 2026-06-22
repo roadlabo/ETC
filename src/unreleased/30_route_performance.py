@@ -272,14 +272,14 @@ class RouteAggregator:
         self.counts: dict[tuple[str, int, str, int], int] = defaultdict(int)
         self.seen_trip_bucket: set[tuple[str, int]] = set()
         self.date_tokens: set[str] = set()
-        self.events: list[Event] = []
+        self.event_count = 0
 
     def add_event(self, event: Event) -> bool:
         unique_key = (event.trip, event.bucket_idx)
         if unique_key in self.seen_trip_bucket:
             return False
         self.seen_trip_bucket.add(unique_key)
-        self.events.append(event)
+        self.event_count += 1
         sec = event.pass_dt.hour * 3600 + event.pass_dt.minute * 60 + event.pass_dt.second + event.pass_dt.microsecond / 1_000_000
         date_token = event.pass_dt.strftime("%Y%m%d")
         self.date_tokens.add(date_token)
@@ -293,16 +293,20 @@ class RouteAggregator:
     def summary_periods(self) -> list[str]:
         return PERIODS + sorted(self.date_tokens)
 
-    def summary_rows(self) -> list[dict[str, object]]:
+    def summary_rows(self, include_empty: bool = True, date_only: bool = False) -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
         for i, kp in enumerate(self.route.kp_m):
             for direction in DIRECTIONS:
                 for period in self.summary_periods():
+                    if date_only and not re.fullmatch(r"\d{8}", period):
+                        continue
                     for hour in range(24):
                         key = (direction, i, period, hour)
                         speeds = self.speed_values.get(key, [])
                         times = self.time_values.get(key, [])
                         count = self.counts.get(key, 0)
+                        if not include_empty and not count:
+                            continue
                         rows.append(
                             {
                                 "route": self.route.name,
@@ -375,44 +379,20 @@ class RouteAggregator:
                     if avg_speed is not None and volume > 0:
                         weighted_speed_sum += avg_speed * volume
                         volume_sum += volume
-                else:
+                elif metric == "volume":
                     row[f"{hour:02d}"] = round(volume, 1) if volume else ""
                     volume_sum += volume
-            row["daily"] = round(weighted_speed_sum / volume_sum, 1) if metric == "speed" and volume_sum else (
-                round(volume_sum, 1) if metric != "speed" and volume_sum else ""
-            )
-            rows.append(row)
-        return rows
-
-    def three_hour_rows(self, date_token: str, direction: str, metric: str) -> list[dict[str, object]]:
-        groups = [(start, list(range(start, min(start + 3, 24)))) for start in range(0, 24, 3)]
-        rows: list[dict[str, object]] = []
-        for i, kp in enumerate(self.route.kp_m):
-            row: dict[str, object] = {
-                "bucket_index": i,
-                "KP[km]": round(kp / 1000, KP_DECIMALS),
-                "lon": self.route.lons[i],
-                "lat": self.route.lats[i],
-            }
-            for start, hours in groups:
-                weighted_speed_sum = 0.0
-                volume_sum = 0.0
-                for hour in hours:
-                    key = (direction, i, date_token, hour)
-                    speeds = self.speed_values.get(key, [])
-                    count = self.counts.get(key, 0)
-                    volume = count * self.expansion_factor
-                    if metric == "speed" and speeds and volume > 0:
-                        weighted_speed_sum += (sum(speeds) / len(speeds)) * volume
-                    volume_sum += volume
-                col = f"{start:02d}-{hours[-1]:02d}"
-                if metric == "speed":
-                    row[col] = round(weighted_speed_sum / volume_sum, 1) if volume_sum else ""
                 else:
-                    row[col] = round(volume_sum, 1) if volume_sum else ""
+                    row[f"{hour:02d}"] = count if count else ""
+                    volume_sum += count
+            if metric == "speed":
+                row["daily"] = round(weighted_speed_sum / volume_sum, 1) if volume_sum else ""
+            elif metric == "volume":
+                row["daily"] = round(volume_sum, 1) if volume_sum else ""
+            else:
+                row["daily"] = int(volume_sum) if volume_sum else ""
             rows.append(row)
         return rows
-
 
 def find_first_existing(project_dir: Path, candidates: list[str]) -> Path:
     for name in candidates:
@@ -483,11 +463,11 @@ def write_route_outputs(
     route_dir.mkdir(parents=True, exist_ok=True)
     summary_csv = route_dir / f"{safe_name(route.name)}_performance.csv"
     daily_hourly_csv = route_dir / f"{safe_name(route.name)}_daily_hourly_performance.csv"
-    event_csv = route_dir / f"{safe_name(route.name)}_events.csv"
     index_xlsx = route_dir / f"{safe_name(route.name)}_performance_index.xlsx"
     json_path = route_dir / f"{safe_name(route.name)}_viewer.json"
 
-    summary_rows = aggregator.summary_rows()
+    summary_rows = aggregator.summary_rows(include_empty=False)
+    daily_summary_rows = aggregator.summary_rows(include_empty=False, date_only=True)
     summary_fields = [
         "route",
         "bucket_index",
@@ -505,16 +485,6 @@ def write_route_outputs(
         "expanded_volume",
         "avg_pass_time",
     ]
-    event_fields = [
-        "route",
-        "trip",
-        "bucket_idx",
-        "direction",
-        "pass_dt",
-        "speed_kmh",
-        "segment_distance_m",
-        "segment_time_s",
-    ]
     with summary_csv.open("w", encoding="utf-8-sig", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=summary_fields)
         writer.writeheader()
@@ -522,14 +492,7 @@ def write_route_outputs(
     with daily_hourly_csv.open("w", encoding="utf-8-sig", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=summary_fields)
         writer.writeheader()
-        writer.writerows(row for row in summary_rows if str(row["date"]).isdigit())
-    with event_csv.open("w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=event_fields)
-        writer.writeheader()
-        for event in aggregator.events:
-            row = event.__dict__.copy()
-            row["pass_dt"] = event.pass_dt.isoformat()
-            writer.writerow(row)
+        writer.writerows(daily_summary_rows)
 
     daily_xlsx_files: list[str] = []
     hours = range(24)
@@ -540,14 +503,11 @@ def write_route_outputs(
                 pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "speed", hours)).to_excel(
                     writer, sheet_name=f"speed_{direction}", index=False
                 )
+                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "trip", hours)).to_excel(
+                    writer, sheet_name=f"trip_{direction}", index=False
+                )
                 pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "volume", hours)).to_excel(
                     writer, sheet_name=f"volume_{direction}", index=False
-                )
-                pd.DataFrame(aggregator.three_hour_rows(date_token, direction, "speed")).to_excel(
-                    writer, sheet_name=f"speed3h_{direction}", index=False
-                )
-                pd.DataFrame(aggregator.three_hour_rows(date_token, direction, "volume")).to_excel(
-                    writer, sheet_name=f"volume3h_{direction}", index=False
                 )
         daily_xlsx_files.append(str(daily_xlsx))
 
@@ -557,7 +517,7 @@ def write_route_outputs(
                 {"item": "route", "value": route.name},
                 {"item": "expansion_factor", "value": expansion_factor},
                 {"item": "date_count", "value": len(aggregator.date_tokens)},
-                {"item": "event_count", "value": len(aggregator.events)},
+                {"item": "event_count", "value": aggregator.event_count},
                 {"item": "daily_xlsx_folder", "value": str(route_dir)},
             ]
         ).to_excel(writer, sheet_name="index", index=False)
@@ -567,8 +527,8 @@ def write_route_outputs(
         pd.DataFrame(
             [
                 {"note": "巨大な縦長明細はExcel上限を避けるためCSVへ保存します。"},
-                {"note": "日別Excelは、行=路線バケツ、列=00-23時、daily=交通量重み付き日平均速度または日交通量です。"},
-                {"note": "3時間速度は、時間平均速度×時間交通量の和を3時間交通量合計で割っています。"},
+                {"note": "日別Excelは、速度・トリップ数・拡大交通量を順方向/逆方向の6シートで保存します。"},
+                {"note": "3時間など任意の時間帯平均は、ビューアで選択時間の根拠値から計算します。"},
             ]
         ).to_excel(writer, sheet_name="readme", index=False)
 
@@ -579,7 +539,7 @@ def write_route_outputs(
             {"bucket_index": i, "kp_km": round(kp / 1000, KP_DECIMALS), "lat": route.lats[i], "lon": route.lons[i]}
             for i, kp in enumerate(route.kp_m)
         ],
-        "summary": summary_rows,
+        "summary": daily_summary_rows,
     }
     json_path.write_text(json.dumps(viewer_payload, ensure_ascii=False), encoding="utf-8")
 
@@ -587,7 +547,7 @@ def write_route_outputs(
         "xlsx": str(index_xlsx),
         "summary_csv": str(summary_csv),
         "daily_hourly_csv": str(daily_hourly_csv),
-        "events_csv": str(event_csv),
+        "events_csv": "",
         "viewer_json": str(json_path),
         "daily_xlsx_files": daily_xlsx_files,
     }
@@ -614,7 +574,7 @@ def analyze_route(
         payload = {
             "route": route.name,
             "total_files": len(files),
-            "events": len(aggregator.events),
+            "events": aggregator.event_count,
             "valid_points": valid_points,
             **stats,
         }
@@ -677,7 +637,7 @@ def analyze_route(
         "route": route.name,
         "route_path": str(route.path),
         **outputs,
-        "events": len(aggregator.events),
+        "events": aggregator.event_count,
         "trips": len(trips),
         "valid_points": valid_points,
         "skipped_segments": skipped,
@@ -699,7 +659,7 @@ def finalize_projected_route(
     trips = list(projected.items())
     for trip_index, (trip, points) in enumerate(trips, start=1):
         if progress_callback and (trip_index == 1 or trip_index % 100 == 0 or trip_index == len(trips)):
-            progress_callback(0, f"バケツ投入中 {trip_index}/{len(trips)}", {"trips": len(trips), "valid_points": valid_points, "events": len(aggregator.events)})
+            progress_callback(0, f"バケツ投入中 {trip_index}/{len(trips)}", {"trips": len(trips), "valid_points": valid_points, "events": aggregator.event_count})
         points.sort(key=lambda x: x[0])
         for (t1, s1, _off1), (t2, s2, _off2) in zip(points, points[1:]):
             dt_s = (t2 - t1).total_seconds()
@@ -728,7 +688,7 @@ def finalize_projected_route(
         "route": route.name,
         "route_path": str(route.path),
         **outputs,
-        "events": len(aggregator.events),
+        "events": aggregator.event_count,
         "trips": len(trips),
         "valid_points": valid_points,
         "skipped_segments": skipped,
@@ -814,8 +774,10 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
   <div class="row" id="metric"></div>
   <div class="row" id="monthbar"></div>
   <div class="calendars" id="calendars"></div>
-  <div class="row" id="period"></div>
+  <div class="row"><b id="selectedDate"></b><span id="selectedHours"></span></div>
   <div class="row" id="hours"></div>
+  <div class="row" id="hourtools"></div>
+  <div class="row"><button id="redrawButton">再描画</button></div>
   <div class="row legend" id="legend"></div>
 </div>
 <script>
@@ -825,9 +787,13 @@ const HIT_DATES = new Set(DATE_PERIODS);
 const HIT_MONTHS = Array.from(new Set(DATE_PERIODS.map(d => d.slice(0, 6)))).sort();
 const map = L.map('map').setView([{center_lat:.7f}, {center_lon:.7f}], 13);
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }}).addTo(map);
-const state = {{metric:'speed', period: DATE_PERIODS[0] || '平日', hour:8}};
+const state = {{metric:'speed', period: DATE_PERIODS[0] || '', hours:new Set([8])}};
 let monthIndex = 0;
 let layers = [];
+DATA.forEach(payload => {{
+  payload.summaryIndex = new Map();
+  payload.summary.forEach(r => payload.summaryIndex.set(`${{r.bucket_index}}|${{r.direction}}|${{r.period}}|${{Number(r.hour)}}`, r));
+}});
 function periodLabel(period) {{
   period = String(period);
   if (/^\\d{{8}}$/.test(period)) return `${{period.slice(0,4)}}-${{period.slice(4,6)}}-${{period.slice(6,8)}}`;
@@ -872,7 +838,7 @@ function renderCalendars() {{
       b.textContent = String(day);
       if (HIT_DATES.has(token)) {{
         b.className += ' hit';
-        b.onclick = () => {{ state.period = token; renderCalendars(); buttons('period', aggregatePeriods(), 'period'); redraw(); }};
+        b.onclick = () => {{ state.period = token; renderCalendars(); renderSelectionStatus(); }};
         if (state.period === token) b.className += ' active';
       }} else {{
         b.disabled = true;
@@ -898,40 +864,104 @@ function offsetPoint(a, b, side, meters) {{
   ];
 }}
 function findSummary(payload, bucket, direction) {{
-  return payload.summary.find(r => r.bucket_index === bucket && r.direction === direction && r.period === state.period && Number(r.hour) === state.hour) || {{}};
+  let speedNumerator = 0;
+  let volume = 0;
+  let trips = 0;
+  state.hours.forEach(hour => {{
+    const row = payload.summaryIndex.get(`${{bucket}}|${{direction}}|${{state.period}}|${{hour}}`);
+    if (!row) return;
+    const rowVolume = Number(row.expanded_volume) || 0;
+    const rowTrips = Number(row.trip_count) || 0;
+    const rowSpeed = Number(row.avg_speed_kmh);
+    volume += rowVolume;
+    trips += rowTrips;
+    if (Number.isFinite(rowSpeed) && rowVolume > 0) speedNumerator += rowSpeed * rowVolume;
+  }});
+  return {{
+    avg_speed_kmh: volume > 0 ? speedNumerator / volume : '',
+    expanded_volume: volume || '',
+    trip_count: trips || '',
+  }};
 }}
+const SPEED_BREAKS = [
+  [10, '#e60000', '10以下'],
+  [20, '#ff7a00', '10-20'],
+  [30, '#ffd400', '20-30'],
+  [40, '#9acd32', '30-40'],
+  [50, '#008000', '40-50'],
+  [60, '#00bcd4', '50-60'],
+  [70, '#1e90ff', '60-70'],
+  [80, '#0057ff', '70-80'],
+  [90, '#0000cc', '80-90'],
+  [100, '#000080', '90-100'],
+  [Infinity, '#4b0082', '100超'],
+];
 function speedColor(v) {{
   v = Number(v); if (!Number.isFinite(v)) return '#9ca3af';
-  if (v >= 45) return '#16a34a'; if (v >= 30) return '#eab308'; if (v >= 15) return '#f97316'; return '#dc2626';
+  return SPEED_BREAKS.find(([limit]) => v <= limit)[1];
 }}
-function volumeColor(v, maxV) {{
-  v = Number(v); if (!Number.isFinite(v) || maxV <= 0) return '#9ca3af';
-  const r = v / maxV; if (r >= .75) return '#7c2d12'; if (r >= .5) return '#ea580c'; if (r >= .25) return '#facc15'; return '#22c55e';
+const TRIP_COLORS = ['#f3e8ff', '#d8b4fe', '#c084fc', '#9333ea', '#4c1d95'];
+const VOLUME_COLORS = ['#dcfce7', '#86efac', '#22c55e', '#15803d', '#064e3b'];
+function autoBreaks(maxValue, colors) {{
+  maxValue = Math.max(0, Number(maxValue) || 0);
+  if (maxValue <= 0) return [];
+  const step = Math.max(1, Math.ceil(maxValue / colors.length));
+  return colors.map((color, idx) => {{
+    const min = idx * step + 1;
+    const max = idx === colors.length - 1 ? maxValue : Math.min(maxValue, (idx + 1) * step);
+    return {{min, max, color}};
+  }}).filter(b => b.min <= maxValue);
+}}
+function rangedColor(v, breaks) {{
+  v = Number(v); if (!Number.isFinite(v) || v <= 0) return '#9ca3af';
+  const bucket = breaks.find(b => v <= b.max) || breaks[breaks.length - 1];
+  return bucket ? bucket.color : '#9ca3af';
 }}
 function redraw() {{
   layers.forEach(l => map.removeLayer(l)); layers = [];
-  let maxVol = 0;
-  DATA.forEach(payload => payload.summary.forEach(r => {{
-    if (r.period === state.period && Number(r.hour) === state.hour) maxVol = Math.max(maxVol, Number(r.expanded_volume) || 0);
-  }}));
+  renderSelectionStatus();
+  let maxTrip = 0;
+  let maxVolume = 0;
   DATA.forEach(payload => {{
     const pts = payload.points;
     for (let i = 1; i < pts.length; i++) {{
-      const a = pts[i-1], b = pts[i];
-      [['forward', 1, i], ['reverse', -1, i-1]].forEach(([dir, side, bucket]) => {{
+      [['forward', i], ['reverse', i-1]].forEach(([dir, bucket]) => {{
         const s = findSummary(payload, bucket, dir);
-        const value = state.metric === 'speed' ? s.avg_speed_kmh : s.expanded_volume;
-        const color = state.metric === 'speed' ? speedColor(value) : volumeColor(value, maxVol);
-        const width = state.metric === 'speed' ? 7 : Math.max(4, Math.min(14, 4 + (Number(value) || 0) / Math.max(maxVol, 1) * 10));
-        const line = L.polyline(offsetPoint(a, b, side, 5), {{color, weight:width, opacity:.9}})
-          .bindTooltip(`${{payload.route}}<br>${{dir === 'forward' ? '順方向' : '逆方向'}} bucket=${{bucket}}<br>${{state.metric === 'speed' ? '速度' : '交通量'}}: ${{value || 'なし'}}`);
+        maxTrip = Math.max(maxTrip, Number(s.trip_count) || 0);
+        maxVolume = Math.max(maxVolume, Number(s.expanded_volume) || 0);
+      }});
+    }}
+  }});
+  const tripRanges = autoBreaks(maxTrip, TRIP_COLORS);
+  const volumeRanges = autoBreaks(maxVolume, VOLUME_COLORS);
+  DATA.forEach(payload => {{
+    const pts = payload.points;
+    for (let i = 1; i < pts.length; i++) {{
+        const a = pts[i-1], b = pts[i];
+        [['forward', 1, i], ['reverse', -1, i-1]].forEach(([dir, side, bucket]) => {{
+        const s = findSummary(payload, bucket, dir);
+        const value = state.metric === 'speed' ? s.avg_speed_kmh : (state.metric === 'trip' ? s.trip_count : s.expanded_volume);
+        const color = state.metric === 'speed' ? speedColor(value) : (state.metric === 'trip' ? rangedColor(value, tripRanges) : rangedColor(value, volumeRanges));
+        const maxValue = state.metric === 'trip' ? maxTrip : maxVolume;
+        const width = state.metric === 'speed' ? 7 : Math.max(5, Math.min(15, 5 + (Number(value) || 0) / Math.max(maxValue, 1) * 10));
+        const speedText = Number.isFinite(Number(s.avg_speed_kmh)) ? Number(s.avg_speed_kmh).toFixed(1) : 'なし';
+        const volumeText = Number.isFinite(Number(s.expanded_volume)) ? Number(s.expanded_volume).toFixed(1) : 'なし';
+        const line = L.polyline(offsetPoint(a, b, side, 7), {{color, weight:width, opacity:.92}})
+          .bindTooltip(`${{payload.route}}<br>${{dir === 'forward' ? '順方向（路線左側）' : '逆方向（反対側）'}} bucket=${{bucket}}<br>速度: ${{speedText}} km/h<br>交通量: ${{volumeText}}<br>実トリップ数: ${{s.trip_count || 'なし'}}`);
         line.addTo(map); layers.push(line);
       }});
     }}
   }});
   document.getElementById('legend').innerHTML = state.metric === 'speed'
-    ? '<span style="background:#16a34a"></span>45km/h以上 <span style="background:#eab308"></span>30-45 <span style="background:#f97316"></span>15-30 <span style="background:#dc2626"></span>15未満'
-    : '<span style="background:#22c55e"></span>少 <span style="background:#facc15"></span>中 <span style="background:#ea580c"></span>多 <span style="background:#7c2d12"></span>最多';
+    ? SPEED_BREAKS.map(([limit, color, label]) => `<span style="background:${{color}}"></span>${{label}}`).join(' ')
+    : (state.metric === 'trip'
+      ? (tripRanges.length ? tripRanges.map(b => `<span style="background:${{b.color}}"></span>${{b.min}}-${{b.max}}トリップ/日`).join(' ') : '<span style="background:#9ca3af"></span>トリップなし')
+      : (volumeRanges.length ? volumeRanges.map(b => `<span style="background:${{b.color}}"></span>${{b.min}}-${{b.max}}台/日`).join(' ') : '<span style="background:#9ca3af"></span>交通量なし'));
+}}
+function renderSelectionStatus() {{
+  document.getElementById('selectedDate').textContent = state.period ? `対象日: ${{periodLabel(state.period)}}` : '対象日なし';
+  const hourText = Array.from(state.hours).sort((a,b) => a-b).map(h => `${{String(h).padStart(2,'0')}}:00`).join(', ');
+  document.getElementById('selectedHours').textContent = `対象時間: ${{hourText || '未選択'}}`;
 }}
 function buttons(id, values, key) {{
   const el = document.getElementById(id);
@@ -939,19 +969,43 @@ function buttons(id, values, key) {{
   values.forEach(v => {{
     const b = document.createElement('button');
     b.textContent = v.label ?? v;
-    b.onclick = () => {{ state[key] = v.value ?? v; buttons(id, values, key); renderCalendars(); redraw(); }};
+    b.onclick = () => {{ state[key] = v.value ?? v; buttons(id, values, key); renderCalendars(); renderSelectionStatus(); }};
     if (String(state[key]) === String(v.value ?? v)) b.className = 'active';
     el.appendChild(b);
   }});
 }}
-function aggregatePeriods() {{
-  return ['平日','休日','月','火','水','木','金','土','日'].map(p => ({{label:p, value:p}}));
+function renderHours() {{
+  const el = document.getElementById('hours');
+  el.innerHTML = '';
+  for (let i = 0; i < 24; i++) {{
+    const b = document.createElement('button');
+    b.textContent = `${{String(i).padStart(2,'0')}}`;
+    b.onclick = () => {{
+      if (state.hours.has(i)) state.hours.delete(i); else state.hours.add(i);
+      renderHours(); renderSelectionStatus();
+    }};
+    if (state.hours.has(i)) b.className = 'active';
+    el.appendChild(b);
+  }}
+  const tools = document.getElementById('hourtools');
+  tools.innerHTML = '';
+  [
+    ['全時間ON', Array.from({{length:24}}, (_, i) => i)],
+    ['朝夕', [7,8,9,17,18,19]],
+    ['3時間: 7-9', [7,8,9]],
+    ['全時間OFF', []],
+  ].forEach(([label, hours]) => {{
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = () => {{ state.hours = new Set(hours); renderHours(); renderSelectionStatus(); }};
+    tools.appendChild(b);
+  }});
 }}
-buttons('metric', [{{label:'速度', value:'speed'}}, {{label:'交通量', value:'volume'}}], 'metric');
+buttons('metric', [{{label:'速度', value:'speed'}}, {{label:'トリップ(トリップ/日)', value:'trip'}}, {{label:'交通量(台/日)', value:'volume'}}], 'metric');
 renderMonthbar();
 renderCalendars();
-buttons('period', aggregatePeriods(), 'period');
-buttons('hours', Array.from({{length:24}}, (_, i) => ({{label:String(i).padStart(2,'0'), value:i}})), 'hour');
+renderHours();
+document.getElementById('redrawButton').onclick = redraw;
 redraw();
 </script>
 </body>
@@ -1050,7 +1104,7 @@ def analyze_project(
                 "valid_points": sum(valid_points_by_route),
                 "route_names": [route.name for route in routes],
                 "route_valid_points": list(valid_points_by_route),
-                "events": sum(len(agg.events) for agg in aggregators),
+                "events": sum(agg.event_count for agg in aggregators),
             },
         )
         for row_index, row in enumerate(read_csv_rows(path)):
@@ -1089,7 +1143,7 @@ def analyze_project(
                         "valid_points": sum(valid_points_by_route),
                         "route_names": [route.name for route in routes],
                         "route_valid_points": list(valid_points_by_route),
-                        "events": sum(len(agg.events) for agg in aggregators),
+                        "events": sum(agg.event_count for agg in aggregators),
                     },
                 )
 
@@ -1112,7 +1166,7 @@ def analyze_project(
                     "valid_points": valid_points_by_route[route_index - 1],
                     "route_names": [route.name for route in routes],
                     "route_valid_points": list(valid_points_by_route),
-                    "events": len(aggregator.events),
+                    "events": aggregator.event_count,
                 }
             )
             emit(route_start, f"[{route_index}/{len(routes)}] {route.name}: {message}", stats)
@@ -1131,7 +1185,7 @@ def analyze_project(
                 "valid_points": valid_points_by_route[route_index - 1],
                 "route_names": [route.name for route in routes],
                 "route_valid_points": list(valid_points_by_route),
-                "events": len(aggregator.events),
+                "events": aggregator.event_count,
             },
         )
         results.append(

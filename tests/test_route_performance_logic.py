@@ -75,11 +75,13 @@ class RoutePerformanceLogicTest(unittest.TestCase):
 
             result = route_performance.analyze_project(project, allowed_dates={"20250102"}, allowed_hours={8})
 
-            event_csv = Path(result["results"][0]["events_csv"])
-            with event_csv.open("r", encoding="utf-8-sig", newline="") as fh:
+            self.assertEqual(result["results"][0]["events_csv"], "")
+            daily_csv = Path(result["results"][0]["daily_hourly_csv"])
+            with daily_csv.open("r", encoding="utf-8-sig", newline="") as fh:
                 rows = list(csv.DictReader(fh))
-            bucket_one_events = [row for row in rows if row["bucket_idx"] == "1"]
-            self.assertEqual(len(bucket_one_events), 1)
+            bucket_one_rows = [row for row in rows if row["bucket_index"] == "1" and row["date"] == "20250102"]
+            self.assertTrue(bucket_one_rows)
+            self.assertTrue(all(row["trip_count"] == "1" for row in bucket_one_rows))
 
     def test_daily_hourly_summary_and_viewer_can_be_rebuilt_later(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -97,6 +99,7 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             rebuilt_viewer = route_performance.build_viewer_from_output(result["output_dir"])
 
             self.assertTrue(daily_csv.exists())
+            self.assertEqual(result["results"][0]["events_csv"], "")
             self.assertTrue(daily_xlsx.exists())
             with daily_csv.open("r", encoding="utf-8-sig", newline="") as fh:
                 rows = list(csv.DictReader(fh))
@@ -104,11 +107,22 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             self.assertTrue(all(row["date"] == "20250102" for row in rows))
             wb = load_workbook(daily_xlsx, read_only=True)
             self.assertIn("speed_forward", wb.sheetnames)
+            self.assertIn("trip_forward", wb.sheetnames)
             self.assertIn("volume_forward", wb.sheetnames)
-            self.assertIn("speed3h_forward", wb.sheetnames)
+            self.assertNotIn("speed3h_forward", wb.sheetnames)
+            self.assertNotIn("volume3h_forward", wb.sheetnames)
             self.assertEqual(wb["speed_forward"].max_column, 29)
+            self.assertEqual(wb["trip_forward"].max_column, 29)
             self.assertEqual(wb["volume_forward"].max_column, 29)
             wb.close()
+            viewer_html = rebuilt_viewer.read_text(encoding="utf-8")
+            self.assertIn("state.hours", viewer_html)
+            self.assertIn("redrawButton", viewer_html)
+            self.assertIn("SPEED_BREAKS", viewer_html)
+            self.assertIn("TRIP_COLORS", viewer_html)
+            self.assertIn("VOLUME_COLORS", viewer_html)
+            self.assertIn("トリップ", viewer_html)
+            self.assertIn("交通量", viewer_html)
             self.assertTrue(Path(rebuilt_viewer).exists())
 
     def test_project_paths_accept_fullwidth_screening_number_and_japanese_output(self):
