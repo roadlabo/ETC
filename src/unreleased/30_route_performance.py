@@ -768,6 +768,7 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
   <div class="row"><b id="selectedDate"></b><span id="selectedHours"></span></div>
   <div class="row" id="hours"></div>
   <div class="row" id="hourtools"></div>
+  <div class="row"><button id="redrawButton">再描画</button></div>
   <div class="row legend" id="legend"></div>
 </div>
 <script>
@@ -828,7 +829,7 @@ function renderCalendars() {{
       b.textContent = String(day);
       if (HIT_DATES.has(token)) {{
         b.className += ' hit';
-        b.onclick = () => {{ state.period = token; renderCalendars(); redraw(); }};
+        b.onclick = () => {{ state.period = token; renderCalendars(); renderSelectionStatus(); }};
         if (state.period === token) b.className += ' active';
       }} else {{
         b.disabled = true;
@@ -873,9 +874,22 @@ function findSummary(payload, bucket, direction) {{
     trip_count: trips || '',
   }};
 }}
+const SPEED_BREAKS = [
+  [10, '#e60000', '10以下'],
+  [20, '#ff7a00', '10-20'],
+  [30, '#ffd400', '20-30'],
+  [40, '#9acd32', '30-40'],
+  [50, '#008000', '40-50'],
+  [60, '#00bcd4', '50-60'],
+  [70, '#1e90ff', '60-70'],
+  [80, '#0057ff', '70-80'],
+  [90, '#0000cc', '80-90'],
+  [100, '#000080', '90-100'],
+  [Infinity, '#4b0082', '100超'],
+];
 function speedColor(v) {{
   v = Number(v); if (!Number.isFinite(v)) return '#9ca3af';
-  if (v >= 45) return '#16a34a'; if (v >= 30) return '#eab308'; if (v >= 15) return '#f97316'; return '#dc2626';
+  return SPEED_BREAKS.find(([limit]) => v <= limit)[1];
 }}
 function volumeColor(v, maxV) {{
   v = Number(v); if (!Number.isFinite(v) || maxV <= 0) return '#9ca3af';
@@ -883,9 +897,7 @@ function volumeColor(v, maxV) {{
 }}
 function redraw() {{
   layers.forEach(l => map.removeLayer(l)); layers = [];
-  document.getElementById('selectedDate').textContent = state.period ? `対象日: ${{periodLabel(state.period)}}` : '対象日なし';
-  const hourText = Array.from(state.hours).sort((a,b) => a-b).map(h => `${{String(h).padStart(2,'0')}}:00`).join(', ');
-  document.getElementById('selectedHours').textContent = `対象時間: ${{hourText || '未選択'}}`;
+  renderSelectionStatus();
   let maxVol = 0;
   DATA.forEach(payload => {{
     const pts = payload.points;
@@ -903,16 +915,23 @@ function redraw() {{
         const s = findSummary(payload, bucket, dir);
         const value = state.metric === 'speed' ? s.avg_speed_kmh : s.expanded_volume;
         const color = state.metric === 'speed' ? speedColor(value) : volumeColor(value, maxVol);
-        const width = state.metric === 'speed' ? 7 : Math.max(4, Math.min(14, 4 + (Number(value) || 0) / Math.max(maxVol, 1) * 10));
-        const line = L.polyline(offsetPoint(a, b, side, 5), {{color, weight:width, opacity:.9}})
-          .bindTooltip(`${{payload.route}}<br>${{dir === 'forward' ? '順方向' : '逆方向'}} bucket=${{bucket}}<br>速度: ${{Number(s.avg_speed_kmh) ? Number(s.avg_speed_kmh).toFixed(1) : 'なし'}} km/h<br>交通量: ${{Number(s.expanded_volume) ? Number(s.expanded_volume).toFixed(1) : 'なし'}}<br>実トリップ数: ${{s.trip_count || 'なし'}}`);
+        const width = state.metric === 'speed' ? 7 : Math.max(5, Math.min(15, 5 + (Number(value) || 0) / Math.max(maxVol, 1) * 10));
+        const speedText = Number.isFinite(Number(s.avg_speed_kmh)) ? Number(s.avg_speed_kmh).toFixed(1) : 'なし';
+        const volumeText = Number.isFinite(Number(s.expanded_volume)) ? Number(s.expanded_volume).toFixed(1) : 'なし';
+        const line = L.polyline(offsetPoint(a, b, side, 7), {{color, weight:width, opacity:.92}})
+          .bindTooltip(`${{payload.route}}<br>${{dir === 'forward' ? '順方向（路線左側）' : '逆方向（反対側）'}} bucket=${{bucket}}<br>速度: ${{speedText}} km/h<br>交通量: ${{volumeText}}<br>実トリップ数: ${{s.trip_count || 'なし'}}`);
         line.addTo(map); layers.push(line);
       }});
     }}
   }});
   document.getElementById('legend').innerHTML = state.metric === 'speed'
-    ? '<span style="background:#16a34a"></span>45km/h以上 <span style="background:#eab308"></span>30-45 <span style="background:#f97316"></span>15-30 <span style="background:#dc2626"></span>15未満'
+    ? SPEED_BREAKS.map(([limit, color, label]) => `<span style="background:${{color}}"></span>${{label}}`).join(' ')
     : '<span style="background:#22c55e"></span>少 <span style="background:#facc15"></span>中 <span style="background:#ea580c"></span>多 <span style="background:#7c2d12"></span>最多';
+}}
+function renderSelectionStatus() {{
+  document.getElementById('selectedDate').textContent = state.period ? `対象日: ${{periodLabel(state.period)}}` : '対象日なし';
+  const hourText = Array.from(state.hours).sort((a,b) => a-b).map(h => `${{String(h).padStart(2,'0')}}:00`).join(', ');
+  document.getElementById('selectedHours').textContent = `対象時間: ${{hourText || '未選択'}}`;
 }}
 function buttons(id, values, key) {{
   const el = document.getElementById(id);
@@ -920,7 +939,7 @@ function buttons(id, values, key) {{
   values.forEach(v => {{
     const b = document.createElement('button');
     b.textContent = v.label ?? v;
-    b.onclick = () => {{ state[key] = v.value ?? v; buttons(id, values, key); renderCalendars(); redraw(); }};
+    b.onclick = () => {{ state[key] = v.value ?? v; buttons(id, values, key); renderCalendars(); renderSelectionStatus(); }};
     if (String(state[key]) === String(v.value ?? v)) b.className = 'active';
     el.appendChild(b);
   }});
@@ -933,7 +952,7 @@ function renderHours() {{
     b.textContent = `${{String(i).padStart(2,'0')}}`;
     b.onclick = () => {{
       if (state.hours.has(i)) state.hours.delete(i); else state.hours.add(i);
-      renderHours(); redraw();
+      renderHours(); renderSelectionStatus();
     }};
     if (state.hours.has(i)) b.className = 'active';
     el.appendChild(b);
@@ -948,7 +967,7 @@ function renderHours() {{
   ].forEach(([label, hours]) => {{
     const b = document.createElement('button');
     b.textContent = label;
-    b.onclick = () => {{ state.hours = new Set(hours); renderHours(); redraw(); }};
+    b.onclick = () => {{ state.hours = new Set(hours); renderHours(); renderSelectionStatus(); }};
     tools.appendChild(b);
   }});
 }}
@@ -956,6 +975,7 @@ buttons('metric', [{{label:'速度', value:'speed'}}, {{label:'交通量', value
 renderMonthbar();
 renderCalendars();
 renderHours();
+document.getElementById('redrawButton').onclick = redraw;
 redraw();
 </script>
 </body>
