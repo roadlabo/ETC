@@ -117,6 +117,8 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             self.assertIn("state.hours", viewer_html)
             self.assertIn("redrawButton", viewer_html)
             self.assertIn("SPEED_BREAKS", viewer_html)
+            self.assertIn("TRIP_COLORS", viewer_html)
+            self.assertIn("トリップ数", viewer_html)
             self.assertTrue(Path(rebuilt_viewer).exists())
 
     def test_project_paths_accept_fullwidth_screening_number_and_japanese_output(self):

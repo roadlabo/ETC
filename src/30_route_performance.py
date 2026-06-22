@@ -891,31 +891,44 @@ function speedColor(v) {{
   v = Number(v); if (!Number.isFinite(v)) return '#9ca3af';
   return SPEED_BREAKS.find(([limit]) => v <= limit)[1];
 }}
-function volumeColor(v, maxV) {{
-  v = Number(v); if (!Number.isFinite(v) || maxV <= 0) return '#9ca3af';
-  const r = v / maxV; if (r >= .75) return '#7c2d12'; if (r >= .5) return '#ea580c'; if (r >= .25) return '#facc15'; return '#22c55e';
+const TRIP_COLORS = ['#f3e8ff', '#d8b4fe', '#c084fc', '#9333ea', '#4c1d95'];
+function tripBreaks(maxTrip) {{
+  maxTrip = Math.max(0, Number(maxTrip) || 0);
+  if (maxTrip <= 0) return [];
+  const step = Math.max(1, Math.ceil(maxTrip / TRIP_COLORS.length));
+  return TRIP_COLORS.map((color, idx) => {{
+    const min = idx * step + 1;
+    const max = idx === TRIP_COLORS.length - 1 ? maxTrip : Math.min(maxTrip, (idx + 1) * step);
+    return {{min, max, color}};
+  }}).filter(b => b.min <= maxTrip);
+}}
+function tripColor(v, breaks) {{
+  v = Number(v); if (!Number.isFinite(v) || v <= 0) return '#9ca3af';
+  const bucket = breaks.find(b => v <= b.max) || breaks[breaks.length - 1];
+  return bucket ? bucket.color : '#9ca3af';
 }}
 function redraw() {{
   layers.forEach(l => map.removeLayer(l)); layers = [];
   renderSelectionStatus();
-  let maxVol = 0;
+  let maxTrip = 0;
   DATA.forEach(payload => {{
     const pts = payload.points;
     for (let i = 1; i < pts.length; i++) {{
       [['forward', i], ['reverse', i-1]].forEach(([dir, bucket]) => {{
-        maxVol = Math.max(maxVol, Number(findSummary(payload, bucket, dir).expanded_volume) || 0);
+        maxTrip = Math.max(maxTrip, Number(findSummary(payload, bucket, dir).trip_count) || 0);
       }});
     }}
   }});
+  const tripRanges = tripBreaks(maxTrip);
   DATA.forEach(payload => {{
     const pts = payload.points;
     for (let i = 1; i < pts.length; i++) {{
-      const a = pts[i-1], b = pts[i];
-      [['forward', 1, i], ['reverse', -1, i-1]].forEach(([dir, side, bucket]) => {{
+        const a = pts[i-1], b = pts[i];
+        [['forward', 1, i], ['reverse', -1, i-1]].forEach(([dir, side, bucket]) => {{
         const s = findSummary(payload, bucket, dir);
-        const value = state.metric === 'speed' ? s.avg_speed_kmh : s.expanded_volume;
-        const color = state.metric === 'speed' ? speedColor(value) : volumeColor(value, maxVol);
-        const width = state.metric === 'speed' ? 7 : Math.max(5, Math.min(15, 5 + (Number(value) || 0) / Math.max(maxVol, 1) * 10));
+        const value = state.metric === 'speed' ? s.avg_speed_kmh : s.trip_count;
+        const color = state.metric === 'speed' ? speedColor(value) : tripColor(value, tripRanges);
+        const width = state.metric === 'speed' ? 7 : Math.max(5, Math.min(15, 5 + (Number(value) || 0) / Math.max(maxTrip, 1) * 10));
         const speedText = Number.isFinite(Number(s.avg_speed_kmh)) ? Number(s.avg_speed_kmh).toFixed(1) : 'なし';
         const volumeText = Number.isFinite(Number(s.expanded_volume)) ? Number(s.expanded_volume).toFixed(1) : 'なし';
         const line = L.polyline(offsetPoint(a, b, side, 7), {{color, weight:width, opacity:.92}})
@@ -926,7 +939,7 @@ function redraw() {{
   }});
   document.getElementById('legend').innerHTML = state.metric === 'speed'
     ? SPEED_BREAKS.map(([limit, color, label]) => `<span style="background:${{color}}"></span>${{label}}`).join(' ')
-    : '<span style="background:#22c55e"></span>少 <span style="background:#facc15"></span>中 <span style="background:#ea580c"></span>多 <span style="background:#7c2d12"></span>最多';
+    : (tripRanges.length ? tripRanges.map(b => `<span style="background:${{b.color}}"></span>${{b.min}}-${{b.max}}`).join(' ') : '<span style="background:#9ca3af"></span>トリップなし');
 }}
 function renderSelectionStatus() {{
   document.getElementById('selectedDate').textContent = state.period ? `対象日: ${{periodLabel(state.period)}}` : '対象日なし';
@@ -971,7 +984,7 @@ function renderHours() {{
     tools.appendChild(b);
   }});
 }}
-buttons('metric', [{{label:'速度', value:'speed'}}, {{label:'交通量', value:'volume'}}], 'metric');
+buttons('metric', [{{label:'速度', value:'speed'}}, {{label:'トリップ数', value:'trip'}}], 'metric');
 renderMonthbar();
 renderCalendars();
 renderHours();
