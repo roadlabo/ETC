@@ -794,6 +794,7 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
     .hit {{ background:#ccfbf1; border-color:#0f766e; color:#0f172a; font-weight:700; }}
     .hit.active {{ background:#0f766e; color:#fff; }}
     .legend span {{ display:inline-block; width:14px; height:10px; margin-right:4px; }}
+    select {{ min-width:130px; background:#fff; border:1px solid #b8c2cc; border-radius:6px; padding:4px; }}
   </style>
   <script>{leaflet_js}</script>
 </head>
@@ -802,12 +803,13 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
 <div class="panel">
   <b>30 Route Performance Viewer</b>
   <div class="row" id="metric"></div>
+  <div class="row" id="speedKind"></div>
   <div class="row" id="monthbar"></div>
   <div class="calendars" id="calendars"></div>
   <div class="row"><b id="selectedDate"></b><span id="selectedHours"></span></div>
-  <div class="row" id="hours"></div>
+  <div class="row"><select id="hoursList" multiple size="8"></select><button id="hourUp">▲</button><button id="hourDown">▼</button></div>
   <div class="row" id="hourtools"></div>
-  <div class="row"><button id="redrawButton">再描画</button></div>
+  <div class="row"><button id="redrawButton">再描画</button><button id="exportButton">データ抽出</button></div>
   <div class="row legend" id="legend"></div>
 </div>
 <script>
@@ -817,7 +819,7 @@ const HIT_DATES = new Set(DATE_PERIODS);
 const HIT_MONTHS = Array.from(new Set(DATE_PERIODS.map(d => d.slice(0, 6)))).sort();
 const map = L.map('map').setView([{center_lat:.7f}, {center_lon:.7f}], 13);
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }}).addTo(map);
-const state = {{metric:'speed', period: DATE_PERIODS[0] || '', hours:new Set([8])}};
+const state = {{metric:'speed', speedKind:'avg', period: DATE_PERIODS[0] || '', hours:new Set([8])}};
 let monthIndex = 0;
 let layers = [];
 DATA.forEach(payload => {{
@@ -868,7 +870,7 @@ function renderCalendars() {{
       b.textContent = String(day);
       if (HIT_DATES.has(token)) {{
         b.className += ' hit';
-        b.onclick = () => {{ state.period = token; renderCalendars(); renderSelectionStatus(); }};
+        b.onclick = () => {{ state.period = token; renderCalendars(); renderSelectionStatus(); redraw(); }};
         if (state.period === token) b.className += ' active';
       }} else {{
         b.disabled = true;
@@ -893,8 +895,10 @@ function offsetPoint(a, b, side, meters) {{
     [b.lat + ny / mLat, b.lon + nx / mLon],
   ];
 }}
-function findSummary(payload, bucket, direction) {{
+function aggregateSummary(payload, bucket, direction) {{
   let speedNumerator = 0;
+  let freeNumerator = 0;
+  let jamNumerator = 0;
   let volume = 0;
   let trips = 0;
   state.hours.forEach(hour => {{
@@ -903,15 +907,26 @@ function findSummary(payload, bucket, direction) {{
     const rowVolume = Number(row.expanded_volume) || 0;
     const rowTrips = Number(row.trip_count) || 0;
     const rowSpeed = Number(row.avg_speed_kmh);
+    const rowFree = Number(row.freeflow_speed_kmh);
+    const rowJam = Number(row.congested_speed_kmh);
     volume += rowVolume;
     trips += rowTrips;
     if (Number.isFinite(rowSpeed) && rowVolume > 0) speedNumerator += rowSpeed * rowVolume;
+    if (Number.isFinite(rowFree) && rowVolume > 0) freeNumerator += rowFree * rowVolume;
+    if (Number.isFinite(rowJam) && rowVolume > 0) jamNumerator += rowJam * rowVolume;
   }});
   return {{
     avg_speed_kmh: volume > 0 ? speedNumerator / volume : '',
+    freeflow_speed_kmh: volume > 0 ? freeNumerator / volume : '',
+    congested_speed_kmh: volume > 0 ? jamNumerator / volume : '',
     expanded_volume: volume || '',
     trip_count: trips || '',
   }};
+}}
+function speedValue(s) {{
+  if (state.speedKind === 'free') return s.freeflow_speed_kmh;
+  if (state.speedKind === 'jam') return s.congested_speed_kmh;
+  return s.avg_speed_kmh;
 }}
 const SPEED_BREAKS = [
   [10, '#e60000', '10以下'],
@@ -956,7 +971,7 @@ function redraw() {{
     const pts = payload.points;
     for (let i = 1; i < pts.length; i++) {{
       [['forward', i], ['reverse', i-1]].forEach(([dir, bucket]) => {{
-        const s = findSummary(payload, bucket, dir);
+        const s = aggregateSummary(payload, bucket, dir);
         maxTrip = Math.max(maxTrip, Number(s.trip_count) || 0);
         maxVolume = Math.max(maxVolume, Number(s.expanded_volume) || 0);
       }});
@@ -969,15 +984,17 @@ function redraw() {{
     for (let i = 1; i < pts.length; i++) {{
         const a = pts[i-1], b = pts[i];
         [['forward', 1, i], ['reverse', -1, i-1]].forEach(([dir, side, bucket]) => {{
-        const s = findSummary(payload, bucket, dir);
-        const value = state.metric === 'speed' ? s.avg_speed_kmh : (state.metric === 'trip' ? s.trip_count : s.expanded_volume);
+        const s = aggregateSummary(payload, bucket, dir);
+        const value = state.metric === 'speed' ? speedValue(s) : (state.metric === 'trip' ? s.trip_count : s.expanded_volume);
         const color = state.metric === 'speed' ? speedColor(value) : (state.metric === 'trip' ? rangedColor(value, tripRanges) : rangedColor(value, volumeRanges));
         const maxValue = state.metric === 'trip' ? maxTrip : maxVolume;
         const width = state.metric === 'speed' ? 7 : Math.max(5, Math.min(15, 5 + (Number(value) || 0) / Math.max(maxValue, 1) * 10));
         const speedText = Number.isFinite(Number(s.avg_speed_kmh)) ? Number(s.avg_speed_kmh).toFixed(1) : 'なし';
+        const freeText = Number.isFinite(Number(s.freeflow_speed_kmh)) ? Number(s.freeflow_speed_kmh).toFixed(1) : 'なし';
+        const jamText = Number.isFinite(Number(s.congested_speed_kmh)) ? Number(s.congested_speed_kmh).toFixed(1) : 'なし';
         const volumeText = Number.isFinite(Number(s.expanded_volume)) ? Number(s.expanded_volume).toFixed(1) : 'なし';
         const line = L.polyline(offsetPoint(a, b, side, 7), {{color, weight:width, opacity:.92}})
-          .bindTooltip(`${{payload.route}}<br>${{dir === 'forward' ? '順方向（路線左側）' : '逆方向（反対側）'}} bucket=${{bucket}}<br>速度: ${{speedText}} km/h<br>交通量: ${{volumeText}}<br>実トリップ数: ${{s.trip_count || 'なし'}}`);
+          .bindTooltip(`${{payload.route}}<br>${{dir === 'forward' ? '順方向（路線左側）' : '逆方向（反対側）'}} bucket=${{bucket}}<br>閑散時速度: ${{freeText}} km/h<br>平均速度: ${{speedText}} km/h<br>渋滞時速度: ${{jamText}} km/h<br>交通量: ${{volumeText}}<br>実トリップ数: ${{s.trip_count || 'なし'}}`);
         line.addTo(map); layers.push(line);
       }});
     }}
@@ -999,24 +1016,26 @@ function buttons(id, values, key) {{
   values.forEach(v => {{
     const b = document.createElement('button');
     b.textContent = v.label ?? v;
-    b.onclick = () => {{ state[key] = v.value ?? v; buttons(id, values, key); renderCalendars(); renderSelectionStatus(); }};
+    b.onclick = () => {{ state[key] = v.value ?? v; buttons(id, values, key); renderCalendars(); renderSelectionStatus(); redraw(); }};
     if (String(state[key]) === String(v.value ?? v)) b.className = 'active';
     el.appendChild(b);
   }});
 }}
 function renderHours() {{
-  const el = document.getElementById('hours');
+  const el = document.getElementById('hoursList');
   el.innerHTML = '';
   for (let i = 0; i < 24; i++) {{
-    const b = document.createElement('button');
-    b.textContent = `${{String(i).padStart(2,'0')}}`;
-    b.onclick = () => {{
-      if (state.hours.has(i)) state.hours.delete(i); else state.hours.add(i);
-      renderHours(); renderSelectionStatus();
-    }};
-    if (state.hours.has(i)) b.className = 'active';
-    el.appendChild(b);
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = `${{String(i).padStart(2,'0')}}:00 - ${{String(i).padStart(2,'0')}}:59`;
+    opt.selected = state.hours.has(i);
+    el.appendChild(opt);
   }}
+  el.onchange = () => {{
+    state.hours = new Set(Array.from(el.selectedOptions).map(o => Number(o.value)));
+    renderSelectionStatus();
+    redraw();
+  }};
   const tools = document.getElementById('hourtools');
   tools.innerHTML = '';
   [
@@ -1027,15 +1046,169 @@ function renderHours() {{
   ].forEach(([label, hours]) => {{
     const b = document.createElement('button');
     b.textContent = label;
-    b.onclick = () => {{ state.hours = new Set(hours); renderHours(); renderSelectionStatus(); }};
+    b.onclick = () => {{ state.hours = new Set(hours); renderHours(); renderSelectionStatus(); redraw(); }};
     tools.appendChild(b);
   }});
 }}
+function moveHourSelection(delta, extend) {{
+  const selected = Array.from(state.hours).sort((a,b) => a-b);
+  if (!selected.length) selected.push(8);
+  if (extend) {{
+    const target = delta < 0 ? selected[0] - 1 : selected[selected.length - 1] + 1;
+    if (target >= 0 && target <= 23) state.hours.add(target);
+  }} else {{
+    const target = Math.max(0, Math.min(23, selected[0] + delta));
+    state.hours = new Set([target]);
+  }}
+  renderHours();
+  renderSelectionStatus();
+  redraw();
+}}
+function selectedHoursLabel() {{
+  return Array.from(state.hours).sort((a,b) => a-b).map(h => String(h).padStart(2,'0')).join(',');
+}}
+function exportRows(direction, metric) {{
+  const rows = [['route','bucket_index','KP[km]','lon','lat','value']];
+  DATA.forEach(payload => {{
+    payload.points.forEach(point => {{
+      const s = aggregateSummary(payload, point.bucket_index, direction);
+      let value = '';
+      if (metric === 'trip') value = s.trip_count || '';
+      else if (metric === 'volume') value = s.expanded_volume || '';
+      else if (metric === 'free') value = s.freeflow_speed_kmh || '';
+      else if (metric === 'jam') value = s.congested_speed_kmh || '';
+      else value = s.avg_speed_kmh || '';
+      rows.push([payload.route, point.bucket_index, point.kp_km, point.lon, point.lat, value]);
+    }});
+  }});
+  return rows;
+}}
+function exportWorkbook() {{
+  const conditions = [
+    ['項目', '値'],
+    ['抽出日', periodLabel(state.period)],
+    ['抽出日token', state.period],
+    ['抽出時間', selectedHoursLabel()],
+    ['速度集計', '速度系は選択時間の時間交通量で加重平均'],
+    ['出力時刻', new Date().toLocaleString()],
+  ];
+  const sheets = [
+    ['抽出条件', conditions],
+    ['トリップ(F)', exportRows('forward', 'trip')],
+    ['交通量(F)', exportRows('forward', 'volume')],
+    ['閑散時速度(F)', exportRows('forward', 'free')],
+    ['平均速度(F)', exportRows('forward', 'avg')],
+    ['渋滞時速度(F)', exportRows('forward', 'jam')],
+    ['トリップ(R)', exportRows('reverse', 'trip')],
+    ['交通量(R)', exportRows('reverse', 'volume')],
+    ['閑散時速度(R)', exportRows('reverse', 'free')],
+    ['平均速度(R)', exportRows('reverse', 'avg')],
+    ['渋滞時速度(R)', exportRows('reverse', 'jam')],
+  ];
+  downloadXlsx('route_performance.xlsx', sheets);
+}}
+function xmlEscape(value) {{
+  return String(value ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}}
+function colName(n) {{
+  let s = '';
+  while (n > 0) {{
+    const m = (n - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    n = Math.floor((n - 1) / 26);
+  }}
+  return s;
+}}
+function sheetXml(rows) {{
+  const body = rows.map((row, rIdx) => {{
+    const cells = row.map((value, cIdx) => {{
+      const ref = `${{colName(cIdx + 1)}}${{rIdx + 1}}`;
+      if (typeof value === 'number' && Number.isFinite(value)) return `<c r="${{ref}}"><v>${{value}}</v></c>`;
+      return `<c r="${{ref}}" t="inlineStr"><is><t>${{xmlEscape(value)}}</t></is></c>`;
+    }}).join('');
+    return `<row r="${{rIdx + 1}}">${{cells}}</row>`;
+  }}).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${{body}}</sheetData></worksheet>`;
+}}
+function workbookXml(sheets) {{
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${{sheets.map((s, i) => `<sheet name="${{xmlEscape(s[0])}}" sheetId="${{i + 1}}" r:id="rId${{i + 1}}"/>`).join('')}}</sheets></workbook>`;
+}}
+function workbookRels(sheets) {{
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${{sheets.map((s, i) => `<Relationship Id="rId${{i + 1}}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${{i + 1}}.xml"/>`).join('')}}</Relationships>`;
+}}
+function contentTypes(sheets) {{
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${{sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${{i + 1}}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}}</Types>`;
+}}
+function rootRels() {{
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>';
+}}
+const CRC_TABLE = (() => {{
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {{
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    table[n] = c >>> 0;
+  }}
+  return table;
+}})();
+function crc32(bytes) {{
+  let c = 0xffffffff;
+  bytes.forEach(b => c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8));
+  return (c ^ 0xffffffff) >>> 0;
+}}
+function u16(v) {{ return [v & 255, (v >>> 8) & 255]; }}
+function u32(v) {{ return [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255]; }}
+function concatBytes(parts) {{
+  const length = parts.reduce((sum, part) => sum + part.length, 0);
+  const out = new Uint8Array(length);
+  let offset = 0;
+  parts.forEach(part => {{ out.set(part, offset); offset += part.length; }});
+  return out;
+}}
+function zipStore(files) {{
+  const enc = new TextEncoder();
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  files.forEach(file => {{
+    const name = enc.encode(file.name);
+    const data = enc.encode(file.content);
+    const crc = crc32(data);
+    const localHeader = new Uint8Array([0x50,0x4b,0x03,0x04, ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(name.length), ...u16(0)]);
+    const local = concatBytes([localHeader, name, data]);
+    chunks.push(local);
+    const centralHeader = new Uint8Array([0x50,0x4b,0x01,0x02, ...u16(20), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(name.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(offset)]);
+    central.push(concatBytes([centralHeader, name]));
+    offset += local.length;
+  }});
+  const centralOffset = offset;
+  central.forEach(c => {{ chunks.push(c); offset += c.length; }});
+  chunks.push(new Uint8Array([0x50,0x4b,0x05,0x06, ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(offset - centralOffset), ...u32(centralOffset), ...u16(0)]));
+  return new Blob(chunks, {{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}});
+}}
+function downloadXlsx(filename, sheets) {{
+  const files = [
+    {{name:'[Content_Types].xml', content:contentTypes(sheets)}},
+    {{name:'_rels/.rels', content:rootRels()}},
+    {{name:'xl/workbook.xml', content:workbookXml(sheets)}},
+    {{name:'xl/_rels/workbook.xml.rels', content:workbookRels(sheets)}},
+    ...sheets.map((s, i) => ({{name:`xl/worksheets/sheet${{i + 1}}.xml`, content:sheetXml(s[1])}})),
+  ];
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(zipStore(files));
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}}
 buttons('metric', [{{label:'速度', value:'speed'}}, {{label:'トリップ(トリップ/日)', value:'trip'}}, {{label:'交通量(台/日)', value:'volume'}}], 'metric');
+buttons('speedKind', [{{label:'閑散時', value:'free'}}, {{label:'平均', value:'avg'}}, {{label:'渋滞時', value:'jam'}}], 'speedKind');
 renderMonthbar();
 renderCalendars();
 renderHours();
 document.getElementById('redrawButton').onclick = redraw;
+document.getElementById('exportButton').onclick = exportWorkbook;
+document.getElementById('hourUp').onclick = e => moveHourSelection(-1, e.shiftKey);
+document.getElementById('hourDown').onclick = e => moveHourSelection(1, e.shiftKey);
 redraw();
 </script>
 </body>
