@@ -156,6 +156,20 @@ def seconds_to_hhmmss(value: Optional[float]) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+def speed_metric_value(speeds: list[float], metric: str) -> Optional[float]:
+    if not speeds:
+        return None
+    if metric == "speed_freeflow":
+        n = max(1, math.ceil(len(speeds) * 0.05))
+        vals = sorted(speeds, reverse=True)[:n]
+    elif metric == "speed_congested":
+        n = max(1, math.ceil(len(speeds) * 0.05))
+        vals = sorted(speeds)[:n]
+    else:
+        vals = speeds
+    return sum(vals) / len(vals)
+
+
 def period_keys(dt: datetime) -> list[str]:
     return (["平日"] if dt.weekday() < 5 else ["休日"]) + [WEEKDAY_JA[dt.weekday()]]
 
@@ -320,6 +334,8 @@ class RouteAggregator:
                                 "date": period if re.fullmatch(r"\d{8}", period) else "",
                                 "hour": hour,
                                 "avg_speed_kmh": round(sum(speeds) / len(speeds), 1) if speeds else "",
+                                "freeflow_speed_kmh": round(speed_metric_value(speeds, "speed_freeflow"), 1) if speeds else "",
+                                "congested_speed_kmh": round(speed_metric_value(speeds, "speed_congested"), 1) if speeds else "",
                                 "median_speed_kmh": round(statistics.median(speeds), 1) if speeds else "",
                                 "trip_count": count if count else "",
                                 "expanded_volume": round(count * self.expansion_factor, 1) if count else "",
@@ -368,17 +384,20 @@ class RouteAggregator:
             }
             weighted_speed_sum = 0.0
             volume_sum = 0.0
+            daily_speeds: list[float] = []
             for hour in hour_list:
                 key = (direction, i, date_token, hour)
                 speeds = self.speed_values.get(key, [])
                 count = self.counts.get(key, 0)
                 volume = count * self.expansion_factor
-                if metric == "speed":
-                    avg_speed = sum(speeds) / len(speeds) if speeds else None
-                    row[f"{hour:02d}"] = round(avg_speed, 1) if avg_speed is not None else ""
-                    if avg_speed is not None and volume > 0:
-                        weighted_speed_sum += avg_speed * volume
+                if metric.startswith("speed"):
+                    speed_value = speed_metric_value(speeds, metric)
+                    row[f"{hour:02d}"] = round(speed_value, 1) if speed_value is not None else ""
+                    if metric == "speed" and speed_value is not None and volume > 0:
+                        weighted_speed_sum += speed_value * volume
                         volume_sum += volume
+                    elif metric != "speed":
+                        daily_speeds.extend(speeds)
                 elif metric == "volume":
                     row[f"{hour:02d}"] = round(volume, 1) if volume else ""
                     volume_sum += volume
@@ -387,6 +406,9 @@ class RouteAggregator:
                     volume_sum += count
             if metric == "speed":
                 row["daily"] = round(weighted_speed_sum / volume_sum, 1) if volume_sum else ""
+            elif metric.startswith("speed"):
+                daily_value = speed_metric_value(daily_speeds, metric)
+                row["daily"] = round(daily_value, 1) if daily_value is not None else ""
             elif metric == "volume":
                 row["daily"] = round(volume_sum, 1) if volume_sum else ""
             else:
@@ -480,6 +502,8 @@ def write_route_outputs(
         "date",
         "hour",
         "avg_speed_kmh",
+        "freeflow_speed_kmh",
+        "congested_speed_kmh",
         "median_speed_kmh",
         "trip_count",
         "expanded_volume",
@@ -502,6 +526,12 @@ def write_route_outputs(
             for direction in DIRECTIONS:
                 pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "speed", hours)).to_excel(
                     writer, sheet_name=f"speed_{direction}", index=False
+                )
+                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "speed_freeflow", hours)).to_excel(
+                    writer, sheet_name=f"speed_free_{direction}", index=False
+                )
+                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "speed_congested", hours)).to_excel(
+                    writer, sheet_name=f"speed_jam_{direction}", index=False
                 )
                 pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "trip", hours)).to_excel(
                     writer, sheet_name=f"trip_{direction}", index=False
@@ -527,7 +557,7 @@ def write_route_outputs(
         pd.DataFrame(
             [
                 {"note": "巨大な縦長明細はExcel上限を避けるためCSVへ保存します。"},
-                {"note": "日別Excelは、速度・トリップ数・拡大交通量を順方向/逆方向の6シートで保存します。"},
+                {"note": "日別Excelは、平均速度・閑散時速度(上位5%)・渋滞時速度(下位5%)・トリップ数・拡大交通量を順方向/逆方向で保存します。"},
                 {"note": "3時間など任意の時間帯平均は、ビューアで選択時間の根拠値から計算します。"},
             ]
         ).to_excel(writer, sheet_name="readme", index=False)
