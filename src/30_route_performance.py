@@ -1062,6 +1062,7 @@ function moveHourSelection(delta, extend) {{
   }}
   renderHours();
   renderSelectionStatus();
+  document.getElementById('hoursList').focus();
   redraw();
 }}
 function selectedHoursLabel() {{
@@ -1209,6 +1210,15 @@ document.getElementById('redrawButton').onclick = redraw;
 document.getElementById('exportButton').onclick = exportWorkbook;
 document.getElementById('hourUp').onclick = e => moveHourSelection(-1, e.shiftKey);
 document.getElementById('hourDown').onclick = e => moveHourSelection(1, e.shiftKey);
+document.getElementById('hoursList').onkeydown = e => {{
+  if (e.key === 'ArrowUp') {{
+    e.preventDefault();
+    moveHourSelection(-1, e.shiftKey);
+  }} else if (e.key === 'ArrowDown') {{
+    e.preventDefault();
+    moveHourSelection(1, e.shiftKey);
+  }}
+}};
 redraw();
 </script>
 </body>
