@@ -12,7 +12,7 @@
     .toolbar { position:absolute; top:10px; left:10px; z-index:1000; background:#fff; padding:10px 14px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,.3); font-size:13px; width:330px; }
     .toolbar input { width:160px; }
     html.embed .toolbar { display:none; }
-    .kp-label { display:flex; align-items:center; justify-content:center; white-space:nowrap; font-weight:900; color:#210003; background:rgba(255,255,255,.92); border:1px solid rgba(255,51,78,.85); box-shadow:0 1px 5px rgba(0,0,0,.25); padding:1px 5px; }
+    .kp-label { display:flex; align-items:center; justify-content:center; white-space:nowrap; font-weight:900; color:#0b3a88; background:rgba(255,255,255,.92); border:1px solid rgba(42,115,255,.90); box-shadow:0 1px 5px rgba(0,0,0,.25); padding:1px 5px; }
     html.embed #map { outline:1px solid rgba(42,115,255,.35); box-shadow:0 0 0 1px rgba(0,255,136,.15) inset,0 0 18px rgba(42,115,255,.22); background:#05070a; }
   </style>
 </head>
@@ -68,13 +68,13 @@ function visualMetrics() {
 function labelIntervalM() {
   const z=map.getZoom();
   if (z < 11) return Infinity;
-  if (z < 12) return 1000;
-  if (z < 13) return 500;
-  if (z < 14) return 200;
-  if (z < 15) return 100;
-  if (z < 16) return 50;
-  if (z < 17) return 40;
-  if (z < 18) return 20;
+  if (z < 12) return 10000;
+  if (z < 13) return 5000;
+  if (z < 14) return 2000;
+  if (z < 15) return 1000;
+  if (z < 16) return 500;
+  if (z < 17) return 400;
+  if (z < 18) return 200;
   return 0; // 最大拡大付近では全ポイント表示
 }
 function cumulativeDistancesM(ps) {
@@ -93,10 +93,7 @@ function medianPitchM(distances) {
   return seg[Math.floor(seg.length/2)] || 20;
 }
 function formatKp(m) {
-  const rounded=Math.max(0, Math.round(m));
-  const km=Math.floor(rounded/1000);
-  const rest=String(rounded-km*1000).padStart(3,'0');
-  return km+'k'+rest;
+  return (Math.max(0, m) / 1000).toFixed(2)+'kp';
 }
 function makeLabel(lat, lon, text, index) {
   const m=visualMetrics();
@@ -105,9 +102,9 @@ function makeLabel(lat, lon, text, index) {
   const side=(index % 2 === 0) ? 1 : -1;
   const labelPoint=L.point(base.x + side*m.labelOffsetX, base.y - m.labelOffsetY);
   const labelLatLng=map.layerPointToLatLng(labelPoint);
-  const leader=L.polyline([[lat,lon], labelLatLng], {pane:'leaderPane', color:'#ff334e', weight:1, opacity:.75, interactive:false});
+  const leader=L.polyline([[lat,lon], labelLatLng], {pane:'leaderPane', color:'#2A73FF', weight:1, opacity:.78, interactive:false});
   const html='<div class="kp-label" style="font-size:'+m.labelFont+'px;border-radius:9px;">'+text+'</div>';
-  const marker=L.marker(labelLatLng, {pane:'labelPane', interactive:false, keyboard:false, icon:L.divIcon({className:'', html:html, iconSize:null, iconAnchor:[side>0?0:46, 16]})});
+  const marker=L.marker(labelLatLng, {pane:'labelPane', interactive:false, keyboard:false, icon:L.divIcon({className:'', html:html, iconSize:null, iconAnchor:[side>0?0:54, 16]})});
   return [leader, marker];
 }
 function labelStride(distances) {
