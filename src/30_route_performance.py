@@ -920,10 +920,13 @@ function initFallbackMap() {{
   const points = DATA.flatMap(payload => payload.points);
   const lons = points.map(p => Number(p.lon)).filter(Number.isFinite);
   const lats = points.map(p => Number(p.lat)).filter(Number.isFinite);
-  const minLon = Math.min(...lons, 139.7);
-  const maxLon = Math.max(...lons, 139.8);
-  const minY = -Math.max(...lats, 35.8);
-  const maxY = -Math.min(...lats, 35.6);
+  const hasPoints = lons.length > 0 && lats.length > 0;
+  const minLon = hasPoints ? Math.min(...lons) : 139.7;
+  const maxLon = hasPoints ? Math.max(...lons) : 139.8;
+  const minLat = hasPoints ? Math.min(...lats) : 35.6;
+  const maxLat = hasPoints ? Math.max(...lats) : 35.8;
+  const minY = -maxLat;
+  const maxY = -minLat;
   const padX = Math.max((maxLon - minLon) * 0.08, 0.001);
   const padY = Math.max((maxY - minY) * 0.08, 0.001);
   fallback = {{

@@ -143,6 +143,9 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             self.assertIn("平均所要時間(分)", viewer_html)
             self.assertIn("routeTravelTime", viewer_html)
             self.assertIn("segmentDistanceKm", viewer_html)
+            self.assertIn("hasPoints ? Math.min(...lons) : 139.7", viewer_html)
+            self.assertNotIn("Math.min(...lons, 139.7)", viewer_html)
+            self.assertNotIn("Math.max(...lons, 139.8)", viewer_html)
             self.assertTrue(Path(rebuilt_viewer).exists())
 
     def test_project_paths_accept_fullwidth_screening_number_and_japanese_output(self):
