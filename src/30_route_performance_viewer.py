@@ -57,8 +57,8 @@ class MainWindow(QMainWindow):
 
         row = QHBoxLayout()
         self.output_edit = QLineEdit()
-        self.output_edit.setPlaceholderText("Select an existing 30_route_performance output folder")
-        choose = QPushButton("出力フォルダ選択")
+        self.output_edit.setPlaceholderText("30 を実行済みのプロジェクト内にある 30_route_performance 出力フォルダを選択")
+        choose = QPushButton("フォルダ変更")
         choose.clicked.connect(self.choose_output_dir)
         rebuild = QPushButton("ビューアー再生成")
         rebuild.clicked.connect(self.rebuild_viewer)
@@ -70,7 +70,7 @@ class MainWindow(QMainWindow):
         row.addWidget(open_external)
         layout.addLayout(row)
 
-        self.status = QLabel("30 を一度実行した後の 30_route_performance フォルダを選択してください。")
+        self.status = QLabel("30 を一度実行した後の 30_route_performance 出力フォルダを選択してください。")
         layout.addWidget(self.status)
 
         if QWebEngineView is not None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html as html_lib
 import json
 import math
 import re
@@ -768,18 +769,28 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
     center_lat = sum(p["lat"] for p in all_points) / len(all_points) if all_points else 35.6812
     center_lon = sum(p["lon"] for p in all_points) / len(all_points) if all_points else 139.7671
     html_path = out_dir / "30_route_performance_viewer.html"
-    leaflet_css = (SRC_DIR / "leaflet" / "leaflet.css").read_text(encoding="utf-8")
-    leaflet_js = (SRC_DIR / "leaflet" / "leaflet.js").read_text(encoding="utf-8")
+    leaflet_css_path = SRC_DIR / "leaflet" / "leaflet.css"
+    leaflet_js_path = SRC_DIR / "leaflet" / "leaflet.js"
+    leaflet_css = leaflet_css_path.read_text(encoding="utf-8") if leaflet_css_path.exists() else ""
+    leaflet_css_link = "" if leaflet_css else '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">'
+    leaflet_script = (
+        f"<script>{leaflet_js_path.read_text(encoding='utf-8')}</script>"
+        if leaflet_js_path.exists()
+        else '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
+    )
     html = f"""<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8">
   <title>30 Route Performance Viewer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {leaflet_css_link}
   <style>
     {leaflet_css}
     html, body, #map {{ height:100%; margin:0; background:#fff; font-family: "Segoe UI", "Meiryo UI", sans-serif; }}
     .leaflet-container {{ background:#fff; }}
+    #fallbackSvg {{ position:absolute; inset:0; width:100%; height:100%; background:#fff; cursor:grab; }}
+    #fallbackSvg:active {{ cursor:grabbing; }}
     .panel {{ position:absolute; z-index:1000; left:12px; top:12px; width:min(560px, calc(100vw - 24px)); background:#ffffffee; border-radius:8px; box-shadow:0 8px 24px #0003; padding:10px; }}
     .row {{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:6px; }}
     button {{ border:1px solid #b8c2cc; background:#fff; border-radius:6px; padding:5px 8px; cursor:pointer; }}
@@ -796,12 +807,13 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
     .legend span {{ display:inline-block; width:14px; height:10px; margin-right:4px; }}
     select {{ min-width:130px; background:#fff; border:1px solid #b8c2cc; border-radius:6px; padding:4px; }}
   </style>
-  <script>{leaflet_js}</script>
+  {leaflet_script}
 </head>
 <body>
 <div id="map"></div>
 <div class="panel">
   <b>30 Route Performance Viewer</b>
+  <div class="row"><small>出力フォルダ: {html_lib.escape(str(out_dir))}</small></div>
   <div class="row" id="metric"></div>
   <div class="row" id="speedKind"></div>
   <div class="row" id="monthbar"></div>
@@ -817,8 +829,15 @@ const DATA = {json.dumps(payloads, ensure_ascii=False)};
 const DATE_PERIODS = Array.from(new Set(DATA.flatMap(payload => payload.summary.map(r => String(r.period || '')).filter(p => /^\\d{{8}}$/.test(p))))).sort();
 const HIT_DATES = new Set(DATE_PERIODS);
 const HIT_MONTHS = Array.from(new Set(DATE_PERIODS.map(d => d.slice(0, 6)))).sort();
-const map = L.map('map').setView([{center_lat:.7f}, {center_lon:.7f}], 13);
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }}).addTo(map);
+const HAS_LEAFLET = typeof L !== 'undefined';
+let map = null;
+let fallback = null;
+if (HAS_LEAFLET) {{
+  map = L.map('map').setView([{center_lat:.7f}, {center_lon:.7f}], 13);
+  L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }}).addTo(map);
+}} else {{
+  initFallbackMap();
+}}
 const state = {{metric:'speed', speedKind:'avg', period: DATE_PERIODS[0] || '', hours:new Set([8])}};
 let monthIndex = 0;
 let layers = [];
@@ -895,6 +914,85 @@ function offsetPoint(a, b, side, meters) {{
     [b.lat + ny / mLat, b.lon + nx / mLon],
   ];
 }}
+function initFallbackMap() {{
+  const mapEl = document.getElementById('map');
+  mapEl.innerHTML = '<svg id="fallbackSvg" xmlns="http://www.w3.org/2000/svg"><g id="fallbackLayer"></g></svg><div style="position:absolute;right:12px;bottom:12px;background:#ffffffdd;padding:4px 8px;border-radius:4px;font-size:12px;">背景地図なし / ルート形状のみ</div>';
+  const points = DATA.flatMap(payload => payload.points);
+  const lons = points.map(p => Number(p.lon)).filter(Number.isFinite);
+  const lats = points.map(p => Number(p.lat)).filter(Number.isFinite);
+  const minLon = Math.min(...lons, 139.7);
+  const maxLon = Math.max(...lons, 139.8);
+  const minY = -Math.max(...lats, 35.8);
+  const maxY = -Math.min(...lats, 35.6);
+  const padX = Math.max((maxLon - minLon) * 0.08, 0.001);
+  const padY = Math.max((maxY - minY) * 0.08, 0.001);
+  fallback = {{
+    svg: document.getElementById('fallbackSvg'),
+    layer: document.getElementById('fallbackLayer'),
+    view: {{x:minLon - padX, y:minY - padY, w:(maxLon - minLon) + padX * 2, h:(maxY - minY) + padY * 2}},
+    drag: null,
+  }};
+  updateFallbackView();
+  fallback.svg.addEventListener('wheel', e => {{
+    e.preventDefault();
+    const p = svgPoint(e);
+    const factor = e.deltaY < 0 ? 0.85 : 1.15;
+    fallback.view.x = p.x - (p.x - fallback.view.x) * factor;
+    fallback.view.y = p.y - (p.y - fallback.view.y) * factor;
+    fallback.view.w *= factor;
+    fallback.view.h *= factor;
+    updateFallbackView();
+  }}, {{passive:false}});
+  fallback.svg.addEventListener('pointerdown', e => {{
+    fallback.svg.setPointerCapture(e.pointerId);
+    fallback.drag = {{x:e.clientX, y:e.clientY, vx:fallback.view.x, vy:fallback.view.y}};
+  }});
+  fallback.svg.addEventListener('pointermove', e => {{
+    if (!fallback.drag) return;
+    fallback.view.x = fallback.drag.vx - (e.clientX - fallback.drag.x) * fallback.view.w / fallback.svg.clientWidth;
+    fallback.view.y = fallback.drag.vy - (e.clientY - fallback.drag.y) * fallback.view.h / fallback.svg.clientHeight;
+    updateFallbackView();
+  }});
+  fallback.svg.addEventListener('pointerup', () => {{ fallback.drag = null; }});
+}}
+function svgPoint(e) {{
+  const p = fallback.svg.createSVGPoint();
+  p.x = e.clientX; p.y = e.clientY;
+  return p.matrixTransform(fallback.svg.getScreenCTM().inverse());
+}}
+function updateFallbackView() {{
+  const v = fallback.view;
+  fallback.svg.setAttribute('viewBox', `${{v.x}} ${{v.y}} ${{v.w}} ${{v.h}}`);
+}}
+function clearTrafficLayers() {{
+  if (HAS_LEAFLET) {{
+    layers.forEach(l => map.removeLayer(l));
+  }} else if (fallback) {{
+    fallback.layer.innerHTML = '';
+  }}
+  layers = [];
+}}
+function addTrafficLine(coords, color, width, tooltip) {{
+  if (HAS_LEAFLET) {{
+    const line = L.polyline(coords, {{color, weight:width, opacity:.92}}).bindTooltip(tooltip);
+    line.addTo(map); layers.push(line);
+    return;
+  }}
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  line.setAttribute('x1', coords[0][1]);
+  line.setAttribute('y1', -coords[0][0]);
+  line.setAttribute('x2', coords[1][1]);
+  line.setAttribute('y2', -coords[1][0]);
+  line.setAttribute('stroke', color);
+  line.setAttribute('stroke-width', width);
+  line.setAttribute('stroke-linecap', 'round');
+  line.setAttribute('opacity', '.92');
+  line.setAttribute('vector-effect', 'non-scaling-stroke');
+  const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+  title.textContent = tooltip.replace(/<br>/g, '\\n');
+  line.appendChild(title);
+  fallback.layer.appendChild(line);
+}}
 function aggregateSummary(payload, bucket, direction) {{
   let speedNumerator = 0;
   let freeNumerator = 0;
@@ -963,7 +1061,7 @@ function rangedColor(v, breaks) {{
   return bucket ? bucket.color : '#9ca3af';
 }}
 function redraw() {{
-  layers.forEach(l => map.removeLayer(l)); layers = [];
+  clearTrafficLayers();
   renderSelectionStatus();
   let maxTrip = 0;
   let maxVolume = 0;
@@ -993,9 +1091,7 @@ function redraw() {{
         const freeText = Number.isFinite(Number(s.freeflow_speed_kmh)) ? Number(s.freeflow_speed_kmh).toFixed(1) : 'なし';
         const jamText = Number.isFinite(Number(s.congested_speed_kmh)) ? Number(s.congested_speed_kmh).toFixed(1) : 'なし';
         const volumeText = Number.isFinite(Number(s.expanded_volume)) ? Number(s.expanded_volume).toFixed(1) : 'なし';
-        const line = L.polyline(offsetPoint(a, b, side, 7), {{color, weight:width, opacity:.92}})
-          .bindTooltip(`${{payload.route}}<br>${{dir === 'forward' ? '順方向（路線左側）' : '逆方向（反対側）'}} bucket=${{bucket}}<br>閑散時速度: ${{freeText}} km/h<br>平均速度: ${{speedText}} km/h<br>渋滞時速度: ${{jamText}} km/h<br>交通量: ${{volumeText}}<br>実トリップ数: ${{s.trip_count || 'なし'}}`);
-        line.addTo(map); layers.push(line);
+        addTrafficLine(offsetPoint(a, b, side, 7), color, width, `${{payload.route}}<br>${{dir === 'forward' ? '順方向（路線左側）' : '逆方向（反対側）'}} bucket=${{bucket}}<br>閑散時速度: ${{freeText}} km/h<br>平均速度: ${{speedText}} km/h<br>渋滞時速度: ${{jamText}} km/h<br>交通量: ${{volumeText}}<br>実トリップ数: ${{s.trip_count || 'なし'}}`);
       }});
     }}
   }});
@@ -1068,6 +1164,42 @@ function moveHourSelection(delta, extend) {{
 function selectedHoursLabel() {{
   return Array.from(state.hours).sort((a,b) => a-b).map(h => String(h).padStart(2,'0')).join(',');
 }}
+function haversineKm(a, b) {{
+  const r = 6371.0088;
+  const toRad = d => Number(d) * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLon = toRad(b.lon - a.lon);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * r * Math.asin(Math.min(1, Math.sqrt(h)));
+}}
+function segmentDistanceKm(points, index) {{
+  const a = points[index - 1];
+  const b = points[index];
+  const kpDistance = Math.abs(Number(b.kp_km) - Number(a.kp_km));
+  return Number.isFinite(kpDistance) && kpDistance > 0 ? kpDistance : haversineKm(a, b);
+}}
+function metricSpeedValue(summary, metric) {{
+  if (metric === 'free') return summary.freeflow_speed_kmh;
+  if (metric === 'jam') return summary.congested_speed_kmh;
+  return summary.avg_speed_kmh;
+}}
+function routeTravelTime(payload, direction, metric) {{
+  let minutes = 0;
+  let distanceKm = 0;
+  const points = payload.points;
+  for (let i = 1; i < points.length; i++) {{
+    const bucket = direction === 'forward' ? i : i - 1;
+    const speed = Number(metricSpeedValue(aggregateSummary(payload, bucket, direction), metric));
+    if (!Number.isFinite(speed) || speed <= 0) continue;
+    const distance = segmentDistanceKm(points, i);
+    if (!Number.isFinite(distance) || distance <= 0) continue;
+    distanceKm += distance;
+    minutes += distance / speed * 60;
+  }}
+  return {{distanceKm, minutes}};
+}}
 function exportRows(direction, metric) {{
   const rows = [['route','bucket_index','KP[km]','lon','lat','value']];
   DATA.forEach(payload => {{
@@ -1082,6 +1214,19 @@ function exportRows(direction, metric) {{
       rows.push([payload.route, point.bucket_index, point.kp_km, point.lon, point.lat, value]);
     }});
   }});
+  if (['free', 'avg', 'jam'].includes(metric)) {{
+    rows.push([]);
+    rows.push(['平均所要時間(分)', 'route', 'direction', '対象距離[km]', '', 'minutes']);
+    let totalMinutes = 0;
+    let totalDistance = 0;
+    DATA.forEach(payload => {{
+      const t = routeTravelTime(payload, direction, metric);
+      totalMinutes += t.minutes;
+      totalDistance += t.distanceKm;
+      rows.push(['平均所要時間(分)', payload.route, direction, Number(t.distanceKm.toFixed(3)), '', t.minutes ? Number(t.minutes.toFixed(2)) : '']);
+    }});
+    rows.push(['平均所要時間(分)', '全路線合計', direction, Number(totalDistance.toFixed(3)), '', totalMinutes ? Number(totalMinutes.toFixed(2)) : '']);
+  }}
   return rows;
 }}
 function exportWorkbook() {{
