@@ -9,7 +9,7 @@ SRC_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from PyQt6.QtCore import QUrl
+from PyQt6.QtCore import QObject, Qt, QThread, QUrl, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -38,12 +39,32 @@ sys.modules[spec.name] = perf
 spec.loader.exec_module(perf)
 
 
+class ViewerBuildWorker(QObject):
+    finished = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, output_dir: str) -> None:
+        super().__init__()
+        self.output_dir = output_dir
+
+    def run(self) -> None:
+        try:
+            viewer = Path(perf.build_viewer_from_output(self.output_dir)).resolve()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(str(viewer))
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("30 Route Performance Viewer")
         self.resize(1180, 780)
         self.viewer_path: Path | None = None
+        self.build_thread: QThread | None = None
+        self.build_worker: ViewerBuildWorker | None = None
+        self.loading_dialog: QProgressDialog | None = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -75,6 +96,7 @@ class MainWindow(QMainWindow):
 
         if QWebEngineView is not None:
             self.web = QWebEngineView()
+            self.web.loadFinished.connect(self.web_load_finished)
             layout.addWidget(self.web, 1)
         else:
             self.web = None
@@ -98,18 +120,69 @@ class MainWindow(QMainWindow):
         self.rebuild_viewer()
 
     def rebuild_viewer(self) -> None:
+        if self.build_thread is not None and self.build_thread.isRunning():
+            self.status.setText("ビューアーデータを読み込み中です。完了までお待ちください。")
+            return
         output_dir = self.output_edit.text().strip()
         if not output_dir:
             QMessageBox.warning(self, "未選択", "30_route_performance 出力フォルダを選択してください。")
             return
-        try:
-            self.viewer_path = Path(perf.build_viewer_from_output(output_dir)).resolve()
-        except Exception as exc:
-            QMessageBox.critical(self, "ビューアー再生成失敗", str(exc))
-            return
+        self.status.setText("ビューアーデータを読み込み中です。しばらくお待ちください。")
+        self.show_loading_dialog("ビューアーデータを読み込み中です。\nJSONを集約し、地図表示用HTMLを生成しています。")
+        self.build_thread = QThread()
+        self.build_worker = ViewerBuildWorker(output_dir)
+        self.build_worker.moveToThread(self.build_thread)
+        self.build_thread.started.connect(self.build_worker.run)
+        self.build_worker.finished.connect(self.viewer_rebuild_done)
+        self.build_worker.failed.connect(self.viewer_rebuild_failed)
+        self.build_worker.finished.connect(self.build_thread.quit)
+        self.build_worker.failed.connect(self.build_thread.quit)
+        self.build_thread.finished.connect(self.build_worker.deleteLater)
+        self.build_thread.finished.connect(self.build_thread.deleteLater)
+        self.build_thread.start()
+
+    def show_loading_dialog(self, message: str) -> None:
+        self.close_loading_dialog()
+        dialog = QProgressDialog(message, None, 0, 0, self)
+        dialog.setWindowTitle("データ読み込み中")
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dialog.setMinimumDuration(0)
+        dialog.setCancelButton(None)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.show()
+        QApplication.processEvents()
+        self.loading_dialog = dialog
+
+    def close_loading_dialog(self) -> None:
+        if self.loading_dialog is not None:
+            self.loading_dialog.close()
+            self.loading_dialog.deleteLater()
+            self.loading_dialog = None
+
+    def viewer_rebuild_done(self, viewer: str) -> None:
+        self.build_thread = None
+        self.build_worker = None
+        self.viewer_path = Path(viewer)
         self.status.setText(f"ビューアーを再生成しました: {self.viewer_path}")
         if self.web is not None:
             self.web.load(QUrl.fromLocalFile(str(self.viewer_path)))
+        else:
+            self.close_loading_dialog()
+
+    def viewer_rebuild_failed(self, message: str) -> None:
+        self.build_thread = None
+        self.build_worker = None
+        self.close_loading_dialog()
+        QMessageBox.critical(self, "ビューアー再生成失敗", message)
+
+    def web_load_finished(self, ok: bool) -> None:
+        self.close_loading_dialog()
+        if not ok:
+            self.status.setText("ビューアーHTMLの読み込みに失敗しました。外部ブラウザで確認してください。")
+            return
+        if self.viewer_path is not None:
+            self.status.setText(f"ビューアーを表示しました: {self.viewer_path}")
 
     def open_external(self) -> None:
         if self.viewer_path is None:
