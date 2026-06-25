@@ -12,7 +12,7 @@
     .toolbar { position:absolute; top:10px; left:10px; z-index:1000; background:#fff; padding:10px 14px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,.3); font-size:13px; width:330px; }
     .toolbar input { width:160px; }
     html.embed .toolbar { display:none; }
-    .route-no-label { display:flex; align-items:center; justify-content:center; font-weight:900; color:#00150d; background:rgba(0,255,136,.88); border:2px solid #fff; box-shadow:0 0 8px rgba(0,255,136,.8); }
+    .kp-label { display:flex; align-items:center; justify-content:center; white-space:nowrap; font-weight:900; color:#210003; background:rgba(255,255,255,.92); border:1px solid rgba(255,51,78,.85); box-shadow:0 1px 5px rgba(0,0,0,.25); padding:1px 5px; }
     html.embed #map { outline:1px solid rgba(42,115,255,.35); box-shadow:0 0 0 1px rgba(0,255,136,.15) inset,0 0 18px rgba(42,115,255,.22); background:#05070a; }
   </style>
 </head>
@@ -41,32 +41,80 @@ const TOTAL_COLS=Math.max(TYPE_COL,USE_COL,TIME_COL,FLAG_COL,LON_COL,LAT_COL,SPE
 const DEFAULT_TYPE='2', DEFAULT_USE='1', DEFAULT_FLAG='2', DEFAULT_SPEED='30.0', ANGLE_THRESHOLD=30.0, EPS_M=0.001, TIME_STEP_SEC=10;
 const map=L.map('map',{preferCanvas:true}).setView([35.069095,134.004512],14);
 map.createPane('routePane'); map.getPane('routePane').style.zIndex=430;
+map.createPane('leaderPane'); map.getPane('leaderPane').style.zIndex=640;
 map.createPane('labelPane'); map.getPane('labelPane').style.zIndex=650;
 L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors © CARTO'}).addTo(map);
 let points=[];
+let editMode=true;
 const savedRouteLayer=L.layerGroup().addTo(map);
 const routeLine=L.polyline([], {pane:'routePane', color:'#00ff88', weight:7, opacity:.95}).addTo(map);
 const rawLine=L.polyline([], {pane:'routePane', color:'#2A73FF', weight:3, opacity:.70, dashArray:'8,8'}).addTo(map);
 const markerLayer=L.layerGroup().addTo(map);
 function visualMetrics() {
   const z=map.getZoom();
-  const t=Math.max(0, Math.min(1, (z-9)/5));
+  const t=Math.max(0, Math.min(1, (z-10)/8));
   return {
-    editWeight: 3 + 4*t,
+    editWeight: 3 + 2*t,
     savedWeight: 2 + 2*t,
-    rawWeight: 1 + 2*t,
-    markerRadius: 2.5 + 5.5*t,
-    markerWeight: 1 + 2*t,
-    labelW: Math.round(18 + 26*t),
-    labelH: Math.round(14 + 14*t),
-    labelFont: Math.round(9 + 9*t),
+    rawWeight: 1 + 1.5*t,
+    markerRadius: 2.8 + 1.6*t,
+    markerWeight: 1.0 + 0.8*t,
+    labelFont: Math.round(10 + 2*t),
+    labelOffsetX: Math.round(18 + 10*t),
+    labelOffsetY: Math.round(14 + 8*t),
     labelVisible: z >= 11
   };
 }
-function label(lat, lon, text) {
+function labelIntervalM() {
+  const z=map.getZoom();
+  if (z < 11) return Infinity;
+  if (z < 12) return 1000;
+  if (z < 13) return 500;
+  if (z < 14) return 200;
+  if (z < 15) return 100;
+  if (z < 16) return 50;
+  if (z < 17) return 40;
+  if (z < 18) return 20;
+  return 0; // 最大拡大付近では全ポイント表示
+}
+function cumulativeDistancesM(ps) {
+  const d=[0];
+  for (let i=1;i<ps.length;i++) d.push(d[i-1]+haversineM(ps[i-1], ps[i]));
+  return d;
+}
+function medianPitchM(distances) {
+  const seg=[];
+  for (let i=1;i<distances.length;i++) {
+    const v=distances[i]-distances[i-1];
+    if (Number.isFinite(v) && v>0.01) seg.push(v);
+  }
+  if (!seg.length) return 20;
+  seg.sort((a,b)=>a-b);
+  return seg[Math.floor(seg.length/2)] || 20;
+}
+function formatKp(m) {
+  const rounded=Math.max(0, Math.round(m));
+  const km=Math.floor(rounded/1000);
+  const rest=String(rounded-km*1000).padStart(3,'0');
+  return km+'k'+rest;
+}
+function makeLabel(lat, lon, text, index) {
   const m=visualMetrics();
-  if(!m.labelVisible) return null;
-  return L.marker([lat,lon], {pane:'labelPane', interactive:false, keyboard:false, icon:L.divIcon({className:'', html:'<div class="route-no-label" style="width:'+m.labelW+'px;height:'+m.labelH+'px;font-size:'+m.labelFont+'px;border-radius:'+Math.round(m.labelH/2)+'px;">'+text+'</div>', iconSize:[m.labelW,m.labelH], iconAnchor:[Math.round(m.labelW/2),Math.round(m.labelH/2)]})});
+  if(!m.labelVisible) return [];
+  const base=map.latLngToLayerPoint([lat,lon]);
+  const side=(index % 2 === 0) ? 1 : -1;
+  const labelPoint=L.point(base.x + side*m.labelOffsetX, base.y - m.labelOffsetY);
+  const labelLatLng=map.layerPointToLatLng(labelPoint);
+  const leader=L.polyline([[lat,lon], labelLatLng], {pane:'leaderPane', color:'#ff334e', weight:1, opacity:.75, interactive:false});
+  const html='<div class="kp-label" style="font-size:'+m.labelFont+'px;border-radius:9px;">'+text+'</div>';
+  const marker=L.marker(labelLatLng, {pane:'labelPane', interactive:false, keyboard:false, icon:L.divIcon({className:'', html:html, iconSize:null, iconAnchor:[side>0?0:46, 16]})});
+  return [leader, marker];
+}
+function labelStride(distances) {
+  const interval=labelIntervalM();
+  if (interval === Infinity) return Infinity;
+  if (interval === 0) return 1;
+  return Math.max(1, Math.round(interval / Math.max(1, medianPitchM(distances))));
 }
 function applyDynamicStyles() {
   const m=visualMetrics();
@@ -76,9 +124,16 @@ function applyDynamicStyles() {
 }
 function redraw() {
   const m=visualMetrics();
-  rawLine.setLatLngs(points.map(p=>[p.lat,p.lon])); routeLine.setLatLngs(points.map(p=>[p.lat,p.lon])); markerLayer.clearLayers();
+  const latlngs=points.map(p=>[p.lat,p.lon]);
+  rawLine.setLatLngs(latlngs); routeLine.setLatLngs(latlngs); markerLayer.clearLayers();
   applyDynamicStyles();
-  points.forEach((p,i)=>{ let color='#111', fill='#00ff88', text=String(i+1); if(i===0){color='#ff334e'; fill='#fff'; text='S';} else if(i===points.length-1){color='#2A73FF'; fill='#fff'; text='G';} markerLayer.addLayer(L.circleMarker([p.lat,p.lon],{radius:m.markerRadius,color:color,weight:m.markerWeight,fill:true,fillColor:fill,fillOpacity:1})); const lbl=label(p.lat,p.lon,text); if(lbl) markerLayer.addLayer(lbl); });
+  const distances=cumulativeDistancesM(points);
+  const stride=labelStride(distances);
+  points.forEach((p,i)=>{
+    markerLayer.addLayer(L.circleMarker([p.lat,p.lon],{pane:'labelPane', radius:m.markerRadius, color:'#fff', weight:m.markerWeight, fill:true, fillColor:'#ff334e', fillOpacity:1, opacity:1}));
+    const showLabel = points.length && (i===0 || i===points.length-1 || (stride!==Infinity && i % stride === 0));
+    if(showLabel) makeLabel(p.lat,p.lon,formatKp(distances[i]||0),i).forEach(layer=>markerLayer.addLayer(layer));
+  });
 }
 function setSavedRoutes(routes) {
   savedRouteLayer.clearLayers();
@@ -100,10 +155,11 @@ function csvEscape(v){ const s=String(v==null?'':v); return /[",\r\n]/.test(s) ?
 function buildCsvText(stepM){ return buildCsvRows(resamplePolyline(points, stepM, ANGLE_THRESHOLD), new Date()).map(row=>row.map(csvEscape).join(',')).join('\n')+'\n'; }
 function clearAll(){ points=[]; redraw(); }
 function beginSaveFromPy(routeName, pitchM, overwrite){ if(points.length<2){ alert('2点以上を指定してください'); return; } if(!bridge || !bridge.requestSave){ alert('ブリッジ未接続'); return; } bridge.requestSave(JSON.stringify({route_name:routeName, pitch_m:Number(pitchM)||20, overwrite:!!overwrite, csv_text:buildCsvText(Number(pitchM)||20)})); }
-function loadFromCsvText(csvText){ clearAll(); String(csvText||'').split(/\r?\n/).filter(line=>line.trim()!=='').forEach(line=>{ const cols=line.split(','), lon=parseFloat(cols[LON_COL]), lat=parseFloat(cols[LAT_COL]); if(Number.isFinite(lat)&&Number.isFinite(lon)) points.push({lat:lat, lon:lon}); }); redraw(); if(points.length) map.fitBounds(L.latLngBounds(points.map(p=>[p.lat,p.lon])).pad(.2)); }
+function setInteractionMode(canEdit){ editMode=!!canEdit; }
+function loadFromCsvText(csvText, canEdit=true){ setInteractionMode(canEdit); clearAll(); String(csvText||'').split(/\r?\n/).filter(line=>line.trim()!=='').forEach(line=>{ const cols=line.split(','), lon=parseFloat(cols[LON_COL]), lat=parseFloat(cols[LAT_COL]); if(Number.isFinite(lat)&&Number.isFinite(lon)) points.push({lat:lat, lon:lon}); }); redraw(); if(points.length) map.fitBounds(L.latLngBounds(points.map(p=>[p.lat,p.lon])).pad(.2)); }
 function saveCsvStandalone(){ if(points.length<2){ alert('2点以上を指定してください。'); return; } const pitch=Number(document.getElementById('pitchM').value)||20, routeName=(document.getElementById('outputName').value||'route').trim(); const suffix='_'+(Math.round(pitch)===pitch?String(Math.round(pitch)):String(pitch).replace('.','p'))+'m'; const filename=routeName.replace(/[\\/:*?"<>|]+/g,'_').replace(/_\d+(?:p\d+)?m$/,'')+suffix+'.csv'; const blob=new Blob(['\uFEFF'+buildCsvText(pitch)],{type:'text/csv;charset=utf-8;'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); }
-map.on('click', e=>{ points.push({lat:e.latlng.lat, lon:e.latlng.lng}); redraw(); });
-map.on('contextmenu', e=>{ if(e.originalEvent){ L.DomEvent.preventDefault(e.originalEvent); L.DomEvent.stopPropagation(e.originalEvent); } points.pop(); redraw(); });
+map.on('click', e=>{ if(!editMode) return; points.push({lat:e.latlng.lat, lon:e.latlng.lng}); redraw(); });
+map.on('contextmenu', e=>{ if(e.originalEvent){ L.DomEvent.preventDefault(e.originalEvent); L.DomEvent.stopPropagation(e.originalEvent); } if(!editMode) return; points.pop(); redraw(); });
 map.on('zoomend', redraw);
 document.addEventListener('DOMContentLoaded', setupBridge);
 </script>

@@ -217,7 +217,7 @@ class MainWindow(QMainWindow):
         self.table.setEditTriggers(self.table.EditTrigger.NoEditTriggers)
         lv.addWidget(self.table, 1)
         buttons = QHBoxLayout()
-        for text, slot in (("編集", self.edit_selected), ("リネーム", self.rename_selected), ("削除", self.delete_selected)):
+        for text, slot in (("詳細表示", self.detail_selected), ("編集", self.edit_selected), ("リネーム", self.rename_selected), ("削除", self.delete_selected)):
             b = QPushButton(text); b.clicked.connect(slot); buttons.addWidget(b)
         lv.addLayout(buttons)
 
@@ -344,21 +344,21 @@ class MainWindow(QMainWindow):
         self.web.page().runJavaScript(f"beginSaveFromPy({json.dumps(route_name)}, {pitch_m}, {str(overwrite).lower()})")
 
     def on_saved(self, base_name: str) -> None:
-        self.editing_name = None; self.name_edit.clear(); self.web.page().runJavaScript("clearAll()"); self.scan_routes()
+        self.editing_name = None; self.name_edit.clear(); self.web.page().runJavaScript("setInteractionMode(true); clearAll()"); self.scan_routes()
         for row in range(self.table.rowCount()):
             item = self.table.item(row, COL_NAME)
             if item and item.text() == base_name:
                 self.table.selectRow(row); break
 
     def clear_clicked(self) -> None:
-        self.editing_name = None; self.name_edit.clear(); self.web.page().runJavaScript("clearAll()")
+        self.editing_name = None; self.name_edit.clear(); self.web.page().runJavaScript("setInteractionMode(true); clearAll()")
 
-    def edit_selected(self) -> None:
+    def _load_selected_route(self, *, editable: bool) -> None:
         if not self.route_dir:
             self._show_error("先にプロジェクトを選択してください。"); return
         name = self.selected_name()
         if not name:
-            self._show_error("編集対象を選択してください。"); return
+            self._show_error("対象ルートを選択してください。"); return
         path = self.route_dir / f"{name}.csv"
         if not path.exists():
             self._show_error("CSVファイルが見つかりません。"); return
@@ -370,11 +370,18 @@ class MainWindow(QMainWindow):
                 pass
         if csv_text is None:
             self._show_error("CSVの読み込みに失敗しました。"); return
-        self.editing_name = name; self.name_edit.setText(re.sub(r'_\d+(?:p\d+)?m$', "", name))
+        self.editing_name = name if editable else None
+        self.name_edit.setText(re.sub(r'_\d+(?:p\d+)?m$', "", name) if editable else "")
         pitch = self._pitch_from_name(name)
         if pitch:
             self.pitch_spin.setValue(float(pitch.rstrip("m")))
-        self.web.page().runJavaScript(f"loadFromCsvText({json.dumps(csv_text)})")
+        self.web.page().runJavaScript(f"loadFromCsvText({json.dumps(csv_text)}, {str(editable).lower()})")
+
+    def detail_selected(self) -> None:
+        self._load_selected_route(editable=False)
+
+    def edit_selected(self) -> None:
+        self._load_selected_route(editable=True)
 
     def delete_selected(self) -> None:
         if not self.route_dir:
