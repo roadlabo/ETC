@@ -129,6 +129,9 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             self.assertIn("onkeydown", viewer_html)
             self.assertIn("ArrowUp", viewer_html)
             self.assertIn("ArrowDown", viewer_html)
+            self.assertIn("HAS_LEAFLET", viewer_html)
+            self.assertIn("initFallbackMap", viewer_html)
+            self.assertIn("背景地図なし / ルート形状のみ", viewer_html)
             self.assertIn("speedKind", viewer_html)
             self.assertIn("exportWorkbook", viewer_html)
             self.assertIn("抽出条件", viewer_html)
@@ -137,6 +140,12 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             self.assertIn("VOLUME_COLORS", viewer_html)
             self.assertIn("トリップ", viewer_html)
             self.assertIn("交通量", viewer_html)
+            self.assertIn("平均所要時間(分)", viewer_html)
+            self.assertIn("routeTravelTime", viewer_html)
+            self.assertIn("segmentDistanceKm", viewer_html)
+            self.assertIn("hasPoints ? Math.min(...lons) : 139.7", viewer_html)
+            self.assertNotIn("Math.min(...lons, 139.7)", viewer_html)
+            self.assertNotIn("Math.max(...lons, 139.8)", viewer_html)
             self.assertTrue(Path(rebuilt_viewer).exists())
 
     def test_project_paths_accept_fullwidth_screening_number_and_japanese_output(self):
