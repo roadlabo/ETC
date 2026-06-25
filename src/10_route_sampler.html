@@ -92,26 +92,40 @@ function medianPitchM(distances) {
   seg.sort((a,b)=>a-b);
   return seg[Math.floor(seg.length/2)] || 20;
 }
-function formatKp(m) {
-  return (Math.max(0, m) / 1000).toFixed(2)+'kp';
+function isMaxLabelZoom() {
+  return labelIntervalM() === 0;
 }
-function makeLabel(lat, lon, text, index) {
+function formatKp(m) {
+  const digits=isMaxLabelZoom() ? 2 : 1;
+  return (Math.max(0, m) / 1000).toFixed(digits)+'kp';
+}
+function makeLabel(lat, lon, text) {
   const m=visualMetrics();
   if(!m.labelVisible) return [];
   const base=map.latLngToLayerPoint([lat,lon]);
-  const side=(index % 2 === 0) ? 1 : -1;
-  const labelPoint=L.point(base.x + side*m.labelOffsetX, base.y - m.labelOffsetY);
+  const labelPoint=L.point(base.x + m.labelOffsetX, base.y - m.labelOffsetY);
   const labelLatLng=map.layerPointToLatLng(labelPoint);
   const leader=L.polyline([[lat,lon], labelLatLng], {pane:'leaderPane', color:'#2A73FF', weight:1, opacity:.78, interactive:false});
   const html='<div class="kp-label" style="font-size:'+m.labelFont+'px;border-radius:9px;">'+text+'</div>';
-  const marker=L.marker(labelLatLng, {pane:'labelPane', interactive:false, keyboard:false, icon:L.divIcon({className:'', html:html, iconSize:null, iconAnchor:[side>0?0:54, 16]})});
+  const marker=L.marker(labelLatLng, {pane:'labelPane', interactive:false, keyboard:false, icon:L.divIcon({className:'', html:html, iconSize:null, iconAnchor:[0, 16]})});
   return [leader, marker];
 }
-function labelStride(distances) {
+function labelIndexes(distances) {
   const interval=labelIntervalM();
-  if (interval === Infinity) return Infinity;
-  if (interval === 0) return 1;
-  return Math.max(1, Math.round(interval / Math.max(1, medianPitchM(distances))));
+  if (interval === Infinity) return new Set();
+  if (interval === 0) return new Set(distances.map((_,i)=>i));
+  if (!distances.length) return new Set();
+  const labels=new Map();
+  for (let i=0;i<distances.length;i++) {
+    const d=Math.max(0, distances[i] || 0);
+    const target=Math.round(d / interval) * interval;
+    if (Math.abs(d - target) > interval / 2) continue;
+    const key=String(target);
+    const score=Math.abs(d - target);
+    const prev=labels.get(key);
+    if (!prev || score < prev.score) labels.set(key, {index:i, score:score});
+  }
+  return new Set(Array.from(labels.values()).map(v=>v.index));
 }
 function applyDynamicStyles() {
   const m=visualMetrics();
@@ -125,11 +139,10 @@ function redraw() {
   rawLine.setLatLngs(latlngs); routeLine.setLatLngs(latlngs); markerLayer.clearLayers();
   applyDynamicStyles();
   const distances=cumulativeDistancesM(points);
-  const stride=labelStride(distances);
+  const labelSet=labelIndexes(distances);
   points.forEach((p,i)=>{
     markerLayer.addLayer(L.circleMarker([p.lat,p.lon],{pane:'labelPane', radius:m.markerRadius, color:'#fff', weight:m.markerWeight, fill:true, fillColor:'#ff334e', fillOpacity:1, opacity:1}));
-    const showLabel = points.length && (i===0 || i===points.length-1 || (stride!==Infinity && i % stride === 0));
-    if(showLabel) makeLabel(p.lat,p.lon,formatKp(distances[i]||0),i).forEach(layer=>markerLayer.addLayer(layer));
+    if(labelSet.has(i)) makeLabel(p.lat,p.lon,formatKp(distances[i]||0)).forEach(layer=>markerLayer.addLayer(layer));
   });
 }
 function setSavedRoutes(routes) {
