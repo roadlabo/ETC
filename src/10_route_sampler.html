@@ -41,6 +41,7 @@ const TOTAL_COLS=Math.max(TYPE_COL,USE_COL,TIME_COL,FLAG_COL,LON_COL,LAT_COL,SPE
 const DEFAULT_TYPE='2', DEFAULT_USE='1', DEFAULT_FLAG='2', DEFAULT_SPEED='30.0', ANGLE_THRESHOLD=30.0, EPS_M=0.001, TIME_STEP_SEC=10;
 const map=L.map('map',{preferCanvas:true}).setView([35.069095,134.004512],14);
 map.createPane('routePane'); map.getPane('routePane').style.zIndex=430;
+map.createPane('pointPane'); map.getPane('pointPane').style.zIndex=630;
 map.createPane('leaderPane'); map.getPane('leaderPane').style.zIndex=640;
 map.createPane('labelPane'); map.getPane('labelPane').style.zIndex=650;
 L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors © CARTO'}).addTo(map);
@@ -141,7 +142,7 @@ function redraw() {
   const distances=cumulativeDistancesM(points);
   const labelSet=labelIndexes(distances);
   points.forEach((p,i)=>{
-    markerLayer.addLayer(L.circleMarker([p.lat,p.lon],{pane:'labelPane', radius:m.markerRadius, color:'#fff', weight:m.markerWeight, fill:true, fillColor:'#ff334e', fillOpacity:1, opacity:1}));
+    markerLayer.addLayer(L.circleMarker([p.lat,p.lon],{pane:'pointPane', radius:m.markerRadius, color:'#fff', weight:m.markerWeight, fill:true, fillColor:'#ff334e', fillOpacity:1, opacity:1}));
     if(labelSet.has(i)) makeLabel(p.lat,p.lon,formatKp(distances[i]||0)).forEach(layer=>markerLayer.addLayer(layer));
   });
 }
