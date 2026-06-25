@@ -122,6 +122,8 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             self.assertEqual(wb["volume_forward"].max_column, 29)
             wb.close()
             viewer_html = rebuilt_viewer.read_text(encoding="utf-8")
+            viewer_manifest = Path(result["output_dir"]) / "30_route_performance_viewer_manifest.json"
+            self.assertTrue(viewer_manifest.exists())
             self.assertIn("state.hours", viewer_html)
             self.assertIn("redrawButton", viewer_html)
             self.assertIn("exportButton", viewer_html)
@@ -132,6 +134,10 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             self.assertIn("HAS_LEAFLET", viewer_html)
             self.assertIn("initFallbackMap", viewer_html)
             self.assertIn("背景地図なし / ルート形状のみ", viewer_html)
+            self.assertIn("MANIFEST", viewer_html)
+            self.assertIn("fetchJson", viewer_html)
+            self.assertIn("reloadSelectedData", viewer_html)
+            self.assertIn("delete payload.summary", viewer_html)
             self.assertIn("speedKind", viewer_html)
             self.assertIn("exportWorkbook", viewer_html)
             self.assertIn("抽出条件", viewer_html)
@@ -143,9 +149,9 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             self.assertIn("平均所要時間(分)", viewer_html)
             self.assertIn("routeTravelTime", viewer_html)
             self.assertIn("segmentDistanceKm", viewer_html)
-            self.assertIn("hasPoints ? Math.min(...lons) : 139.7", viewer_html)
             self.assertNotIn("Math.min(...lons, 139.7)", viewer_html)
             self.assertNotIn("Math.max(...lons, 139.8)", viewer_html)
+            self.assertNotIn('"summary": [', viewer_html)
             self.assertTrue(Path(rebuilt_viewer).exists())
 
     def test_project_paths_accept_fullwidth_screening_number_and_japanese_output(self):

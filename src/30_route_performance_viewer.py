@@ -25,8 +25,10 @@ from PyQt6.QtWidgets import (
 )
 
 try:
+    from PyQt6.QtWebEngineCore import QWebEngineSettings
     from PyQt6.QtWebEngineWidgets import QWebEngineView
 except Exception:  # pragma: no cover
+    QWebEngineSettings = None
     QWebEngineView = None
 
 PERF_PATH = SRC_DIR / "30_route_performance.py"
@@ -96,6 +98,10 @@ class MainWindow(QMainWindow):
 
         if QWebEngineView is not None:
             self.web = QWebEngineView()
+            if QWebEngineSettings is not None:
+                settings = self.web.settings()
+                settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
+                settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
             self.web.loadFinished.connect(self.web_load_finished)
             layout.addWidget(self.web, 1)
         else:
