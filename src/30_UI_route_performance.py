@@ -4,7 +4,6 @@ import csv
 import faulthandler
 import importlib.util
 import json
-import subprocess
 import sys
 import time
 import traceback
@@ -418,7 +417,7 @@ class MainWindow(QMainWindow):
             right.layout().addWidget(self.web, 1)
         else:
             self.web = None
-            right.layout().addWidget(QLabel("PyQt6-WebEngine が無い場合は外部ブラウザで開きます。"))
+            right.layout().addWidget(QLabel("PyQt6-WebEngine が無いため、この画面ではルートマップを表示できません。"))
         content.addWidget(right, 2)
 
         self.setStyleSheet(
@@ -932,12 +931,12 @@ class MainWindow(QMainWindow):
         self.close_viewer_loading_dialog()
         append_runtime_log(f"viewer load finished: ok={ok}")
         if not ok and self.result:
-            self.append_log("ビューアーHTMLの読み込みに失敗しました。外部ブラウザまたはビューアー専用バッチで確認してください。")
+            self.append_log("ビューアーHTMLの読み込みに失敗しました。")
 
     def web_render_process_terminated(self, *args) -> None:
         self.close_viewer_loading_dialog()
         append_runtime_log(f"WEBENGINE RENDER PROCESS TERMINATED: {args}")
-        self.append_log("ビューアー表示エンジンが停止しました。外部ブラウザまたはビューアー専用バッチで確認してください。")
+        self.append_log("ビューアー表示エンジンが停止しました。")
 
     def load_route_map(self, routes: list[dict[str, object]]) -> None:
         if self.web is None or not routes:
@@ -993,7 +992,7 @@ class MainWindow(QMainWindow):
         if self.web is not None:
             self.load_viewer()
             return
-        subprocess.Popen([sys.executable, "-m", "webbrowser", str(Path(viewer).resolve())])
+        self.append_log("PyQt6-WebEngine が無いため、この画面ではビューアーを表示できません。")
 
     def format_duration(self, seconds: float) -> str:
         seconds = max(0, int(seconds))

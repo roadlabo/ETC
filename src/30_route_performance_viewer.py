@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import faulthandler
 import importlib.util
-import subprocess
 import sys
 import traceback
 from datetime import datetime
@@ -120,12 +119,9 @@ class MainWindow(QMainWindow):
         choose.clicked.connect(self.choose_output_dir)
         rebuild = QPushButton("ビューアー再生成")
         rebuild.clicked.connect(self.rebuild_viewer)
-        open_external = QPushButton("外部ブラウザで開く")
-        open_external.clicked.connect(self.open_external)
         row.addWidget(self.output_edit, 1)
         row.addWidget(choose)
         row.addWidget(rebuild)
-        row.addWidget(open_external)
         layout.addLayout(row)
 
         self.status = QLabel("30 を一度実行した後の 30_route_performance 出力フォルダを選択してください。")
@@ -143,7 +139,7 @@ class MainWindow(QMainWindow):
             layout.addWidget(self.web, 1)
         else:
             self.web = None
-            layout.addWidget(QLabel("PyQt6-WebEngine が無い場合は外部ブラウザで確認してください。"), 1)
+            layout.addWidget(QLabel("PyQt6-WebEngine が無いため、この画面ではビューアーを表示できません。"), 1)
 
         self.setStyleSheet(
             """
@@ -211,6 +207,7 @@ class MainWindow(QMainWindow):
             append_runtime_log(f"web load start: {self.viewer_path}")
             self.web.load(QUrl.fromLocalFile(str(self.viewer_path)))
         else:
+            self.status.setText("PyQt6-WebEngine が無いため、この画面ではビューアーを表示できません。")
             self.close_loading_dialog()
 
     def viewer_rebuild_failed(self, message: str) -> None:
@@ -225,7 +222,7 @@ class MainWindow(QMainWindow):
         self.close_loading_dialog()
         append_runtime_log(f"web load finished: ok={ok} path={self.viewer_path}")
         if not ok:
-            self.status.setText("ビューアーHTMLの読み込みに失敗しました。外部ブラウザで確認してください。")
+            self.status.setText("ビューアーHTMLの読み込みに失敗しました。")
             return
         if self.viewer_path is not None:
             self.status.setText(f"ビューアーを表示しました: {self.viewer_path}")
@@ -233,14 +230,7 @@ class MainWindow(QMainWindow):
     def web_render_process_terminated(self, *args) -> None:
         self.close_loading_dialog()
         append_runtime_log(f"WEBENGINE RENDER PROCESS TERMINATED: {args}")
-        self.status.setText("ビューアー表示エンジンが停止しました。外部ブラウザで開いて確認してください。")
-
-    def open_external(self) -> None:
-        if self.viewer_path is None:
-            self.rebuild_viewer()
-        if self.viewer_path is None:
-            return
-        subprocess.Popen([sys.executable, "-m", "webbrowser", str(self.viewer_path)])
+        self.status.setText("ビューアー表示エンジンが停止しました。")
 
 
 def main() -> None:
