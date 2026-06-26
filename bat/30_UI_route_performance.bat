@@ -8,7 +8,7 @@ for %%I in ("%BAT_DIR%..") do set "ROOT_DIR=%%~fI"
 set "PYW=%ROOT_DIR%\runtime\python\pythonw.exe"
 set "PY=%ROOT_DIR%\runtime\python\python.exe"
 
-set "APP=%ROOT_DIR%\src\unreleased\30_UI_route_performance.py"
+set "APP=%ROOT_DIR%\src\30_UI_route_performance.py"
 
 set "LOGDIR=%ROOT_DIR%\logs"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
