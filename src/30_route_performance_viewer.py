@@ -145,6 +145,7 @@ class MainWindow(QMainWindow):
         self.build_worker.failed.connect(self.build_thread.quit)
         self.build_thread.finished.connect(self.build_worker.deleteLater)
         self.build_thread.finished.connect(self.build_thread.deleteLater)
+        self.build_thread.finished.connect(self.viewer_rebuild_thread_finished)
         self.build_thread.start()
 
     def show_loading_dialog(self, message: str) -> None:
@@ -167,8 +168,6 @@ class MainWindow(QMainWindow):
             self.loading_dialog = None
 
     def viewer_rebuild_done(self, viewer: str) -> None:
-        self.build_thread = None
-        self.build_worker = None
         self.viewer_path = Path(viewer)
         self.status.setText(f"ビューアーを再生成しました: {self.viewer_path}")
         if self.web is not None:
@@ -177,10 +176,12 @@ class MainWindow(QMainWindow):
             self.close_loading_dialog()
 
     def viewer_rebuild_failed(self, message: str) -> None:
-        self.build_thread = None
-        self.build_worker = None
         self.close_loading_dialog()
         QMessageBox.critical(self, "ビューアー再生成失敗", message)
+
+    def viewer_rebuild_thread_finished(self) -> None:
+        self.build_thread = None
+        self.build_worker = None
 
     def web_load_finished(self, ok: bool) -> None:
         self.close_loading_dialog()
