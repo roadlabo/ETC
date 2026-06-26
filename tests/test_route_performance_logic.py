@@ -1,11 +1,10 @@
 ﻿import csv
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-
-from openpyxl import load_workbook
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "src" / "30_route_performance.py"
@@ -76,12 +75,12 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             result = route_performance.analyze_project(project, allowed_dates={"20250102"}, allowed_hours={8})
 
             self.assertEqual(result["results"][0]["events_csv"], "")
-            daily_csv = Path(result["results"][0]["daily_hourly_csv"])
-            with daily_csv.open("r", encoding="utf-8-sig", newline="") as fh:
-                rows = list(csv.DictReader(fh))
-            bucket_one_rows = [row for row in rows if row["bucket_index"] == "1" and row["date"] == "20250102"]
+            self.assertEqual(result["results"][0]["daily_hourly_csv"], "")
+            viewer_json = Path(result["results"][0]["viewer_json"])
+            rows = json.loads(viewer_json.read_text(encoding="utf-8"))["summary"]
+            bucket_one_rows = [row for row in rows if row["bucket_index"] == 1 and row["date"] == "20250102"]
             self.assertTrue(bucket_one_rows)
-            self.assertTrue(all(row["trip_count"] == "1" for row in bucket_one_rows))
+            self.assertTrue(all(row["trip_count"] == 1 for row in bucket_one_rows))
 
     def test_daily_hourly_summary_and_viewer_can_be_rebuilt_later(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -94,33 +93,24 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             write_trip(trip_dir / "trip.csv", [("08:00:00", 139.0), ("08:04:00", 139.002)])
 
             result = route_performance.analyze_project(project, allowed_dates={"20250102"}, allowed_hours={8})
-            daily_csv = Path(result["results"][0]["daily_hourly_csv"])
-            daily_xlsx = Path(result["results"][0]["daily_xlsx_files"][0])
+            viewer_json = Path(result["results"][0]["viewer_json"])
             rebuilt_viewer = route_performance.build_viewer_from_output(result["output_dir"])
 
-            self.assertTrue(daily_csv.exists())
             self.assertEqual(result["results"][0]["events_csv"], "")
-            self.assertTrue(daily_xlsx.exists())
-            with daily_csv.open("r", encoding="utf-8-sig", newline="") as fh:
-                rows = list(csv.DictReader(fh))
+            self.assertEqual(result["results"][0]["summary_csv"], "")
+            self.assertEqual(result["results"][0]["daily_hourly_csv"], "")
+            self.assertEqual(result["results"][0]["xlsx"], "")
+            self.assertEqual(result["results"][0]["daily_xlsx_files"], [])
+            self.assertTrue(viewer_json.exists())
+            rows = json.loads(viewer_json.read_text(encoding="utf-8"))["summary"]
             self.assertTrue(rows)
             self.assertTrue(all(row["date"] == "20250102" for row in rows))
             self.assertIn("freeflow_speed_kmh", rows[0])
             self.assertIn("congested_speed_kmh", rows[0])
-            wb = load_workbook(daily_xlsx, read_only=True)
-            self.assertIn("speed_forward", wb.sheetnames)
-            self.assertIn("speed_free_forward", wb.sheetnames)
-            self.assertIn("speed_jam_forward", wb.sheetnames)
-            self.assertIn("trip_forward", wb.sheetnames)
-            self.assertIn("volume_forward", wb.sheetnames)
-            self.assertNotIn("speed3h_forward", wb.sheetnames)
-            self.assertNotIn("volume3h_forward", wb.sheetnames)
-            self.assertEqual(wb["speed_forward"].max_column, 29)
-            self.assertEqual(wb["speed_free_forward"].max_column, 29)
-            self.assertEqual(wb["speed_jam_forward"].max_column, 29)
-            self.assertEqual(wb["trip_forward"].max_column, 29)
-            self.assertEqual(wb["volume_forward"].max_column, 29)
-            wb.close()
+            route_output_dir = Path(result["output_dir"]) / "route_a"
+            self.assertFalse(list(route_output_dir.glob("*.xlsx")))
+            self.assertFalse(list(route_output_dir.glob("*performance.csv")))
+            self.assertFalse(list(route_output_dir.glob("*daily_hourly_performance.csv")))
             viewer_html = rebuilt_viewer.read_text(encoding="utf-8")
             viewer_manifest = Path(result["output_dir"]) / "30_route_performance_viewer_manifest.json"
             self.assertTrue(viewer_manifest.exists())

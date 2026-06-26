@@ -484,84 +484,9 @@ def write_route_outputs(
     route = aggregator.route
     route_dir = Path(output_dir) / safe_name(route.name)
     route_dir.mkdir(parents=True, exist_ok=True)
-    summary_csv = route_dir / f"{safe_name(route.name)}_performance.csv"
-    daily_hourly_csv = route_dir / f"{safe_name(route.name)}_daily_hourly_performance.csv"
-    index_xlsx = route_dir / f"{safe_name(route.name)}_performance_index.xlsx"
     json_path = route_dir / f"{safe_name(route.name)}_viewer.json"
 
-    summary_rows = aggregator.summary_rows(include_empty=False)
     daily_summary_rows = aggregator.summary_rows(include_empty=False, date_only=True)
-    summary_fields = [
-        "route",
-        "bucket_index",
-        "kp_km",
-        "lon",
-        "lat",
-        "direction",
-        "direction_label",
-        "period",
-        "date",
-        "hour",
-        "avg_speed_kmh",
-        "freeflow_speed_kmh",
-        "congested_speed_kmh",
-        "median_speed_kmh",
-        "trip_count",
-        "expanded_volume",
-        "avg_pass_time",
-    ]
-    with summary_csv.open("w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=summary_fields)
-        writer.writeheader()
-        writer.writerows(summary_rows)
-    with daily_hourly_csv.open("w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=summary_fields)
-        writer.writeheader()
-        writer.writerows(daily_summary_rows)
-
-    daily_xlsx_files: list[str] = []
-    hours = range(24)
-    for date_token in sorted(aggregator.date_tokens):
-        daily_xlsx = route_dir / f"{safe_name(route.name)}_{date_token}.xlsx"
-        with pd.ExcelWriter(daily_xlsx, engine="openpyxl") as writer:
-            for direction in DIRECTIONS:
-                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "speed", hours)).to_excel(
-                    writer, sheet_name=f"speed_{direction}", index=False
-                )
-                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "speed_freeflow", hours)).to_excel(
-                    writer, sheet_name=f"speed_free_{direction}", index=False
-                )
-                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "speed_congested", hours)).to_excel(
-                    writer, sheet_name=f"speed_jam_{direction}", index=False
-                )
-                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "trip", hours)).to_excel(
-                    writer, sheet_name=f"trip_{direction}", index=False
-                )
-                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "volume", hours)).to_excel(
-                    writer, sheet_name=f"volume_{direction}", index=False
-                )
-        daily_xlsx_files.append(str(daily_xlsx))
-
-    with pd.ExcelWriter(index_xlsx, engine="openpyxl") as writer:
-        pd.DataFrame(
-            [
-                {"item": "route", "value": route.name},
-                {"item": "expansion_factor", "value": expansion_factor},
-                {"item": "date_count", "value": len(aggregator.date_tokens)},
-                {"item": "event_count", "value": aggregator.event_count},
-                {"item": "daily_xlsx_folder", "value": str(route_dir)},
-            ]
-        ).to_excel(writer, sheet_name="index", index=False)
-        pd.DataFrame({"date": sorted(aggregator.date_tokens), "xlsx": daily_xlsx_files}).to_excel(
-            writer, sheet_name="daily_files", index=False
-        )
-        pd.DataFrame(
-            [
-                {"note": "巨大な縦長明細はExcel上限を避けるためCSVへ保存します。"},
-                {"note": "日別Excelは、平均速度・閑散時速度(上位5%)・渋滞時速度(下位5%)・トリップ数・拡大交通量を順方向/逆方向で保存します。"},
-                {"note": "3時間など任意の時間帯平均は、ビューアで選択時間の根拠値から計算します。"},
-            ]
-        ).to_excel(writer, sheet_name="readme", index=False)
 
     viewer_payload = {
         "route": route.name,
@@ -575,12 +500,12 @@ def write_route_outputs(
     json_path.write_text(json.dumps(viewer_payload, ensure_ascii=False), encoding="utf-8")
 
     return {
-        "xlsx": str(index_xlsx),
-        "summary_csv": str(summary_csv),
-        "daily_hourly_csv": str(daily_hourly_csv),
+        "xlsx": "",
+        "summary_csv": "",
+        "daily_hourly_csv": "",
         "events_csv": "",
         "viewer_json": str(json_path),
-        "daily_xlsx_files": daily_xlsx_files,
+        "daily_xlsx_files": [],
     }
 
 
