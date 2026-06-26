@@ -484,84 +484,9 @@ def write_route_outputs(
     route = aggregator.route
     route_dir = Path(output_dir) / safe_name(route.name)
     route_dir.mkdir(parents=True, exist_ok=True)
-    summary_csv = route_dir / f"{safe_name(route.name)}_performance.csv"
-    daily_hourly_csv = route_dir / f"{safe_name(route.name)}_daily_hourly_performance.csv"
-    index_xlsx = route_dir / f"{safe_name(route.name)}_performance_index.xlsx"
     json_path = route_dir / f"{safe_name(route.name)}_viewer.json"
 
-    summary_rows = aggregator.summary_rows(include_empty=False)
     daily_summary_rows = aggregator.summary_rows(include_empty=False, date_only=True)
-    summary_fields = [
-        "route",
-        "bucket_index",
-        "kp_km",
-        "lon",
-        "lat",
-        "direction",
-        "direction_label",
-        "period",
-        "date",
-        "hour",
-        "avg_speed_kmh",
-        "freeflow_speed_kmh",
-        "congested_speed_kmh",
-        "median_speed_kmh",
-        "trip_count",
-        "expanded_volume",
-        "avg_pass_time",
-    ]
-    with summary_csv.open("w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=summary_fields)
-        writer.writeheader()
-        writer.writerows(summary_rows)
-    with daily_hourly_csv.open("w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=summary_fields)
-        writer.writeheader()
-        writer.writerows(daily_summary_rows)
-
-    daily_xlsx_files: list[str] = []
-    hours = range(24)
-    for date_token in sorted(aggregator.date_tokens):
-        daily_xlsx = route_dir / f"{safe_name(route.name)}_{date_token}.xlsx"
-        with pd.ExcelWriter(daily_xlsx, engine="openpyxl") as writer:
-            for direction in DIRECTIONS:
-                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "speed", hours)).to_excel(
-                    writer, sheet_name=f"speed_{direction}", index=False
-                )
-                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "speed_freeflow", hours)).to_excel(
-                    writer, sheet_name=f"speed_free_{direction}", index=False
-                )
-                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "speed_congested", hours)).to_excel(
-                    writer, sheet_name=f"speed_jam_{direction}", index=False
-                )
-                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "trip", hours)).to_excel(
-                    writer, sheet_name=f"trip_{direction}", index=False
-                )
-                pd.DataFrame(aggregator.daily_wide_rows(date_token, direction, "volume", hours)).to_excel(
-                    writer, sheet_name=f"volume_{direction}", index=False
-                )
-        daily_xlsx_files.append(str(daily_xlsx))
-
-    with pd.ExcelWriter(index_xlsx, engine="openpyxl") as writer:
-        pd.DataFrame(
-            [
-                {"item": "route", "value": route.name},
-                {"item": "expansion_factor", "value": expansion_factor},
-                {"item": "date_count", "value": len(aggregator.date_tokens)},
-                {"item": "event_count", "value": aggregator.event_count},
-                {"item": "daily_xlsx_folder", "value": str(route_dir)},
-            ]
-        ).to_excel(writer, sheet_name="index", index=False)
-        pd.DataFrame({"date": sorted(aggregator.date_tokens), "xlsx": daily_xlsx_files}).to_excel(
-            writer, sheet_name="daily_files", index=False
-        )
-        pd.DataFrame(
-            [
-                {"note": "巨大な縦長明細はExcel上限を避けるためCSVへ保存します。"},
-                {"note": "日別Excelは、平均速度・閑散時速度(上位5%)・渋滞時速度(下位5%)・トリップ数・拡大交通量を順方向/逆方向で保存します。"},
-                {"note": "3時間など任意の時間帯平均は、ビューアで選択時間の根拠値から計算します。"},
-            ]
-        ).to_excel(writer, sheet_name="readme", index=False)
 
     viewer_payload = {
         "route": route.name,
@@ -575,12 +500,12 @@ def write_route_outputs(
     json_path.write_text(json.dumps(viewer_payload, ensure_ascii=False), encoding="utf-8")
 
     return {
-        "xlsx": str(index_xlsx),
-        "summary_csv": str(summary_csv),
-        "daily_hourly_csv": str(daily_hourly_csv),
+        "xlsx": "",
+        "summary_csv": "",
+        "daily_hourly_csv": "",
         "events_csv": "",
         "viewer_json": str(json_path),
-        "daily_xlsx_files": daily_xlsx_files,
+        "daily_xlsx_files": [],
     }
 
 
@@ -760,15 +685,45 @@ def color_for_volume(volume: object, max_volume: float) -> str:
 
 def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Path:
     out_dir = Path(output_dir)
-    payloads = []
+    manifest_routes = []
+    date_tokens: set[str] = set()
+    all_points = []
     for result in results:
         json_path = Path(str(result["viewer_json"]))
         if json_path.exists():
-            payloads.append(json.loads(json_path.read_text(encoding="utf-8")))
-    all_points = [p for payload in payloads for p in payload["points"]]
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+            points = payload.get("points", [])
+            all_points.extend(points)
+            for row in payload.get("summary", []):
+                period = str(row.get("period", ""))
+                if re.fullmatch(r"\d{8}", period):
+                    date_tokens.add(period)
+            manifest_routes.append(
+                {
+                    "route": payload.get("route", json_path.stem.removesuffix("_viewer")),
+                    "json": json_path.relative_to(out_dir).as_posix(),
+                    "point_count": len(points),
+                }
+            )
     center_lat = sum(p["lat"] for p in all_points) / len(all_points) if all_points else 35.6812
     center_lon = sum(p["lon"] for p in all_points) / len(all_points) if all_points else 139.7671
+    lons = [float(p["lon"]) for p in all_points if "lon" in p]
+    lats = [float(p["lat"]) for p in all_points if "lat" in p]
     html_path = out_dir / "30_route_performance_viewer.html"
+    manifest_path = out_dir / "30_route_performance_viewer_manifest.json"
+    manifest = {
+        "routes": manifest_routes,
+        "dates": sorted(date_tokens),
+        "center": {"lat": center_lat, "lon": center_lon},
+        "bounds": {
+            "min_lon": min(lons) if lons else 139.7,
+            "max_lon": max(lons) if lons else 139.8,
+            "min_lat": min(lats) if lats else 35.6,
+            "max_lat": max(lats) if lats else 35.8,
+            "has_points": bool(lons and lats),
+        },
+    }
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
     leaflet_css_path = SRC_DIR / "leaflet" / "leaflet.css"
     leaflet_js_path = SRC_DIR / "leaflet" / "leaflet.js"
     leaflet_css = leaflet_css_path.read_text(encoding="utf-8") if leaflet_css_path.exists() else ""
@@ -825,8 +780,9 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
   <div class="row legend" id="legend"></div>
 </div>
 <script>
-const DATA = {json.dumps(payloads, ensure_ascii=False)};
-const DATE_PERIODS = Array.from(new Set(DATA.flatMap(payload => payload.summary.map(r => String(r.period || '')).filter(p => /^\\d{{8}}$/.test(p))))).sort();
+const MANIFEST = {json.dumps(manifest, ensure_ascii=False)};
+const DATA = [];
+const DATE_PERIODS = MANIFEST.dates || [];
 const HIT_DATES = new Set(DATE_PERIODS);
 const HIT_MONTHS = Array.from(new Set(DATE_PERIODS.map(d => d.slice(0, 6)))).sort();
 const HAS_LEAFLET = typeof L !== 'undefined';
@@ -841,10 +797,72 @@ if (HAS_LEAFLET) {{
 const state = {{metric:'speed', speedKind:'avg', period: DATE_PERIODS[0] || '', hours:new Set([8])}};
 let monthIndex = 0;
 let layers = [];
-DATA.forEach(payload => {{
-  payload.summaryIndex = new Map();
-  payload.summary.forEach(r => payload.summaryIndex.set(`${{r.bucket_index}}|${{r.direction}}|${{r.period}}|${{Number(r.hour)}}`, r));
-}});
+let dataLoaded = false;
+let loadingPromise = null;
+let loadedSelectionKey = '';
+const loadingEl = document.createElement('div');
+loadingEl.style.cssText = 'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2000;background:#ffffffee;border-radius:8px;box-shadow:0 8px 24px #0003;padding:12px 16px;font-weight:700;';
+loadingEl.textContent = 'データ読み込み中...';
+function setLoading(visible, text='データ読み込み中...') {{
+  loadingEl.textContent = text;
+  if (visible && !loadingEl.parentNode) document.body.appendChild(loadingEl);
+  if (!visible && loadingEl.parentNode) loadingEl.parentNode.removeChild(loadingEl);
+}}
+async function fetchJson(path) {{
+  const response = await fetch(path);
+  if (!response.ok) throw new Error(`${{path}}: ${{response.status}}`);
+  return await response.json();
+}}
+async function ensureDataLoaded() {{
+  if (dataLoaded) return;
+  if (loadingPromise) return loadingPromise;
+  loadingPromise = (async () => {{
+    setLoading(true, 'ルートパフォーマンス出力を読み込み中...');
+    for (let i = 0; i < MANIFEST.routes.length; i++) {{
+      const route = MANIFEST.routes[i];
+      setLoading(true, `ルートデータ読み込み中 ${{i + 1}}/${{MANIFEST.routes.length}}`);
+      const payload = await fetchJson(route.json);
+      const selected = new Map();
+      payload.summary.forEach(r => {{
+        const period = String(r.period || '');
+        const hour = Number(r.hour);
+        if (period === state.period && state.hours.has(hour)) {{
+          selected.set(`${{r.bucket_index}}|${{r.direction}}|${{hour}}`, r);
+        }}
+      }});
+      payload.summaryIndex = selected;
+      delete payload.summary;
+      DATA.push(payload);
+    }}
+    dataLoaded = true;
+    loadedSelectionKey = selectionKey();
+    setLoading(false);
+  }})();
+  return loadingPromise;
+}}
+async function reloadSelectedData() {{
+  if (!dataLoaded) return ensureDataLoaded();
+  setLoading(true, '選択条件のデータを再集計中...');
+  for (let i = 0; i < MANIFEST.routes.length; i++) {{
+    const route = MANIFEST.routes[i];
+    const payload = DATA[i];
+    const fresh = await fetchJson(route.json);
+    const selected = new Map();
+    fresh.summary.forEach(r => {{
+      const period = String(r.period || '');
+      const hour = Number(r.hour);
+      if (period === state.period && state.hours.has(hour)) {{
+        selected.set(`${{r.bucket_index}}|${{r.direction}}|${{hour}}`, r);
+      }}
+    }});
+    payload.summaryIndex = selected;
+  }}
+  loadedSelectionKey = selectionKey();
+  setLoading(false);
+}}
+function selectionKey() {{
+  return `${{state.period}}|${{Array.from(state.hours).sort((a,b) => a-b).join(',')}}`;
+}}
 function periodLabel(period) {{
   period = String(period);
   if (/^\\d{{8}}$/.test(period)) return `${{period.slice(0,4)}}-${{period.slice(4,6)}}-${{period.slice(6,8)}}`;
@@ -917,14 +935,11 @@ function offsetPoint(a, b, side, meters) {{
 function initFallbackMap() {{
   const mapEl = document.getElementById('map');
   mapEl.innerHTML = '<svg id="fallbackSvg" xmlns="http://www.w3.org/2000/svg"><g id="fallbackLayer"></g></svg><div style="position:absolute;right:12px;bottom:12px;background:#ffffffdd;padding:4px 8px;border-radius:4px;font-size:12px;">背景地図なし / ルート形状のみ</div>';
-  const points = DATA.flatMap(payload => payload.points);
-  const lons = points.map(p => Number(p.lon)).filter(Number.isFinite);
-  const lats = points.map(p => Number(p.lat)).filter(Number.isFinite);
-  const hasPoints = lons.length > 0 && lats.length > 0;
-  const minLon = hasPoints ? Math.min(...lons) : 139.7;
-  const maxLon = hasPoints ? Math.max(...lons) : 139.8;
-  const minLat = hasPoints ? Math.min(...lats) : 35.6;
-  const maxLat = hasPoints ? Math.max(...lats) : 35.8;
+  const bounds = MANIFEST.bounds || {{}};
+  const minLon = Number(bounds.min_lon ?? 139.7);
+  const maxLon = Number(bounds.max_lon ?? 139.8);
+  const minLat = Number(bounds.min_lat ?? 35.6);
+  const maxLat = Number(bounds.max_lat ?? 35.8);
   const minY = -maxLat;
   const maxY = -minLat;
   const padX = Math.max((maxLon - minLon) * 0.08, 0.001);
@@ -1003,7 +1018,7 @@ function aggregateSummary(payload, bucket, direction) {{
   let volume = 0;
   let trips = 0;
   state.hours.forEach(hour => {{
-    const row = payload.summaryIndex.get(`${{bucket}}|${{direction}}|${{state.period}}|${{hour}}`);
+    const row = payload.summaryIndex.get(`${{bucket}}|${{direction}}|${{hour}}`);
     if (!row) return;
     const rowVolume = Number(row.expanded_volume) || 0;
     const rowTrips = Number(row.trip_count) || 0;
@@ -1063,7 +1078,15 @@ function rangedColor(v, breaks) {{
   const bucket = breaks.find(b => v <= b.max) || breaks[breaks.length - 1];
   return bucket ? bucket.color : '#9ca3af';
 }}
-function redraw() {{
+async function redraw() {{
+  try {{
+    await ensureDataLoaded();
+    if (loadedSelectionKey !== selectionKey()) await reloadSelectedData();
+  }} catch (err) {{
+    setLoading(false);
+    alert(`ビューアーデータの読み込みに失敗しました。\\n${{err.message || err}}`);
+    return;
+  }}
   clearTrafficLayers();
   renderSelectionStatus();
   let maxTrip = 0;

@@ -12,7 +12,7 @@ SRC_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from PyQt6.QtCore import QObject, QDate, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QDate, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QTextCharFormat
 from PyQt6.QtWidgets import (
     QApplication,
@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
     QTableWidget,
@@ -310,6 +311,7 @@ class MainWindow(QMainWindow):
         self.stats: dict[str, QLabel] = {}
         self.result: dict | None = None
         self.pending_route_map_payload: list[dict[str, object]] | None = None
+        self.viewer_load_dialog: QProgressDialog | None = None
         self._syncing_calendars = False
         self._last_scan_log_bucket = -1
         self._last_analysis_log_bucket = -1
@@ -378,6 +380,7 @@ class MainWindow(QMainWindow):
                 settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
                 settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
             self.web.loadFinished.connect(self.route_map_load_finished)
+            self.web.loadFinished.connect(self.viewer_load_finished)
             right.layout().addWidget(self.web, 1)
         else:
             self.web = None
@@ -868,7 +871,32 @@ class MainWindow(QMainWindow):
             return
         viewer = self.result.get("viewer")
         if viewer and self.web is not None:
+            self.show_viewer_loading_dialog("ビューアーデータを読み込み中です。\n地図と全路線の表示データをWebViewへ読み込んでいます。")
             self.web.load(QUrl.fromLocalFile(str(Path(viewer).resolve())))
+
+    def show_viewer_loading_dialog(self, message: str) -> None:
+        self.close_viewer_loading_dialog()
+        dialog = QProgressDialog(message, None, 0, 0, self)
+        dialog.setWindowTitle("データ読み込み中")
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dialog.setMinimumDuration(0)
+        dialog.setCancelButton(None)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.show()
+        QApplication.processEvents()
+        self.viewer_load_dialog = dialog
+
+    def close_viewer_loading_dialog(self) -> None:
+        if self.viewer_load_dialog is not None:
+            self.viewer_load_dialog.close()
+            self.viewer_load_dialog.deleteLater()
+            self.viewer_load_dialog = None
+
+    def viewer_load_finished(self, ok: bool) -> None:
+        self.close_viewer_loading_dialog()
+        if not ok and self.result:
+            self.append_log("ビューアーHTMLの読み込みに失敗しました。外部ブラウザまたはビューアー専用バッチで確認してください。")
 
     def load_route_map(self, routes: list[dict[str, object]]) -> None:
         if self.web is None or not routes:
