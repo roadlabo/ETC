@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import faulthandler
 import importlib.util
+import re
 import sys
 import traceback
 from datetime import datetime
@@ -72,6 +73,67 @@ def install_runtime_logging() -> None:
     qInstallMessageHandler(qt_message_handler)
 
 
+def patch_travel_time_workbook_export(viewer_path: Path) -> None:
+    """Keep speed sheets clean and add a dedicated travel-time sheet to HTML export."""
+    if not viewer_path.exists():
+        return
+    html = viewer_path.read_text(encoding="utf-8")
+
+    # Remove the old implementation that appended travel-time summaries to speed sheets.
+    html, removed_count = re.subn(
+        r"\n  if \(\['free', 'avg', 'jam'\]\.includes\(metric\)\) \{\n"
+        r"    rows\.push\(\[\]\);\n"
+        r"    rows\.push\(\['平均所要時間\(分\)', 'route', 'direction', '対象距離\[km\]', '', 'minutes'\]\);\n"
+        r"    let totalMinutes = 0;\n"
+        r"    let totalDistance = 0;\n"
+        r"    DATA\.forEach\(payload => \{\n"
+        r"      const t = routeTravelTime\(payload, direction, metric\);\n"
+        r"      totalMinutes \+= t\.minutes;\n"
+        r"      totalDistance \+= t\.distanceKm;\n"
+        r"      rows\.push\(\['平均所要時間\(分\)', payload\.route, direction, Number\(t\.distanceKm\.toFixed\(3\)\), '', t\.minutes \? Number\(t\.minutes\.toFixed\(2\)\) : ''\]\);\n"
+        r"    \}\);\n"
+        r"    rows\.push\(\['平均所要時間\(分\)', '全路線合計', direction, Number\(totalDistance\.toFixed\(3\)\), '', totalMinutes \? Number\(totalMinutes\.toFixed\(2\)\) : ''\]\);\n"
+        r"  \}\n",
+        "\n",
+        html,
+        count=1,
+    )
+
+    if "function exportTravelTimeRows()" not in html:
+        travel_time_function = """
+function exportTravelTimeRows() {
+  const rows = [['ルート名_方向','閑散時平均所要時間（分）','平均所要時間（分）','渋滞時平均所要時間（分）','対象距離[km]']];
+  DATA.forEach(payload => {
+    ['forward', 'reverse'].forEach(direction => {
+      const free = routeTravelTime(payload, direction, 'free');
+      const avg = routeTravelTime(payload, direction, 'avg');
+      const jam = routeTravelTime(payload, direction, 'jam');
+      const distanceKm = Math.max(free.distanceKm, avg.distanceKm, jam.distanceKm);
+      rows.push([
+        `${payload.route}_${direction}`,
+        free.minutes ? Number(free.minutes.toFixed(2)) : '',
+        avg.minutes ? Number(avg.minutes.toFixed(2)) : '',
+        jam.minutes ? Number(jam.minutes.toFixed(2)) : '',
+        Number(distanceKm.toFixed(3)),
+      ]);
+    });
+  });
+  return rows;
+}
+"""
+        html = html.replace("\nasync function exportWorkbook() {", f"{travel_time_function}\nasync function exportWorkbook() {{", 1)
+
+    if "['所要時間', exportTravelTimeRows()]" not in html:
+        html = html.replace(
+            "    ['抽出条件', conditions],\n",
+            "    ['抽出条件', conditions],\n    ['所要時間', exportTravelTimeRows()],\n",
+            1,
+        )
+
+    viewer_path.write_text(html, encoding="utf-8")
+    append_runtime_log(f"patched travel time workbook export: removed_speed_footer={removed_count}")
+
+
 class ViewerBuildWorker(QObject):
     finished = pyqtSignal(str)
     failed = pyqtSignal(str)
@@ -84,6 +146,7 @@ class ViewerBuildWorker(QObject):
         try:
             append_runtime_log(f"build viewer start: {self.output_dir}")
             viewer = Path(perf.build_viewer_from_output(self.output_dir)).resolve()
+            patch_travel_time_workbook_export(viewer)
         except Exception as exc:
             append_runtime_log("build viewer failed\n" + traceback.format_exc())
             self.failed.emit(str(exc))
