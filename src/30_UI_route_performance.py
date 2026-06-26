@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import csv
+import faulthandler
 import importlib.util
 import json
 import subprocess
 import sys
 import time
+import traceback
+from datetime import datetime
 from pathlib import Path
 
 SRC_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from PyQt6.QtCore import QObject, Qt, QDate, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QDate, QThread, QTimer, QUrl, pyqtSignal, qInstallMessageHandler
 from PyQt6.QtGui import QColor, QTextCharFormat
 from PyQt6.QtWidgets import (
     QApplication,
@@ -53,6 +56,35 @@ perf = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
 sys.modules[spec.name] = perf
 spec.loader.exec_module(perf)
+
+APP_ROOT = SRC_DIR.parent.parent if SRC_DIR.name.lower() == "unreleased" else SRC_DIR.parent
+LOG_DIR = APP_ROOT / "logs"
+RUNTIME_LOG = LOG_DIR / "30_UI_route_performance_runtime.log"
+_LOG_HANDLE = None
+
+
+def append_runtime_log(message: str) -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with RUNTIME_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(f"[{timestamp}] {message}\n")
+
+
+def install_runtime_logging() -> None:
+    global _LOG_HANDLE
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _LOG_HANDLE = RUNTIME_LOG.open("a", encoding="utf-8", buffering=1)
+    _LOG_HANDLE.write(f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}] 30 UI start\n")
+    faulthandler.enable(_LOG_HANDLE, all_threads=True)
+
+    def excepthook(exc_type, exc, tb) -> None:
+        append_runtime_log("UNHANDLED PYTHON EXCEPTION\n" + "".join(traceback.format_exception(exc_type, exc, tb)))
+
+    def qt_message_handler(mode, context, message) -> None:
+        append_runtime_log(f"QT MESSAGE {mode}: {message}")
+
+    sys.excepthook = excepthook
+    qInstallMessageHandler(qt_message_handler)
 
 
 def date_token_to_qdate(token: str) -> QDate:
@@ -381,6 +413,8 @@ class MainWindow(QMainWindow):
                 settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
             self.web.loadFinished.connect(self.route_map_load_finished)
             self.web.loadFinished.connect(self.viewer_load_finished)
+            if hasattr(self.web, "renderProcessTerminated"):
+                self.web.renderProcessTerminated.connect(self.web_render_process_terminated)
             right.layout().addWidget(self.web, 1)
         else:
             self.web = None
@@ -871,6 +905,7 @@ class MainWindow(QMainWindow):
             return
         viewer = self.result.get("viewer")
         if viewer and self.web is not None:
+            append_runtime_log(f"viewer load start: {viewer}")
             self.show_viewer_loading_dialog("ビューアーデータを読み込み中です。\n地図と全路線の表示データをWebViewへ読み込んでいます。")
             self.web.load(QUrl.fromLocalFile(str(Path(viewer).resolve())))
 
@@ -895,8 +930,14 @@ class MainWindow(QMainWindow):
 
     def viewer_load_finished(self, ok: bool) -> None:
         self.close_viewer_loading_dialog()
+        append_runtime_log(f"viewer load finished: ok={ok}")
         if not ok and self.result:
             self.append_log("ビューアーHTMLの読み込みに失敗しました。外部ブラウザまたはビューアー専用バッチで確認してください。")
+
+    def web_render_process_terminated(self, *args) -> None:
+        self.close_viewer_loading_dialog()
+        append_runtime_log(f"WEBENGINE RENDER PROCESS TERMINATED: {args}")
+        self.append_log("ビューアー表示エンジンが停止しました。外部ブラウザまたはビューアー専用バッチで確認してください。")
 
     def load_route_map(self, routes: list[dict[str, object]]) -> None:
         if self.web is None or not routes:
@@ -1005,6 +1046,7 @@ class MainWindow(QMainWindow):
 
 
 def main() -> None:
+    install_runtime_logging()
     app = QApplication(sys.argv)
     window = MainWindow()
     window.showMaximized()
