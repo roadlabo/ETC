@@ -45,7 +45,7 @@ spec.loader.exec_module(perf)
 
 APP_ROOT = SRC_DIR.parent
 LOG_DIR = APP_ROOT / "logs"
-RUNTIME_LOG = LOG_DIR / "30_route_performance_viewer_runtime.log"
+RUNTIME_LOG = LOG_DIR / "30-2_route_performance_viewer_runtime.log"
 _LOG_HANDLE = None
 
 
@@ -60,7 +60,7 @@ def install_runtime_logging() -> None:
     global _LOG_HANDLE
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     _LOG_HANDLE = RUNTIME_LOG.open("a", encoding="utf-8", buffering=1)
-    _LOG_HANDLE.write(f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}] viewer start\n")
+    _LOG_HANDLE.write(f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}] 30-2 viewer start\n")
     faulthandler.enable(_LOG_HANDLE, all_threads=True)
 
     def excepthook(exc_type, exc, tb) -> None:
@@ -79,7 +79,6 @@ def patch_travel_time_workbook_export(viewer_path: Path) -> None:
         return
     html = viewer_path.read_text(encoding="utf-8")
 
-    # Remove the old implementation that appended travel-time summaries to speed sheets.
     html, removed_count = re.subn(
         r"\n  if \(\['free', 'avg', 'jam'\]\.includes\(metric\)\) \{\n"
         r"    rows\.push\(\[\]\);\n"
@@ -158,7 +157,7 @@ class ViewerBuildWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("30 Route Performance Viewer")
+        self.setWindowTitle("30-2 Route Performance Viewer")
         self.resize(1180, 780)
         self.viewer_path: Path | None = None
         self.build_thread: QThread | None = None
@@ -171,7 +170,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
 
-        title = QLabel("30 Route Performance Viewer")
+        title = QLabel("30-2 Route Performance Viewer")
         title.setObjectName("title")
         layout.addWidget(title)
 

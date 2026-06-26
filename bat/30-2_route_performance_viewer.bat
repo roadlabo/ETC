@@ -8,20 +8,19 @@ for %%I in ("%BAT_DIR%..") do set "ROOT_DIR=%%~fI"
 set "PYW=%ROOT_DIR%\runtime\python\pythonw.exe"
 set "PY=%ROOT_DIR%\runtime\python\python.exe"
 
-set "APP=%ROOT_DIR%\src\30_UI_route_performance.py"
+set "APP=%ROOT_DIR%\src\30-2_route_performance_viewer.py"
 
 set "LOGDIR=%ROOT_DIR%\logs"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
-set "LOG=%LOGDIR%\30_UI_route_performance_console.log"
+set "LOG=%LOGDIR%\30-2_route_performance_viewer_console.log"
 
 if not exist "%APP%" (
-  echo [ERROR] UI script not found: "%APP%" 1>>"%LOG%" 2>>&1
+  echo [ERROR] Viewer script not found: "%APP%" 1>>"%LOG%" 2>>&1
   exit /b 1
 )
 
 cd /d "%ROOT_DIR%"
 
-rem --- embedded runtime launch (NO start/cmd; direct pythonw/python) ---
 if exist "%PYW%" (
   "%PYW%" "%APP%" 1>>"%LOG%" 2>>&1
 ) else if exist "%PY%" (
