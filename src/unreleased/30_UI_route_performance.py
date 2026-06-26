@@ -122,7 +122,6 @@ const COLORS = ['#00a2ff','#22c55e','#f97316','#a855f7','#ef4444','#14b8a6','#ea
 let map = null;
 let routeLayer = null;
 let lastRoutes = [];
-let loadingLeaflet = false;
 
 function setStatus(text) {
   const el = document.getElementById('mapStatus');
@@ -176,7 +175,6 @@ function showFallback(routes) {
 }
 function initMap() {
   if (typeof L === 'undefined') {
-    loadLeafletFromCdn();
     showFallback(lastRoutes);
     return false;
   }
@@ -194,20 +192,6 @@ function initMap() {
     showFallback(lastRoutes);
     return false;
   }
-}
-function loadLeafletFromCdn() {
-  if (loadingLeaflet || typeof L !== 'undefined') return;
-  loadingLeaflet = true;
-  setStatus('Leaflet読込中');
-  const css = document.createElement('link');
-  css.rel = 'stylesheet';
-  css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-  document.head.appendChild(css);
-  const script = document.createElement('script');
-  script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-  script.onload = () => { loadingLeaflet = false; setRoutes(lastRoutes); };
-  script.onerror = () => { loadingLeaflet = false; showFallback(lastRoutes); };
-  document.head.appendChild(script);
 }
 function setRoutes(routes) {
   lastRoutes = routes || [];

@@ -727,11 +727,11 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
     leaflet_css_path = SRC_DIR / "leaflet" / "leaflet.css"
     leaflet_js_path = SRC_DIR / "leaflet" / "leaflet.js"
     leaflet_css = leaflet_css_path.read_text(encoding="utf-8") if leaflet_css_path.exists() else ""
-    leaflet_css_link = "" if leaflet_css else '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">'
+    leaflet_css_link = ""
     leaflet_script = (
         f"<script>{leaflet_js_path.read_text(encoding='utf-8')}</script>"
         if leaflet_js_path.exists()
-        else '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
+        else ""
     )
     html = f"""<!doctype html>
 <html lang="ja">
