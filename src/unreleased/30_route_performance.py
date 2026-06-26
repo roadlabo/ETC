@@ -801,6 +801,7 @@ let layers = [];
 let dataLoaded = false;
 let loadingPromise = null;
 let redrawTimer = null;
+let aggregateCache = new Map();
 const loadingEl = document.createElement('div');
 loadingEl.style.cssText = 'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2000;background:#ffffffee;border-radius:8px;box-shadow:0 8px 24px #0003;padding:12px 16px;font-weight:700;';
 loadingEl.textContent = 'データ読み込み中...';
@@ -907,8 +908,8 @@ function renderDayTools() {{
   const el = document.getElementById('daytools');
   el.innerHTML = '';
   const specs = [
-    ['全日ON', () => DATE_PERIODS],
-    ['全日OFF', () => []],
+    ['全日ON', () => DATE_PERIODS, 'toggle'],
+    ['全日OFF', () => [], 'clear'],
     ['月', () => datesByWeekday(1)],
     ['火', () => datesByWeekday(2)],
     ['水', () => datesByWeekday(3)],
@@ -919,14 +920,27 @@ function renderDayTools() {{
     ['平日', () => DATE_PERIODS.filter(d => {{ const w = dateWeekday(d); return w >= 1 && w <= 5; }})],
     ['休日', () => DATE_PERIODS.filter(d => {{ const w = dateWeekday(d); return w === 0 || w === 6; }})],
   ];
-  specs.forEach(([label, getter]) => {{
+  specs.forEach(([label, getter, mode]) => {{
     const b = document.createElement('button');
     b.textContent = label;
     b.onclick = () => {{
-      state.periods = new Set(getter());
+      const targets = getter();
+      if (mode === 'clear') {{
+        state.periods.clear();
+      }} else {{
+        toggleDateGroup(targets);
+      }}
       renderCalendars(); renderSelectionStatus(); scheduleRedraw();
     }};
     el.appendChild(b);
+  }});
+}}
+function toggleDateGroup(dates) {{
+  if (!dates.length) return;
+  const allSelected = dates.every(d => state.periods.has(d));
+  dates.forEach(d => {{
+    if (allSelected) state.periods.delete(d);
+    else state.periods.add(d);
   }});
 }}
 function dateWeekday(token) {{
@@ -1029,6 +1043,9 @@ function addTrafficLine(coords, color, width, tooltip) {{
   fallback.layer.appendChild(line);
 }}
 function aggregateSummary(payload, bucket, direction) {{
+  const cacheKey = `${{selectionKey()}}|${{payload.route}}|${{bucket}}|${{direction}}`;
+  const cached = aggregateCache.get(cacheKey);
+  if (cached) return cached;
   let speedNumerator = 0;
   let freeNumerator = 0;
   let jamNumerator = 0;
@@ -1050,13 +1067,15 @@ function aggregateSummary(payload, bucket, direction) {{
       if (Number.isFinite(rowJam) && rowVolume > 0) jamNumerator += rowJam * rowVolume;
     }});
   }});
-  return {{
+  const aggregated = {{
     avg_speed_kmh: volume > 0 ? speedNumerator / volume : '',
     freeflow_speed_kmh: volume > 0 ? freeNumerator / volume : '',
     congested_speed_kmh: volume > 0 ? jamNumerator / volume : '',
     expanded_volume: volume || '',
     trip_count: trips || '',
   }};
+  aggregateCache.set(cacheKey, aggregated);
+  return aggregated;
 }}
 function speedValue(s) {{
   if (state.speedKind === 'free') return s.freeflow_speed_kmh;
@@ -1146,6 +1165,7 @@ async function redraw() {{
       : (volumeRanges.length ? volumeRanges.map(b => `<span style="background:${{b.color}}"></span>${{b.min}}-${{b.max}}台/日`).join(' ') : '<span style="background:#9ca3af"></span>交通量なし'));
 }}
 function scheduleRedraw() {{
+  if (aggregateCache.size > 250000) aggregateCache = new Map();
   if (redrawTimer) cancelAnimationFrame(redrawTimer);
   redrawTimer = requestAnimationFrame(() => {{
     redrawTimer = null;
@@ -1282,7 +1302,15 @@ function exportRows(direction, metric) {{
   }}
   return rows;
 }}
-function exportWorkbook() {{
+async function exportWorkbook() {{
+  try {{
+    await ensureDataLoaded();
+  }} catch (err) {{
+    setLoading(false);
+    alert(`データ抽出用データの読み込みに失敗しました。\n${{err.message || err}}`);
+    return;
+  }}
+  setLoading(true, 'データ抽出ファイルを作成中...');
   const selectedDates = Array.from(state.periods).sort();
   const conditions = [
     ['項目', '値'],
@@ -1306,6 +1334,7 @@ function exportWorkbook() {{
     ['渋滞時速度(R)', exportRows('reverse', 'jam')],
   ];
   downloadXlsx('route_performance.xlsx', sheets);
+  setLoading(false);
 }}
 function xmlEscape(value) {{
   return String(value ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -1397,8 +1426,13 @@ function downloadXlsx(filename, sheets) {{
   const a = document.createElement('a');
   a.href = URL.createObjectURL(zipStore(files));
   a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
   a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  setTimeout(() => {{
+    URL.revokeObjectURL(a.href);
+    a.remove();
+  }}, 1000);
 }}
 buttons('metric', [{{label:'速度', value:'speed'}}, {{label:'トリップ(トリップ/日)', value:'trip'}}, {{label:'交通量(台/日)', value:'volume'}}], 'metric');
 buttons('speedKind', [{{label:'閑散時', value:'free'}}, {{label:'平均', value:'avg'}}, {{label:'渋滞時', value:'jam'}}], 'speedKind');

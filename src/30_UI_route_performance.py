@@ -396,6 +396,7 @@ class MainWindow(QMainWindow):
                 settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
             self.web.loadFinished.connect(self.route_map_load_finished)
             self.web.loadFinished.connect(self.viewer_load_finished)
+            self.web.page().profile().downloadRequested.connect(self.handle_download_requested)
             if hasattr(self.web, "renderProcessTerminated"):
                 self.web.renderProcessTerminated.connect(self.web_render_process_terminated)
             right.layout().addWidget(self.web, 1)
@@ -921,6 +922,31 @@ class MainWindow(QMainWindow):
         self.close_viewer_loading_dialog()
         append_runtime_log(f"WEBENGINE RENDER PROCESS TERMINATED: {args}")
         self.append_log("ビューアー表示エンジンが停止しました。")
+
+    def handle_download_requested(self, download) -> None:
+        suggested = "route_performance.xlsx"
+        if hasattr(download, "suggestedFileName"):
+            suggested = download.suggestedFileName() or suggested
+        base_dir = Path(str(self.result.get("output_dir", ""))) if self.result else Path(self.project_dir or ".")
+        default_path = base_dir / suggested
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "データ抽出ファイルを保存",
+            str(default_path),
+            "Excel files (*.xlsx);;All files (*.*)",
+        )
+        if not path:
+            if hasattr(download, "cancel"):
+                download.cancel()
+            return
+        target = Path(path)
+        if hasattr(download, "setDownloadDirectory"):
+            download.setDownloadDirectory(str(target.parent))
+            download.setDownloadFileName(target.name)
+        elif hasattr(download, "setPath"):
+            download.setPath(str(target))
+        download.accept()
+        self.append_log(f"データ抽出ファイルを保存します: {target}")
 
     def load_route_map(self, routes: list[dict[str, object]]) -> None:
         if self.web is None or not routes:
