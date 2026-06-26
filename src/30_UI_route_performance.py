@@ -4,7 +4,6 @@ import csv
 import faulthandler
 import importlib.util
 import json
-import subprocess
 import sys
 import time
 import traceback
@@ -123,7 +122,6 @@ const COLORS = ['#00a2ff','#22c55e','#f97316','#a855f7','#ef4444','#14b8a6','#ea
 let map = null;
 let routeLayer = null;
 let lastRoutes = [];
-let loadingLeaflet = false;
 
 function setStatus(text) {
   const el = document.getElementById('mapStatus');
@@ -177,7 +175,6 @@ function showFallback(routes) {
 }
 function initMap() {
   if (typeof L === 'undefined') {
-    loadLeafletFromCdn();
     showFallback(lastRoutes);
     return false;
   }
@@ -195,20 +192,6 @@ function initMap() {
     showFallback(lastRoutes);
     return false;
   }
-}
-function loadLeafletFromCdn() {
-  if (loadingLeaflet || typeof L !== 'undefined') return;
-  loadingLeaflet = true;
-  setStatus('Leaflet読込中');
-  const css = document.createElement('link');
-  css.rel = 'stylesheet';
-  css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-  document.head.appendChild(css);
-  const script = document.createElement('script');
-  script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-  script.onload = () => { loadingLeaflet = false; setRoutes(lastRoutes); };
-  script.onerror = () => { loadingLeaflet = false; showFallback(lastRoutes); };
-  document.head.appendChild(script);
 }
 function setRoutes(routes) {
   lastRoutes = routes || [];
@@ -418,7 +401,7 @@ class MainWindow(QMainWindow):
             right.layout().addWidget(self.web, 1)
         else:
             self.web = None
-            right.layout().addWidget(QLabel("PyQt6-WebEngine が無い場合は外部ブラウザで開きます。"))
+            right.layout().addWidget(QLabel("PyQt6-WebEngine が無いため、この画面ではルートマップを表示できません。"))
         content.addWidget(right, 2)
 
         self.setStyleSheet(
@@ -932,12 +915,12 @@ class MainWindow(QMainWindow):
         self.close_viewer_loading_dialog()
         append_runtime_log(f"viewer load finished: ok={ok}")
         if not ok and self.result:
-            self.append_log("ビューアーHTMLの読み込みに失敗しました。外部ブラウザまたはビューアー専用バッチで確認してください。")
+            self.append_log("ビューアーHTMLの読み込みに失敗しました。")
 
     def web_render_process_terminated(self, *args) -> None:
         self.close_viewer_loading_dialog()
         append_runtime_log(f"WEBENGINE RENDER PROCESS TERMINATED: {args}")
-        self.append_log("ビューアー表示エンジンが停止しました。外部ブラウザまたはビューアー専用バッチで確認してください。")
+        self.append_log("ビューアー表示エンジンが停止しました。")
 
     def load_route_map(self, routes: list[dict[str, object]]) -> None:
         if self.web is None or not routes:
@@ -993,7 +976,7 @@ class MainWindow(QMainWindow):
         if self.web is not None:
             self.load_viewer()
             return
-        subprocess.Popen([sys.executable, "-m", "webbrowser", str(Path(viewer).resolve())])
+        self.append_log("PyQt6-WebEngine が無いため、この画面ではビューアーを表示できません。")
 
     def format_duration(self, seconds: float) -> str:
         seconds = max(0, int(seconds))

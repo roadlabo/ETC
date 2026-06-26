@@ -727,11 +727,11 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
     leaflet_css_path = SRC_DIR / "leaflet" / "leaflet.css"
     leaflet_js_path = SRC_DIR / "leaflet" / "leaflet.js"
     leaflet_css = leaflet_css_path.read_text(encoding="utf-8") if leaflet_css_path.exists() else ""
-    leaflet_css_link = "" if leaflet_css else '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">'
+    leaflet_css_link = ""
     leaflet_script = (
         f"<script>{leaflet_js_path.read_text(encoding='utf-8')}</script>"
         if leaflet_js_path.exists()
-        else '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
+        else ""
     )
     html = f"""<!doctype html>
 <html lang="ja">
@@ -772,6 +772,7 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
   <div class="row" id="metric"></div>
   <div class="row" id="speedKind"></div>
   <div class="row" id="monthbar"></div>
+  <div class="row" id="daytools"></div>
   <div class="calendars" id="calendars"></div>
   <div class="row"><b id="selectedDate"></b><span id="selectedHours"></span></div>
   <div class="row"><select id="hoursList" multiple size="8"></select><button id="hourUp">▲</button><button id="hourDown">▼</button></div>
@@ -794,12 +795,12 @@ if (HAS_LEAFLET) {{
 }} else {{
   initFallbackMap();
 }}
-const state = {{metric:'speed', speedKind:'avg', period: DATE_PERIODS[0] || '', hours:new Set([8])}};
+const state = {{metric:'speed', speedKind:'avg', periods:new Set(DATE_PERIODS[0] ? [DATE_PERIODS[0]] : []), hours:new Set([8])}};
 let monthIndex = 0;
 let layers = [];
 let dataLoaded = false;
 let loadingPromise = null;
-let loadedSelectionKey = '';
+let redrawTimer = null;
 const loadingEl = document.createElement('div');
 loadingEl.style.cssText = 'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2000;background:#ffffffee;border-radius:8px;box-shadow:0 8px 24px #0003;padding:12px 16px;font-weight:700;';
 loadingEl.textContent = 'データ読み込み中...';
@@ -822,46 +823,25 @@ async function ensureDataLoaded() {{
       const route = MANIFEST.routes[i];
       setLoading(true, `ルートデータ読み込み中 ${{i + 1}}/${{MANIFEST.routes.length}}`);
       const payload = await fetchJson(route.json);
-      const selected = new Map();
+      const index = new Map();
       payload.summary.forEach(r => {{
         const period = String(r.period || '');
         const hour = Number(r.hour);
-        if (period === state.period && state.hours.has(hour)) {{
-          selected.set(`${{r.bucket_index}}|${{r.direction}}|${{hour}}`, r);
+        if (/^\\d{{8}}$/.test(period)) {{
+          index.set(`${{r.bucket_index}}|${{r.direction}}|${{period}}|${{hour}}`, r);
         }}
       }});
-      payload.summaryIndex = selected;
+      payload.summaryIndex = index;
       delete payload.summary;
       DATA.push(payload);
     }}
     dataLoaded = true;
-    loadedSelectionKey = selectionKey();
     setLoading(false);
   }})();
   return loadingPromise;
 }}
-async function reloadSelectedData() {{
-  if (!dataLoaded) return ensureDataLoaded();
-  setLoading(true, '選択条件のデータを再集計中...');
-  for (let i = 0; i < MANIFEST.routes.length; i++) {{
-    const route = MANIFEST.routes[i];
-    const payload = DATA[i];
-    const fresh = await fetchJson(route.json);
-    const selected = new Map();
-    fresh.summary.forEach(r => {{
-      const period = String(r.period || '');
-      const hour = Number(r.hour);
-      if (period === state.period && state.hours.has(hour)) {{
-        selected.set(`${{r.bucket_index}}|${{r.direction}}|${{hour}}`, r);
-      }}
-    }});
-    payload.summaryIndex = selected;
-  }}
-  loadedSelectionKey = selectionKey();
-  setLoading(false);
-}}
 function selectionKey() {{
-  return `${{state.period}}|${{Array.from(state.hours).sort((a,b) => a-b).join(',')}}`;
+  return `${{Array.from(state.periods).sort().join(',')}}|${{Array.from(state.hours).sort((a,b) => a-b).join(',')}}`;
 }}
 function periodLabel(period) {{
   period = String(period);
@@ -907,8 +887,13 @@ function renderCalendars() {{
       b.textContent = String(day);
       if (HIT_DATES.has(token)) {{
         b.className += ' hit';
-        b.onclick = () => {{ state.period = token; renderCalendars(); renderSelectionStatus(); redraw(); }};
-        if (state.period === token) b.className += ' active';
+        b.onclick = () => {{
+          if (state.periods.has(token)) state.periods.delete(token);
+          else state.periods.add(token);
+          if (!state.periods.size) state.periods.add(token);
+          renderCalendars(); renderSelectionStatus(); scheduleRedraw();
+        }};
+        if (state.periods.has(token)) b.className += ' active';
       }} else {{
         b.disabled = true;
       }}
@@ -917,6 +902,38 @@ function renderCalendars() {{
     box.appendChild(days);
     el.appendChild(box);
   }});
+}}
+function renderDayTools() {{
+  const el = document.getElementById('daytools');
+  el.innerHTML = '';
+  const specs = [
+    ['全日ON', () => DATE_PERIODS],
+    ['全日OFF', () => []],
+    ['月', () => datesByWeekday(1)],
+    ['火', () => datesByWeekday(2)],
+    ['水', () => datesByWeekday(3)],
+    ['木', () => datesByWeekday(4)],
+    ['金', () => datesByWeekday(5)],
+    ['土', () => datesByWeekday(6)],
+    ['日', () => datesByWeekday(0)],
+    ['平日', () => DATE_PERIODS.filter(d => {{ const w = dateWeekday(d); return w >= 1 && w <= 5; }})],
+    ['休日', () => DATE_PERIODS.filter(d => {{ const w = dateWeekday(d); return w === 0 || w === 6; }})],
+  ];
+  specs.forEach(([label, getter]) => {{
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = () => {{
+      state.periods = new Set(getter());
+      renderCalendars(); renderSelectionStatus(); scheduleRedraw();
+    }};
+    el.appendChild(b);
+  }});
+}}
+function dateWeekday(token) {{
+  return new Date(Number(token.slice(0,4)), Number(token.slice(4,6)) - 1, Number(token.slice(6,8))).getDay();
+}}
+function datesByWeekday(weekday) {{
+  return DATE_PERIODS.filter(d => dateWeekday(d) === weekday);
 }}
 function offsetPoint(a, b, side, meters) {{
   const lat = (a.lat + b.lat) / 2;
@@ -1017,19 +1034,21 @@ function aggregateSummary(payload, bucket, direction) {{
   let jamNumerator = 0;
   let volume = 0;
   let trips = 0;
-  state.hours.forEach(hour => {{
-    const row = payload.summaryIndex.get(`${{bucket}}|${{direction}}|${{hour}}`);
-    if (!row) return;
-    const rowVolume = Number(row.expanded_volume) || 0;
-    const rowTrips = Number(row.trip_count) || 0;
-    const rowSpeed = Number(row.avg_speed_kmh);
-    const rowFree = Number(row.freeflow_speed_kmh);
-    const rowJam = Number(row.congested_speed_kmh);
-    volume += rowVolume;
-    trips += rowTrips;
-    if (Number.isFinite(rowSpeed) && rowVolume > 0) speedNumerator += rowSpeed * rowVolume;
-    if (Number.isFinite(rowFree) && rowVolume > 0) freeNumerator += rowFree * rowVolume;
-    if (Number.isFinite(rowJam) && rowVolume > 0) jamNumerator += rowJam * rowVolume;
+  state.periods.forEach(period => {{
+    state.hours.forEach(hour => {{
+      const row = payload.summaryIndex.get(`${{bucket}}|${{direction}}|${{period}}|${{hour}}`);
+      if (!row) return;
+      const rowVolume = Number(row.expanded_volume) || 0;
+      const rowTrips = Number(row.trip_count) || 0;
+      const rowSpeed = Number(row.avg_speed_kmh);
+      const rowFree = Number(row.freeflow_speed_kmh);
+      const rowJam = Number(row.congested_speed_kmh);
+      volume += rowVolume;
+      trips += rowTrips;
+      if (Number.isFinite(rowSpeed) && rowVolume > 0) speedNumerator += rowSpeed * rowVolume;
+      if (Number.isFinite(rowFree) && rowVolume > 0) freeNumerator += rowFree * rowVolume;
+      if (Number.isFinite(rowJam) && rowVolume > 0) jamNumerator += rowJam * rowVolume;
+    }});
   }});
   return {{
     avg_speed_kmh: volume > 0 ? speedNumerator / volume : '',
@@ -1081,7 +1100,6 @@ function rangedColor(v, breaks) {{
 async function redraw() {{
   try {{
     await ensureDataLoaded();
-    if (loadedSelectionKey !== selectionKey()) await reloadSelectedData();
   }} catch (err) {{
     setLoading(false);
     alert(`ビューアーデータの読み込みに失敗しました。\\n${{err.message || err}}`);
@@ -1127,8 +1145,17 @@ async function redraw() {{
       ? (tripRanges.length ? tripRanges.map(b => `<span style="background:${{b.color}}"></span>${{b.min}}-${{b.max}}トリップ/日`).join(' ') : '<span style="background:#9ca3af"></span>トリップなし')
       : (volumeRanges.length ? volumeRanges.map(b => `<span style="background:${{b.color}}"></span>${{b.min}}-${{b.max}}台/日`).join(' ') : '<span style="background:#9ca3af"></span>交通量なし'));
 }}
+function scheduleRedraw() {{
+  if (redrawTimer) cancelAnimationFrame(redrawTimer);
+  redrawTimer = requestAnimationFrame(() => {{
+    redrawTimer = null;
+    redraw();
+  }});
+}}
 function renderSelectionStatus() {{
-  document.getElementById('selectedDate').textContent = state.period ? `対象日: ${{periodLabel(state.period)}}` : '対象日なし';
+  const dates = Array.from(state.periods).sort();
+  const dateText = dates.length <= 4 ? dates.map(periodLabel).join(', ') : `${{dates.length}}日選択`;
+  document.getElementById('selectedDate').textContent = dates.length ? `対象日: ${{dateText}}` : '対象日なし';
   const hourText = Array.from(state.hours).sort((a,b) => a-b).map(h => `${{String(h).padStart(2,'0')}}:00`).join(', ');
   document.getElementById('selectedHours').textContent = `対象時間: ${{hourText || '未選択'}}`;
 }}
@@ -1138,7 +1165,7 @@ function buttons(id, values, key) {{
   values.forEach(v => {{
     const b = document.createElement('button');
     b.textContent = v.label ?? v;
-    b.onclick = () => {{ state[key] = v.value ?? v; buttons(id, values, key); renderCalendars(); renderSelectionStatus(); redraw(); }};
+    b.onclick = () => {{ state[key] = v.value ?? v; buttons(id, values, key); renderCalendars(); renderSelectionStatus(); scheduleRedraw(); }};
     if (String(state[key]) === String(v.value ?? v)) b.className = 'active';
     el.appendChild(b);
   }});
@@ -1156,7 +1183,7 @@ function renderHours() {{
   el.onchange = () => {{
     state.hours = new Set(Array.from(el.selectedOptions).map(o => Number(o.value)));
     renderSelectionStatus();
-    redraw();
+    scheduleRedraw();
   }};
   const tools = document.getElementById('hourtools');
   tools.innerHTML = '';
@@ -1168,7 +1195,7 @@ function renderHours() {{
   ].forEach(([label, hours]) => {{
     const b = document.createElement('button');
     b.textContent = label;
-    b.onclick = () => {{ state.hours = new Set(hours); renderHours(); renderSelectionStatus(); redraw(); }};
+    b.onclick = () => {{ state.hours = new Set(hours); renderHours(); renderSelectionStatus(); scheduleRedraw(); }};
     tools.appendChild(b);
   }});
 }}
@@ -1185,7 +1212,7 @@ function moveHourSelection(delta, extend) {{
   renderHours();
   renderSelectionStatus();
   document.getElementById('hoursList').focus();
-  redraw();
+  scheduleRedraw();
 }}
 function selectedHoursLabel() {{
   return Array.from(state.hours).sort((a,b) => a-b).map(h => String(h).padStart(2,'0')).join(',');
@@ -1256,10 +1283,11 @@ function exportRows(direction, metric) {{
   return rows;
 }}
 function exportWorkbook() {{
+  const selectedDates = Array.from(state.periods).sort();
   const conditions = [
     ['項目', '値'],
-    ['抽出日', periodLabel(state.period)],
-    ['抽出日token', state.period],
+    ['抽出日', selectedDates.map(periodLabel).join(', ')],
+    ['抽出日token', selectedDates.join(',')],
     ['抽出時間', selectedHoursLabel()],
     ['速度集計', '速度系は選択時間の時間交通量で加重平均'],
     ['出力時刻', new Date().toLocaleString()],
@@ -1376,6 +1404,7 @@ buttons('metric', [{{label:'速度', value:'speed'}}, {{label:'トリップ(ト�
 buttons('speedKind', [{{label:'閑散時', value:'free'}}, {{label:'平均', value:'avg'}}, {{label:'渋滞時', value:'jam'}}], 'speedKind');
 renderMonthbar();
 renderCalendars();
+renderDayTools();
 renderHours();
 document.getElementById('redrawButton').onclick = redraw;
 document.getElementById('exportButton').onclick = exportWorkbook;
