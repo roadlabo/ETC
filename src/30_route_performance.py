@@ -308,8 +308,7 @@ class RouteAggregator:
     def summary_periods(self) -> list[str]:
         return PERIODS + sorted(self.date_tokens)
 
-    def summary_rows(self, include_empty: bool = True, date_only: bool = False) -> list[dict[str, object]]:
-        rows: list[dict[str, object]] = []
+    def iter_summary_rows(self, include_empty: bool = True, date_only: bool = False) -> Iterable[dict[str, object]]:
         for i, kp in enumerate(self.route.kp_m):
             for direction in DIRECTIONS:
                 for period in self.summary_periods():
@@ -322,28 +321,28 @@ class RouteAggregator:
                         count = self.counts.get(key, 0)
                         if not include_empty and not count:
                             continue
-                        rows.append(
-                            {
-                                "route": self.route.name,
-                                "bucket_index": i,
-                                "kp_km": round(kp / 1000, KP_DECIMALS),
-                                "lon": self.route.lons[i],
-                                "lat": self.route.lats[i],
-                                "direction": direction,
-                                "direction_label": DIRECTION_LABEL[direction],
-                                "period": period,
-                                "date": period if re.fullmatch(r"\d{8}", period) else "",
-                                "hour": hour,
-                                "avg_speed_kmh": round(sum(speeds) / len(speeds), 1) if speeds else "",
-                                "freeflow_speed_kmh": round(speed_metric_value(speeds, "speed_freeflow"), 1) if speeds else "",
-                                "congested_speed_kmh": round(speed_metric_value(speeds, "speed_congested"), 1) if speeds else "",
-                                "median_speed_kmh": round(statistics.median(speeds), 1) if speeds else "",
-                                "trip_count": count if count else "",
-                                "expanded_volume": round(count * self.expansion_factor, 1) if count else "",
-                                "avg_pass_time": seconds_to_hhmmss(sum(times) / len(times)) if times else "",
-                            }
-                        )
-        return rows
+                        yield {
+                            "route": self.route.name,
+                            "bucket_index": i,
+                            "kp_km": round(kp / 1000, KP_DECIMALS),
+                            "lon": self.route.lons[i],
+                            "lat": self.route.lats[i],
+                            "direction": direction,
+                            "direction_label": DIRECTION_LABEL[direction],
+                            "period": period,
+                            "date": period if re.fullmatch(r"\d{8}", period) else "",
+                            "hour": hour,
+                            "avg_speed_kmh": round(sum(speeds) / len(speeds), 1) if speeds else "",
+                            "freeflow_speed_kmh": round(speed_metric_value(speeds, "speed_freeflow"), 1) if speeds else "",
+                            "congested_speed_kmh": round(speed_metric_value(speeds, "speed_congested"), 1) if speeds else "",
+                            "median_speed_kmh": round(statistics.median(speeds), 1) if speeds else "",
+                            "trip_count": count if count else "",
+                            "expanded_volume": round(count * self.expansion_factor, 1) if count else "",
+                            "avg_pass_time": seconds_to_hhmmss(sum(times) / len(times)) if times else "",
+                        }
+
+    def summary_rows(self, include_empty: bool = True, date_only: bool = False) -> list[dict[str, object]]:
+        return list(self.iter_summary_rows(include_empty=include_empty, date_only=date_only))
 
     def pivot(self, direction: str, metric: str) -> pd.DataFrame:
         columns = [f"{period}_{hour:02d}" for period in self.summary_periods() for hour in range(24)]
@@ -486,8 +485,6 @@ def write_route_outputs(
     route_dir.mkdir(parents=True, exist_ok=True)
     json_path = route_dir / f"{safe_name(route.name)}_viewer.json"
 
-    daily_summary_rows = aggregator.summary_rows(include_empty=False, date_only=True)
-
     viewer_payload = {
         "route": route.name,
         "expansion_factor": expansion_factor,
@@ -495,9 +492,8 @@ def write_route_outputs(
             {"bucket_index": i, "kp_km": round(kp / 1000, KP_DECIMALS), "lat": route.lats[i], "lon": route.lons[i]}
             for i, kp in enumerate(route.kp_m)
         ],
-        "summary": daily_summary_rows,
     }
-    write_viewer_payload_shards(viewer_payload, json_path)
+    write_viewer_summary_shards(viewer_payload, aggregator.iter_summary_rows(include_empty=False, date_only=True), json_path)
 
     return {
         "xlsx": "",
@@ -509,33 +505,51 @@ def write_route_outputs(
     }
 
 
-def write_viewer_payload_shards(viewer_payload: dict[str, object], json_path: Path) -> dict[str, object]:
-    """Write a small route JSON and per date/hour summary shards for the browser."""
+def write_viewer_summary_shards(
+    viewer_payload: dict[str, object],
+    rows: Iterable[dict[str, object]],
+    json_path: Path,
+) -> dict[str, object]:
+    """Write route geometry and stream summary rows into date/hour shards."""
     route_dir = json_path.parent
     shard_dir = route_dir / f"{json_path.stem}_summary"
     shard_dir.mkdir(parents=True, exist_ok=True)
-    grouped: dict[tuple[str, int], list[dict[str, object]]] = defaultdict(list)
     dates: set[str] = set()
-
-    for row in viewer_payload.get("summary", []):
-        if not isinstance(row, dict):
-            continue
-        period = str(row.get("period", ""))
-        try:
-            hour = int(row.get("hour", 0))
-        except (TypeError, ValueError):
-            continue
-        if not re.fullmatch(r"\d{8}", period):
-            continue
-        dates.add(period)
-        grouped[(period, hour)].append(row)
-
     shards: dict[str, str] = {}
-    for (period, hour), rows in sorted(grouped.items()):
+    handles: dict[str, object] = {}
+    first_row: dict[str, bool] = {}
+
+    def append_row(period: str, hour: int, row: dict[str, object]) -> None:
+        key = f"{period}|{hour}"
         shard_name = f"{period}_{hour:02d}.json"
         shard_path = shard_dir / shard_name
-        shard_path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
-        shards[f"{period}|{hour}"] = shard_path.relative_to(route_dir).as_posix()
+        if key not in handles:
+            handles[key] = shard_path.open("w", encoding="utf-8")
+            handles[key].write("[")
+            first_row[key] = True
+            shards[key] = shard_path.relative_to(route_dir).as_posix()
+        if not first_row[key]:
+            handles[key].write(",")
+        handles[key].write(json.dumps(row, ensure_ascii=False))
+        first_row[key] = False
+
+    try:
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            period = str(row.get("period", ""))
+            try:
+                hour = int(row.get("hour", 0))
+            except (TypeError, ValueError):
+                continue
+            if not re.fullmatch(r"\d{8}", period):
+                continue
+            dates.add(period)
+            append_row(period, hour, row)
+    finally:
+        for fh in handles.values():
+            fh.write("]")
+            fh.close()
 
     slim_payload = {
         "route": viewer_payload.get("route", json_path.stem.removesuffix("_viewer")),
@@ -548,8 +562,125 @@ def write_viewer_payload_shards(viewer_payload: dict[str, object], json_path: Pa
     return slim_payload
 
 
+def write_viewer_payload_shards(viewer_payload: dict[str, object], json_path: Path) -> dict[str, object]:
+    """Write a small route JSON and per date/hour summary shards for the browser."""
+    return write_viewer_summary_shards(viewer_payload, viewer_payload.get("summary", []), json_path)
+
+
+def read_viewer_header_before_summary(json_path: Path) -> dict[str, object] | None:
+    text = ""
+    with json_path.open("r", encoding="utf-8") as fh:
+        while True:
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                return None
+            text += chunk
+            marker = text.find('"summary"')
+            if marker >= 0:
+                header = text[:marker].rstrip()
+                if header.endswith(","):
+                    header = header[:-1]
+                return json.loads(header + "}")
+
+
+def stream_viewer_payload_shards(json_path: Path) -> dict[str, object]:
+    """Convert an old large viewer JSON without loading the summary array at once."""
+    header = read_viewer_header_before_summary(json_path)
+    if header is None:
+        return json.loads(json_path.read_text(encoding="utf-8"))
+
+    route_dir = json_path.parent
+    shard_dir = route_dir / f"{json_path.stem}_summary"
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    decoder = json.JSONDecoder()
+    dates: set[str] = set()
+    shards: dict[str, str] = {}
+    handles: dict[str, object] = {}
+    first_row: dict[str, bool] = {}
+
+    def append_row(period: str, hour: int, row: dict[str, object]) -> None:
+        key = f"{period}|{hour}"
+        shard_name = f"{period}_{hour:02d}.json"
+        shard_path = shard_dir / shard_name
+        if key not in handles:
+            handles[key] = shard_path.open("w", encoding="utf-8")
+            handles[key].write("[")
+            first_row[key] = True
+            shards[key] = shard_path.relative_to(route_dir).as_posix()
+        if not first_row[key]:
+            handles[key].write(",")
+        handles[key].write(json.dumps(row, ensure_ascii=False))
+        first_row[key] = False
+
+    try:
+        with json_path.open("r", encoding="utf-8") as fh:
+            buffer = ""
+            while True:
+                chunk = fh.read(1024 * 1024)
+                if not chunk:
+                    raise ValueError(f"summary array was not found: {json_path}")
+                buffer += chunk
+                marker = buffer.find('"summary"')
+                if marker >= 0:
+                    buffer = buffer[marker + len('"summary"') :]
+                    break
+            while "[" not in buffer:
+                chunk = fh.read(1024 * 1024)
+                if not chunk:
+                    raise ValueError(f"summary array start was not found: {json_path}")
+                buffer += chunk
+            buffer = buffer[buffer.index("[") + 1 :]
+
+            eof = False
+            while True:
+                buffer = buffer.lstrip()
+                if buffer.startswith(","):
+                    buffer = buffer[1:].lstrip()
+                if buffer.startswith("]"):
+                    break
+                if not buffer and not eof:
+                    chunk = fh.read(1024 * 1024)
+                    eof = not bool(chunk)
+                    buffer += chunk
+                    continue
+                try:
+                    row, index = decoder.raw_decode(buffer)
+                except json.JSONDecodeError:
+                    chunk = fh.read(1024 * 1024)
+                    if not chunk:
+                        raise
+                    buffer += chunk
+                    continue
+                buffer = buffer[index:]
+                if not isinstance(row, dict):
+                    continue
+                period = str(row.get("period", ""))
+                try:
+                    hour = int(row.get("hour", 0))
+                except (TypeError, ValueError):
+                    continue
+                if not re.fullmatch(r"\d{8}", period):
+                    continue
+                dates.add(period)
+                append_row(period, hour, row)
+    finally:
+        for fh in handles.values():
+            fh.write("]")
+            fh.close()
+
+    slim_payload = {
+        "route": header.get("route", json_path.stem.removesuffix("_viewer")),
+        "expansion_factor": header.get("expansion_factor", 1.0),
+        "points": header.get("points", []),
+        "summary_shards": shards,
+        "dates": sorted(dates),
+    }
+    json_path.write_text(json.dumps(slim_payload, ensure_ascii=False), encoding="utf-8")
+    return slim_payload
+
+
 def load_viewer_payload(json_path: Path) -> dict[str, object]:
-    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    payload = stream_viewer_payload_shards(json_path)
     if "summary" in payload:
         return write_viewer_payload_shards(payload, json_path)
     return payload
