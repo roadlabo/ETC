@@ -497,7 +497,7 @@ def write_route_outputs(
         ],
         "summary": daily_summary_rows,
     }
-    json_path.write_text(json.dumps(viewer_payload, ensure_ascii=False), encoding="utf-8")
+    write_viewer_payload_shards(viewer_payload, json_path)
 
     return {
         "xlsx": "",
@@ -507,6 +507,52 @@ def write_route_outputs(
         "viewer_json": str(json_path),
         "daily_xlsx_files": [],
     }
+
+
+def write_viewer_payload_shards(viewer_payload: dict[str, object], json_path: Path) -> dict[str, object]:
+    """Write a small route JSON and per date/hour summary shards for the browser."""
+    route_dir = json_path.parent
+    shard_dir = route_dir / f"{json_path.stem}_summary"
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    grouped: dict[tuple[str, int], list[dict[str, object]]] = defaultdict(list)
+    dates: set[str] = set()
+
+    for row in viewer_payload.get("summary", []):
+        if not isinstance(row, dict):
+            continue
+        period = str(row.get("period", ""))
+        try:
+            hour = int(row.get("hour", 0))
+        except (TypeError, ValueError):
+            continue
+        if not re.fullmatch(r"\d{8}", period):
+            continue
+        dates.add(period)
+        grouped[(period, hour)].append(row)
+
+    shards: dict[str, str] = {}
+    for (period, hour), rows in sorted(grouped.items()):
+        shard_name = f"{period}_{hour:02d}.json"
+        shard_path = shard_dir / shard_name
+        shard_path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+        shards[f"{period}|{hour}"] = shard_path.relative_to(route_dir).as_posix()
+
+    slim_payload = {
+        "route": viewer_payload.get("route", json_path.stem.removesuffix("_viewer")),
+        "expansion_factor": viewer_payload.get("expansion_factor", 1.0),
+        "points": viewer_payload.get("points", []),
+        "summary_shards": shards,
+        "dates": sorted(dates),
+    }
+    json_path.write_text(json.dumps(slim_payload, ensure_ascii=False), encoding="utf-8")
+    return slim_payload
+
+
+def load_viewer_payload(json_path: Path) -> dict[str, object]:
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    if "summary" in payload:
+        return write_viewer_payload_shards(payload, json_path)
+    return payload
 
 
 def analyze_route(
@@ -691,9 +737,13 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
     for result in results:
         json_path = Path(str(result["viewer_json"]))
         if json_path.exists():
-            payload = json.loads(json_path.read_text(encoding="utf-8"))
+            payload = load_viewer_payload(json_path)
             points = payload.get("points", [])
             all_points.extend(points)
+            for period in payload.get("dates", []):
+                period = str(period)
+                if re.fullmatch(r"\d{8}", period):
+                    date_tokens.add(period)
             for row in payload.get("summary", []):
                 period = str(row.get("period", ""))
                 if re.fullmatch(r"\d{8}", period):
@@ -800,6 +850,7 @@ let monthIndex = 0;
 let layers = [];
 let dataLoaded = false;
 let loadingPromise = null;
+let summaryLoadPromise = null;
 let redrawTimer = null;
 let aggregateCache = new Map();
 const loadingEl = document.createElement('div');
@@ -819,20 +870,22 @@ async function ensureDataLoaded() {{
   if (dataLoaded) return;
   if (loadingPromise) return loadingPromise;
   loadingPromise = (async () => {{
-    setLoading(true, 'ルートパフォーマンス出力を読み込み中...');
+    setLoading(true, 'Loading route geometry...');
     for (let i = 0; i < MANIFEST.routes.length; i++) {{
       const route = MANIFEST.routes[i];
-      setLoading(true, `ルートデータ読み込み中 ${{i + 1}}/${{MANIFEST.routes.length}}`);
+      setLoading(true, `Loading route geometry ${{i + 1}}/${{MANIFEST.routes.length}}`);
       const payload = await fetchJson(route.json);
       const index = new Map();
-      payload.summary.forEach(r => {{
+      (payload.summary || []).forEach(r => {{
         const period = String(r.period || '');
         const hour = Number(r.hour);
-        if (/^\\d{{8}}$/.test(period)) {{
+        if (/^\d{{8}}$/.test(period)) {{
           index.set(`${{r.bucket_index}}|${{r.direction}}|${{period}}|${{hour}}`, r);
         }}
       }});
       payload.summaryIndex = index;
+      payload.loadedSummaryKeys = new Set(payload.summary ? ['__legacy__'] : []);
+      payload.basePath = route.json.replace(/[^/]*$/, '');
       delete payload.summary;
       DATA.push(payload);
     }}
@@ -840,6 +893,43 @@ async function ensureDataLoaded() {{
     setLoading(false);
   }})();
   return loadingPromise;
+}}
+async function loadSelectedSummaries() {{
+  await ensureDataLoaded();
+  if (summaryLoadPromise) await summaryLoadPromise;
+  summaryLoadPromise = (async () => {{
+    const periods = Array.from(state.periods).sort();
+    const hours = Array.from(state.hours).sort((a,b) => a-b);
+    const wanted = [];
+    periods.forEach(period => hours.forEach(hour => wanted.push(`${{period}}|${{hour}}`)));
+    let loadedAny = false;
+    for (let i = 0; i < DATA.length; i++) {{
+      const payload = DATA[i];
+      const shards = payload.summary_shards || {{}};
+      for (const key of wanted) {{
+        if (payload.loadedSummaryKeys.has(key) || payload.loadedSummaryKeys.has('__legacy__')) continue;
+        const shard = shards[key];
+        payload.loadedSummaryKeys.add(key);
+        if (!shard) continue;
+        setLoading(true, `Loading summary ${{i + 1}}/${{DATA.length}} ${{key.replace('|', ' ')}}:00`);
+        const rows = await fetchJson(payload.basePath + shard);
+        rows.forEach(r => {{
+          const period = String(r.period || '');
+          const hour = Number(r.hour);
+          if (/^\d{{8}}$/.test(period)) {{
+            payload.summaryIndex.set(`${{r.bucket_index}}|${{r.direction}}|${{period}}|${{hour}}`, r);
+          }}
+        }});
+        loadedAny = true;
+      }}
+    }}
+    if (loadedAny) aggregateCache = new Map();
+  }})();
+  try {{
+    await summaryLoadPromise;
+  }} finally {{
+    summaryLoadPromise = null;
+  }}
 }}
 function selectionKey() {{
   return `${{Array.from(state.periods).sort().join(',')}}|${{Array.from(state.hours).sort((a,b) => a-b).join(',')}}`;
@@ -1118,7 +1208,7 @@ function rangedColor(v, breaks) {{
 }}
 async function redraw() {{
   try {{
-    await ensureDataLoaded();
+    await loadSelectedSummaries();
   }} catch (err) {{
     setLoading(false);
     alert(`ビューアーデータの読み込みに失敗しました。\\n${{err.message || err}}`);
@@ -1304,7 +1394,7 @@ function exportRows(direction, metric) {{
 }}
 async function exportWorkbook() {{
   try {{
-    await ensureDataLoaded();
+    await loadSelectedSummaries();
   }} catch (err) {{
     setLoading(false);
     alert(`データ抽出用データの読み込みに失敗しました。\n${{err.message || err}}`);
