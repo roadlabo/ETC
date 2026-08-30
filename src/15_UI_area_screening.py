@@ -101,7 +101,7 @@ class MainWindow(QMainWindow):
             return
 
         pix_big = pixmap.scaledToHeight(300, Qt.TransformationMode.SmoothTransformation)
-        self._pix_small = pixmap.scaledToHeight(92, Qt.TransformationMode.SmoothTransformation)
+        self._pix_small = pixmap.scaledToHeight(76, Qt.TransformationMode.SmoothTransformation)
         self.splash = QLabel(self)
         self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.splash.setStyleSheet("background: transparent;")
@@ -153,7 +153,7 @@ class MainWindow(QMainWindow):
 
     def _logo_corner_pos(self, w: int, h: int) -> tuple[int, int]:
         r = self.rect()
-        return max(8, r.width() - w - 18), 10
+        return max(8, r.width() - w - 18), max(8, r.height() - h - 18)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
