@@ -54,14 +54,9 @@
     <button id="bufferBuild" class="primary">正式区域から分析区域生成</button>
   </div>
   <div class="row">
-    <button id="validate">妥当性確認</button>
     <button id="saveGeojson" class="primary">GeoJSON保存</button>
     <button id="loadGeojson">GeoJSON読込</button>
     <input id="fileInput" type="file" accept=".geojson,.json" style="display:none">
-  </div>
-  <div class="row">
-    <button id="saveLocal">前回設定として保存</button>
-    <button id="loadLocal">前回設定を読込</button>
   </div>
   <div class="status" id="status"></div>
 </div>
@@ -202,8 +197,6 @@ function validate() {
   if (selfIntersects(state.analysis)) return '分析区域が自己交差しています。';
   return '';
 }
-document.getElementById('validate').onclick = () => setStatus(validate() || '問題は見つかりませんでした。');
-
 function ring(points) {
   const coords = points.map(p => [Number(p.lng.toFixed(9)), Number(p.lat.toFixed(9))]);
   if (coords.length) coords.push(coords[0]);
@@ -262,16 +255,6 @@ document.getElementById('fileInput').onchange = ev => {
     catch (err) { setStatus('GeoJSON読込エラー: ' + err.message); }
   };
   reader.readAsText(file);
-};
-document.getElementById('saveLocal').onclick = () => {
-  try { localStorage.setItem('etc_area15_builder', JSON.stringify(toGeoJSON())); setStatus('前回設定として保存しました。'); }
-  catch (err) { setStatus(err.message); }
-};
-document.getElementById('loadLocal').onclick = () => {
-  const text = localStorage.getItem('etc_area15_builder');
-  if (!text) return setStatus('保存済みの前回設定がありません。');
-  try { loadFeatureCollection(JSON.parse(text)); setStatus('前回設定を読み込みました。'); }
-  catch (err) { setStatus('前回設定の読込エラー: ' + err.message); }
 };
 redrawAll();
 </script>
