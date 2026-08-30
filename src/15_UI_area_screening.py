@@ -104,13 +104,12 @@ class MainWindow(QMainWindow):
         main.addWidget(form_box)
 
         settings = QGroupBox("解析設定")
-        grid = QGridLayout(settings)
-        self.spin_boundary = self._double_spin(0, 100, 5, " m")
+        settings_layout = QVBoxLayout(settings)
+        grid = QGridLayout()
         self.spin_min_dist = self._double_spin(0, 1000, 10, " m")
         self.spin_min_sec = self._double_spin(0, 3600, 5, " 秒")
         self.spin_merge = self._double_spin(0, 3600, 10, " 秒")
         rows = [
-            ("境界付近許容距離", self.spin_boundary),
             ("短距離除外しきい値", self.spin_min_dist),
             ("短時間除外しきい値", self.spin_min_sec),
             ("短時間再流入統合", self.spin_merge),
@@ -118,6 +117,15 @@ class MainWindow(QMainWindow):
         for row, (label, widget) in enumerate(rows):
             grid.addWidget(QLabel(label), row // 3, (row % 3) * 2)
             grid.addWidget(widget, row // 3, (row % 3) * 2 + 1)
+        settings_layout.addLayout(grid)
+        help_text = QLabel(
+            "短距離除外: 境界をかすめただけの短い線分を除外します。\n"
+            "短時間除外: ごく短時間だけ区域内に入った断片を除外します。\n"
+            "短時間再流入統合: GPSの揺れで一度外へ出たように見える断片を、指定秒以内なら1つにつなげます。"
+        )
+        help_text.setWordWrap(True)
+        help_text.setObjectName("helpText")
+        settings_layout.addWidget(help_text)
         main.addWidget(settings)
 
         buttons = QHBoxLayout()
@@ -176,6 +184,7 @@ class MainWindow(QMainWindow):
             QPushButton:hover { background:#103322; }
             QPushButton:disabled { color:#597262; border-color:#224432; }
             QProgressBar::chunk { background:#00ff99; border-radius:4px; }
+            QLabel#helpText { color:#9fd7bb; line-height:1.4; }
             """
         )
 
@@ -200,7 +209,7 @@ class MainWindow(QMainWindow):
             area_geojson=Path(self.area_path.text().strip()),
             output_dir=Path(self.output_dir.text().strip()),
             recursive=self.chk_recursive.isChecked(),
-            boundary_tolerance_m=self.spin_boundary.value(),
+            boundary_tolerance_m=0.0,
             min_subtrip_distance_m=self.spin_min_dist.value(),
             min_subtrip_duration_sec=self.spin_min_sec.value(),
             merge_gap_sec=self.spin_merge.value(),
@@ -294,7 +303,6 @@ class MainWindow(QMainWindow):
             "area_path": self.area_path.text(),
             "output_dir": self.output_dir.text(),
             "recursive": self.chk_recursive.isChecked(),
-            "boundary": self.spin_boundary.value(),
             "min_dist": self.spin_min_dist.value(),
             "min_sec": self.spin_min_sec.value(),
             "merge": self.spin_merge.value(),
@@ -312,7 +320,6 @@ class MainWindow(QMainWindow):
         self.area_path.setText(payload.get("area_path", ""))
         self.output_dir.setText(payload.get("output_dir", ""))
         self.chk_recursive.setChecked(bool(payload.get("recursive", False)))
-        self.spin_boundary.setValue(float(payload.get("boundary", 5)))
         self.spin_min_dist.setValue(float(payload.get("min_dist", 10)))
         self.spin_min_sec.setValue(float(payload.get("min_sec", 5)))
         self.spin_merge.setValue(float(payload.get("merge", 10)))

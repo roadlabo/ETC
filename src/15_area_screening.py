@@ -59,7 +59,7 @@ class ScreeningConfig:
     output_dir: Path
     encoding: str = "utf-8-sig"
     recursive: bool = False
-    boundary_tolerance_m: float = 5.0
+    boundary_tolerance_m: float = 0.0
     min_subtrip_distance_m: float = 10.0
     min_subtrip_duration_sec: float = 5.0
     merge_gap_sec: float = 10.0
@@ -570,7 +570,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", required=True, help="出力フォルダ")
     parser.add_argument("--recursive", action="store_true")
     parser.add_argument("--encoding", default="utf-8-sig")
-    parser.add_argument("--boundary-tolerance-m", type=float, default=5.0)
+    parser.add_argument("--boundary-tolerance-m", type=float, default=0.0)
     parser.add_argument("--min-distance-m", type=float, default=10.0)
     parser.add_argument("--min-duration-sec", type=float, default=5.0)
     parser.add_argument("--merge-gap-sec", type=float, default=10.0)
