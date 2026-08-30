@@ -17,7 +17,6 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QGridLayout,
@@ -87,7 +86,7 @@ class MainWindow(QMainWindow):
 
         about = QLabel(
             "第1スクリーニング出力の各トリップから、指定した分析区域を通行する部分だけを切り出し、1サブトリップ1CSVで保存します。"
-            "集計値はETC2.0観測トリップ数であり、実交通量ではありません。"
+            "後続の第2スクリーニング、OD前処理、交差点・ルート分析へ渡すための前処理です。"
         )
         about.setWordWrap(True)
         main.addWidget(about)
@@ -99,7 +98,7 @@ class MainWindow(QMainWindow):
         self.output_dir = QLineEdit()
         self.chk_recursive = QCheckBox("サブフォルダも含める")
         self._path_row(form, 0, "第1スクリーニングCSV/フォルダ", self.input_path, self._pick_input)
-        self._path_row(form, 1, "エリア・ゲートGeoJSON", self.area_path, self._pick_area)
+        self._path_row(form, 1, "エリアGeoJSON", self.area_path, self._pick_area)
         self._path_row(form, 2, "出力フォルダ", self.output_dir, self._pick_output)
         form.addWidget(self.chk_recursive, 3, 1)
         main.addWidget(form_box)
@@ -110,17 +109,11 @@ class MainWindow(QMainWindow):
         self.spin_min_dist = self._double_spin(0, 1000, 10, " m")
         self.spin_min_sec = self._double_spin(0, 3600, 5, " 秒")
         self.spin_merge = self._double_spin(0, 3600, 10, " 秒")
-        self.spin_gate = self._double_spin(1, 500, 35, " m")
-        self.combo_interval = QComboBox()
-        self.combo_interval.addItems(["15", "30", "60"])
-        self.combo_interval.setCurrentText("60")
         rows = [
             ("境界付近許容距離", self.spin_boundary),
             ("短距離除外しきい値", self.spin_min_dist),
             ("短時間除外しきい値", self.spin_min_sec),
             ("短時間再流入統合", self.spin_merge),
-            ("ゲート最大割当距離", self.spin_gate),
-            ("OD時間帯(分)", self.combo_interval),
         ]
         for row, (label, widget) in enumerate(rows):
             grid.addWidget(QLabel(label), row // 3, (row % 3) * 2)
@@ -149,7 +142,7 @@ class MainWindow(QMainWindow):
         main.addWidget(self.status)
         main.addWidget(self.time_label)
 
-        self.summary = QLabel("サブトリップ: 0 / 除外: 0 / ゲート未割当点: 0")
+        self.summary = QLabel("サブトリップ: 0 / 除外: 0")
         main.addWidget(self.summary)
 
         self.log = QPlainTextEdit()
@@ -178,7 +171,7 @@ class MainWindow(QMainWindow):
             QWidget { background:#050908; color:#d6ffe8; font-family:"Meiryo UI","Segoe UI"; font-size:12px; }
             QGroupBox { border:1px solid #1c4f33; border-radius:6px; margin-top:8px; padding-top:12px; }
             QGroupBox::title { subcontrol-origin:margin; left:10px; padding:0 4px; }
-            QLineEdit, QPlainTextEdit, QDoubleSpinBox, QComboBox, QProgressBar { background:#0a120f; border:1px solid #1f3f2d; border-radius:6px; padding:4px; }
+            QLineEdit, QPlainTextEdit, QDoubleSpinBox, QProgressBar { background:#0a120f; border:1px solid #1f3f2d; border-radius:6px; padding:4px; }
             QPushButton { background:#0a1b14; border:1px solid #2ef29a; border-radius:8px; padding:7px 12px; font-weight:700; }
             QPushButton:hover { background:#103322; }
             QPushButton:disabled { color:#597262; border-color:#224432; }
@@ -211,8 +204,6 @@ class MainWindow(QMainWindow):
             min_subtrip_distance_m=self.spin_min_dist.value(),
             min_subtrip_duration_sec=self.spin_min_sec.value(),
             merge_gap_sec=self.spin_merge.value(),
-            gate_assign_max_distance_m=self.spin_gate.value(),
-            od_interval_minutes=int(self.combo_interval.currentText()),
         )
 
     def _validate(self) -> str:
@@ -220,7 +211,7 @@ class MainWindow(QMainWindow):
         if not cfg.input_path.exists():
             return "第1スクリーニングCSV/フォルダが見つかりません。"
         if not cfg.area_geojson.is_file():
-            return "エリア・ゲートGeoJSONが見つかりません。"
+            return "エリアGeoJSONが見つかりません。"
         if cfg.input_path.is_dir() and not any(cfg.input_path.rglob("*.csv") if cfg.recursive else cfg.input_path.glob("*.csv")):
             return "入力フォルダにCSVがありません。"
         try:
@@ -256,9 +247,7 @@ class MainWindow(QMainWindow):
         pct = int(done * 100 / total) if total else 0
         self.progress.setValue(max(0, min(100, pct)))
         self.status.setText(f"{stage}: {done}/{total} {extra.get('file', '')}")
-        self.summary.setText(
-            f"サブトリップ: {extra.get('subtrips', 0)} / 除外: {extra.get('excluded', 0)} / ゲート未割当点: {extra.get('unassigned', 0)}"
-        )
+        self.summary.setText(f"サブトリップ: {extra.get('subtrips', 0)} / 除外: {extra.get('excluded', 0)}")
         if stage in {"PROCESS", "DONE"}:
             self.append_log(self.status.text())
 
@@ -267,9 +256,7 @@ class MainWindow(QMainWindow):
         self.progress.setValue(100)
         stats = result.get("stats", {})
         self.status.setText("完了")
-        self.summary.setText(
-            f"サブトリップ: {stats.get('subtrips', 0)} / 除外: {stats.get('excluded', 0)} / ゲート未割当点: {stats.get('unassigned_gate_points', 0)}"
-        )
+        self.summary.setText(f"サブトリップ: {stats.get('subtrips', 0)} / 除外: {stats.get('excluded', 0)}")
         self.append_log(f"完了: {result.get('output_dir')}")
         QMessageBox.information(self, "完了", "第1.5スクリーニングが完了しました。")
 
@@ -311,8 +298,6 @@ class MainWindow(QMainWindow):
             "min_dist": self.spin_min_dist.value(),
             "min_sec": self.spin_min_sec.value(),
             "merge": self.spin_merge.value(),
-            "gate": self.spin_gate.value(),
-            "interval": self.combo_interval.currentText(),
         }
         STATE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -331,8 +316,6 @@ class MainWindow(QMainWindow):
         self.spin_min_dist.setValue(float(payload.get("min_dist", 10)))
         self.spin_min_sec.setValue(float(payload.get("min_sec", 5)))
         self.spin_merge.setValue(float(payload.get("merge", 10)))
-        self.spin_gate.setValue(float(payload.get("gate", 35)))
-        self.combo_interval.setCurrentText(str(payload.get("interval", "60")))
 
 
 def main() -> None:

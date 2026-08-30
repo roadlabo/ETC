@@ -15,7 +15,7 @@ assert spec and spec.loader
 spec.loader.exec_module(area15)
 
 
-def write_area(path: Path, include_gate: bool = True) -> None:
+def write_area(path: Path) -> None:
     features = [
         {
             "type": "Feature",
@@ -33,20 +33,12 @@ def write_area(path: Path, include_gate: bool = True) -> None:
                 "coordinates": [[[135.000, 35.000], [135.010, 35.000], [135.010, 35.010], [135.000, 35.010], [135.000, 35.000]]],
             },
         },
+        {
+            "type": "Feature",
+            "properties": {"area15_role": "gate", "gate_id": "ignored"},
+            "geometry": {"type": "Point", "coordinates": [135.000, 35.005]},
+        },
     ]
-    if include_gate:
-        features += [
-            {
-                "type": "Feature",
-                "properties": {"area15_role": "gate", "gate_id": "W", "name": "西ゲート"},
-                "geometry": {"type": "Point", "coordinates": [135.000, 35.005]},
-            },
-            {
-                "type": "Feature",
-                "properties": {"area15_role": "gate", "gate_id": "E", "name": "東ゲート"},
-                "geometry": {"type": "LineString", "coordinates": [[135.010, 35.004], [135.010, 35.006]]},
-            },
-        ]
     path.write_text(json.dumps({"type": "FeatureCollection", "features": features}, ensure_ascii=False), encoding="utf-8")
 
 
@@ -86,12 +78,12 @@ def write_trip_file(path: Path, rows: list[list[str]]) -> None:
         csv.writer(fh).writerows(rows)
 
 
-def run_case(tmp: Path, files: dict[str, list[list[str]]], include_gate: bool = True):
+def run_case(tmp: Path, files: dict[str, list[list[str]]]):
     in_dir = tmp / "第1 スクリーニング"
     out_dir = tmp / "出力 15"
     in_dir.mkdir()
     area_path = tmp / "area.geojson"
-    write_area(area_path, include_gate=include_gate)
+    write_area(area_path)
     for name, rows in files.items():
         write_trip_file(in_dir / name, rows)
     result = area15.run_screening(
@@ -102,8 +94,6 @@ def run_case(tmp: Path, files: dict[str, list[list[str]]], include_gate: bool = 
             min_subtrip_distance_m=0,
             min_subtrip_duration_sec=0,
             boundary_tolerance_m=0.1,
-            gate_assign_max_distance_m=80,
-            od_interval_minutes=30,
         )
     )
     with Path(result["summary_csv"]).open("r", encoding="utf-8-sig", newline="") as fh:
@@ -115,23 +105,25 @@ def run_case(tmp: Path, files: dict[str, list[list[str]]], include_gate: bool = 
 
 
 class AreaScreeningTest(unittest.TestCase):
-    def test_outside_inside_outside_interpolates_boundary_and_assigns_gates(self):
+    def test_outside_inside_outside_interpolates_boundaries_and_writes_csv(self):
         with tempfile.TemporaryDirectory() as td:
             result, summaries, subtrip_files, _ = run_case(
                 Path(td),
                 {"trip.csv": [row("12345", 1, "20250101080000", 134.995, 35.005), row("12345", 1, "20250101081000", 135.005, 35.005), row("12345", 1, "20250101082000", 135.015, 35.005)]},
             )
             self.assertEqual(result["stats"]["subtrips"], 1)
-            self.assertEqual(summaries[0]["entry_gate_id"], "W")
-            self.assertEqual(summaries[0]["exit_gate_id"], "E")
+            self.assertEqual(len(summaries), 1)
             self.assertEqual(len(subtrip_files), 1)
+            self.assertNotIn("od_csv", result)
+            self.assertNotIn("gate_volume_csv", result)
             with subtrip_files[0].open("r", encoding="utf-8", newline="") as fh:
                 rows = list(csv.reader(fh))
             self.assertEqual(rows[0][6], "20250101080500")
             self.assertEqual(rows[-1][6], "20250101081500")
             self.assertEqual(rows[0][12], "0")
             self.assertEqual(rows[-1][12], "1")
-            self.assertEqual(summaries[0]["traffic_class"], "gate_to_gate_through")
+            self.assertEqual(summaries[0]["start_time"], "20250101080500")
+            self.assertEqual(summaries[0]["end_time"], "20250101081500")
 
     def test_outside_to_inside_end_inside_to_outside_all_inside_all_outside(self):
         with tempfile.TemporaryDirectory() as td:
@@ -145,9 +137,10 @@ class AreaScreeningTest(unittest.TestCase):
                 },
             )
             self.assertEqual(len(summaries), 3)
-            self.assertTrue(any(s["entry_gate_id"] == "W" and s["exit_gate_id"] == "" for s in summaries))
-            self.assertTrue(any(s["entry_gate_id"] == "" and s["exit_gate_id"] == "E" for s in summaries))
-            self.assertTrue(any(s["traffic_class"] == "official_internal_to_official_internal" for s in summaries))
+            ids = {s["original_trip_id"] for s in summaries}
+            self.assertTrue(any(v.startswith("a-") for v in ids))
+            self.assertTrue(any(v.startswith("b-") for v in ids))
+            self.assertTrue(any(v.startswith("c-") for v in ids))
             self.assertTrue(any(e["original_trip_id"].startswith("d-") for e in excluded))
 
     def test_tangent_multiple_reentries_and_segment_crossing(self):
@@ -167,12 +160,10 @@ class AreaScreeningTest(unittest.TestCase):
                 },
             )
             self.assertTrue(any(e["original_trip_id"].startswith("tan-") for e in excluded))
-            multi_rows = [s for s in summaries if s["original_trip_id"].startswith("mul-")]
-            self.assertEqual(len(multi_rows), 2)
-            coarse = [s for s in summaries if s["original_trip_id"].startswith("coarse-")]
-            self.assertEqual(len(coarse), 1)
+            self.assertEqual(len([s for s in summaries if s["original_trip_id"].startswith("mul-")]), 2)
+            self.assertEqual(len([s for s in summaries if s["original_trip_id"].startswith("coarse-")]), 1)
 
-    def test_unassigned_perimeter_only_missing_values_invalid_polygon_and_japanese_path(self):
+    def test_missing_values_invalid_polygon_and_japanese_path(self):
         with tempfile.TemporaryDirectory(prefix="日本語 パス ") as td:
             tmp = Path(td)
             result, summaries, _, excluded = run_case(
@@ -183,12 +174,9 @@ class AreaScreeningTest(unittest.TestCase):
                     "missing_time.csv": [row("time", 1, "", 134.995, 35.005), row("time", 1, "20250101081000", 135.005, 35.005)],
                     "one_point.csv": [row("one", 1, "20250101080000", 135.005, 35.005)],
                 },
-                include_gate=False,
             )
             self.assertTrue(Path(result["summary_csv"]).exists())
-            self.assertEqual(summaries[0]["traffic_class"], "perimeter_only")
-            self.assertEqual(summaries[0]["perimeter_only"], "True")
-            self.assertGreater(result["stats"]["unassigned_gate_points"], 0)
+            self.assertEqual(len(summaries), 1)
             reasons = " ".join(e["reason"] for e in excluded)
             self.assertIn("座標欠損", reasons)
             self.assertIn("日時欠損", reasons)

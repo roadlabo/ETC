@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>15 エリア設定</title>
+  <link rel="stylesheet" href="lib/leaflet.css">
+  <style>
+    html, body, #map { height:100%; margin:0; }
+    body { font-family:"Meiryo UI", "Segoe UI", sans-serif; }
+    .panel {
+      position:absolute; z-index:1000; left:14px; top:14px; width:360px;
+      background:rgba(255,255,255,.94); border-radius:8px; box-shadow:0 8px 28px rgba(0,0,0,.18);
+      padding:12px; color:#1c2730;
+    }
+    h1 { font-size:17px; margin:0 0 4px; }
+    .hint { font-size:11px; line-height:1.45; color:#385166; margin:0 0 10px; }
+    .row { display:flex; gap:6px; margin:7px 0; align-items:center; flex-wrap:wrap; }
+    select, input, button {
+      font:inherit; border:1px solid #9eb2c2; border-radius:4px; background:#fff; padding:5px 7px;
+    }
+    button { cursor:pointer; }
+    button.primary { background:#0d6efd; color:white; border-color:#0d6efd; }
+    button.warn { background:#fff4df; border-color:#d79d2f; }
+    input[type="number"] { width:72px; }
+    .status { margin-top:8px; padding:8px; background:#f3f7fa; border:1px solid #d7e2ea; border-radius:6px; font-size:12px; line-height:1.45; }
+    .vertex {
+      width:12px; height:12px; border:2px solid #fff; border-radius:50%;
+      box-shadow:0 1px 5px rgba(0,0,0,.35);
+    }
+    .official-v { background:#e83e8c; }
+    .analysis-v { background:#0d6efd; }
+    .leaflet-control-attribution { font-size:10px; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel">
+  <h1>15 エリア設定</h1>
+  <p class="hint">クリックで頂点追加。頂点はドラッグで移動、クリックで選択して削除できます。</p>
+  <div class="row">
+    <select id="mode">
+      <option value="official">正式区域を編集</option>
+      <option value="analysis">分析区域を編集</option>
+    </select>
+  </div>
+  <div class="row">
+    <button id="undo">戻す</button>
+    <button id="deleteVertex">選択頂点削除</button>
+    <button id="clearLayer" class="warn">現在レイヤをクリア</button>
+  </div>
+  <div class="row">
+    <label>バッファ <input id="buffer" type="number" min="0" step="5" value="30"> m</label>
+    <button id="bufferBuild" class="primary">正式区域から分析区域生成</button>
+  </div>
+  <div class="row">
+    <button id="validate">妥当性確認</button>
+    <button id="saveGeojson" class="primary">GeoJSON保存</button>
+    <button id="loadGeojson">GeoJSON読込</button>
+    <input id="fileInput" type="file" accept=".geojson,.json" style="display:none">
+  </div>
+  <div class="row">
+    <button id="saveLocal">前回設定として保存</button>
+    <button id="loadLocal">前回設定を読込</button>
+  </div>
+  <div class="status" id="status"></div>
+</div>
+<script src="lib/leaflet.js"></script>
+<script>
+const map = L.map('map', { preferCanvas:true }).setView([35.062, 134.004], 15);
+L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', {
+  maxZoom:18,
+  attribution:'地理院タイル'
+}).addTo(map);
+
+const style = {
+  official: { color:'#e83e8c', weight:3, fillColor:'#e83e8c', fillOpacity:.16 },
+  analysis: { color:'#0d6efd', weight:3, fillColor:'#0d6efd', fillOpacity:.13 }
+};
+const state = { official:[], analysis:[], selected:null, history:[] };
+const layers = {
+  official: L.layerGroup().addTo(map),
+  analysis: L.layerGroup().addTo(map)
+};
+
+function activeMode() { return document.getElementById('mode').value; }
+function clonePoints(points) { return points.map(p => ({lat:p.lat, lng:p.lng})); }
+function snapshot() {
+  state.history.push({ official:clonePoints(state.official), analysis:clonePoints(state.analysis) });
+  if (state.history.length > 80) state.history.shift();
+}
+function setStatus(text) {
+  const areaText = name => `${name}: ${state[name].length}点`;
+  document.getElementById('status').innerHTML = `${text}<br>${areaText('official')} / ${areaText('analysis')}`;
+}
+function vertexIcon(mode, selected) {
+  return L.divIcon({
+    className:'',
+    html:`<div class="vertex ${mode}-v" style="${selected ? 'outline:3px solid #111;' : ''}"></div>`,
+    iconSize:[16,16],
+    iconAnchor:[8,8]
+  });
+}
+function redraw(mode) {
+  layers[mode].clearLayers();
+  const points = state[mode];
+  if (points.length >= 2) L.polyline(points, style[mode]).addTo(layers[mode]);
+  if (points.length >= 3) L.polygon(points, style[mode]).addTo(layers[mode]);
+  points.forEach((p, idx) => {
+    const marker = L.marker(p, {
+      draggable:true,
+      icon:vertexIcon(mode, state.selected && state.selected.mode === mode && state.selected.idx === idx)
+    }).addTo(layers[mode]);
+    marker.on('click', ev => {
+      L.DomEvent.stopPropagation(ev);
+      state.selected = { mode, idx };
+      redraw('official'); redraw('analysis');
+    });
+    marker.on('dragstart', snapshot);
+    marker.on('drag', ev => { points[idx] = ev.target.getLatLng(); redraw(mode); });
+  });
+}
+function redrawAll() {
+  redraw('official'); redraw('analysis');
+  setStatus('編集できます。');
+}
+map.on('click', ev => {
+  snapshot();
+  state[activeMode()].push(ev.latlng);
+  state.selected = null;
+  redraw(activeMode());
+  setStatus('頂点を追加しました。');
+});
+document.getElementById('undo').onclick = () => {
+  const old = state.history.pop();
+  if (!old) return setStatus('戻せる操作がありません。');
+  state.official = old.official;
+  state.analysis = old.analysis;
+  state.selected = null;
+  redrawAll();
+};
+document.getElementById('deleteVertex').onclick = () => {
+  if (!state.selected) return setStatus('削除する頂点を選択してください。');
+  snapshot();
+  state[state.selected.mode].splice(state.selected.idx, 1);
+  state.selected = null;
+  redrawAll();
+};
+document.getElementById('clearLayer').onclick = () => {
+  snapshot();
+  state[activeMode()] = [];
+  state.selected = null;
+  redrawAll();
+};
+
+function mercator(p) {
+  const r = 6378137;
+  return { x:r * p.lng * Math.PI / 180, y:r * Math.log(Math.tan(Math.PI / 4 + p.lat * Math.PI / 360)) };
+}
+function lonlat(p) {
+  const r = 6378137;
+  return L.latLng((2 * Math.atan(Math.exp(p.y / r)) - Math.PI / 2) * 180 / Math.PI, p.x / r * 180 / Math.PI);
+}
+function centroid(points) {
+  const ms = points.map(mercator);
+  return {
+    x: ms.reduce((a,p) => a + p.x, 0) / ms.length,
+    y: ms.reduce((a,p) => a + p.y, 0) / ms.length
+  };
+}
+document.getElementById('bufferBuild').onclick = () => {
+  if (state.official.length < 3) return setStatus('正式区域を3点以上で作成してください。');
+  snapshot();
+  const d = Number(document.getElementById('buffer').value || 0);
+  const c = centroid(state.official);
+  state.analysis = state.official.map(p => {
+    const m = mercator(p);
+    const vx = m.x - c.x, vy = m.y - c.y;
+    const len = Math.hypot(vx, vy) || 1;
+    return lonlat({ x:m.x + vx / len * d, y:m.y + vy / len * d });
+  });
+  redrawAll();
+  setStatus('分析区域を生成しました。必要に応じて頂点を調整してください。');
+};
+
+function selfIntersects(points) {
+  function ccw(a,b,c) { return (c.lat-a.lat)*(b.lng-a.lng) > (b.lat-a.lat)*(c.lng-a.lng); }
+  function hit(a,b,c,d) { return ccw(a,c,d) !== ccw(b,c,d) && ccw(a,b,c) !== ccw(a,b,d); }
+  for (let i=0; i<points.length; i++) {
+    const a = points[i], b = points[(i+1)%points.length];
+    for (let j=i+1; j<points.length; j++) {
+      if (Math.abs(i-j) <= 1 || (i === 0 && j === points.length - 1)) continue;
+      if (hit(a, b, points[j], points[(j+1)%points.length])) return true;
+    }
+  }
+  return false;
+}
+function validate() {
+  if (state.official.length < 3) return '正式区域が3点未満です。';
+  if (state.analysis.length < 3) return '分析区域が3点未満です。';
+  if (selfIntersects(state.official)) return '正式区域が自己交差しています。';
+  if (selfIntersects(state.analysis)) return '分析区域が自己交差しています。';
+  return '';
+}
+document.getElementById('validate').onclick = () => setStatus(validate() || '問題は見つかりませんでした。');
+
+function ring(points) {
+  const coords = points.map(p => [Number(p.lng.toFixed(9)), Number(p.lat.toFixed(9))]);
+  if (coords.length) coords.push(coords[0]);
+  return coords;
+}
+function toGeoJSON() {
+  const err = validate();
+  if (err) throw new Error(err);
+  return {
+    type:'FeatureCollection',
+    metadata:{ tool:'15_area_builder', saved_at:new Date().toISOString() },
+    features:[
+      { type:'Feature', properties:{ area15_role:'official_area', name:'正式区域' }, geometry:{ type:'Polygon', coordinates:[ring(state.official)] } },
+      { type:'Feature', properties:{ area15_role:'analysis_area', name:'分析区域' }, geometry:{ type:'Polygon', coordinates:[ring(state.analysis)] } }
+    ]
+  };
+}
+function loadFeatureCollection(data) {
+  const next = { official:[], analysis:[] };
+  (data.features || []).forEach(f => {
+    const role = ((f.properties || {}).area15_role || (f.properties || {}).role || '').toLowerCase();
+    const geom = f.geometry || {};
+    if (!['official_area', 'analysis_area'].includes(role) || geom.type !== 'Polygon') return;
+    const points = (geom.coordinates[0] || []).slice();
+    if (points.length && points[0][0] === points[points.length - 1][0] && points[0][1] === points[points.length - 1][1]) points.pop();
+    next[role === 'official_area' ? 'official' : 'analysis'] = points.map(c => L.latLng(c[1], c[0]));
+  });
+  snapshot();
+  state.official = next.official;
+  state.analysis = next.analysis;
+  state.selected = null;
+  redrawAll();
+  const bounds = L.latLngBounds([...state.official, ...state.analysis]);
+  if (bounds.isValid()) map.fitBounds(bounds.pad(.15));
+}
+document.getElementById('saveGeojson').onclick = () => {
+  try {
+    const blob = new Blob([JSON.stringify(toGeoJSON(), null, 2)], {type:'application/geo+json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '15_area.geojson';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setStatus('GeoJSONを保存しました。');
+  } catch (err) {
+    setStatus(err.message);
+  }
+};
+document.getElementById('loadGeojson').onclick = () => document.getElementById('fileInput').click();
+document.getElementById('fileInput').onchange = ev => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try { loadFeatureCollection(JSON.parse(reader.result)); setStatus('GeoJSONを読み込みました。'); }
+    catch (err) { setStatus('GeoJSON読込エラー: ' + err.message); }
+  };
+  reader.readAsText(file);
+};
+document.getElementById('saveLocal').onclick = () => {
+  try { localStorage.setItem('etc_area15_builder', JSON.stringify(toGeoJSON())); setStatus('前回設定として保存しました。'); }
+  catch (err) { setStatus(err.message); }
+};
+document.getElementById('loadLocal').onclick = () => {
+  const text = localStorage.getItem('etc_area15_builder');
+  if (!text) return setStatus('保存済みの前回設定がありません。');
+  try { loadFeatureCollection(JSON.parse(text)); setStatus('前回設定を読み込みました。'); }
+  catch (err) { setStatus('前回設定の読込エラー: ' + err.message); }
+};
+redrawAll();
+</script>
+</body>
+</html>
