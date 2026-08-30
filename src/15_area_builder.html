@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>15 エリア設定</title>
-  <link rel="stylesheet" href="lib/leaflet.css">
+  <link rel="stylesheet" href="leaflet/leaflet.css">
   <style>
     html, body, #map { height:100%; margin:0; }
     body { font-family:"Meiryo UI", "Segoe UI", sans-serif; }
@@ -65,7 +65,7 @@
   </div>
   <div class="status" id="status"></div>
 </div>
-<script src="lib/leaflet.js"></script>
+<script src="leaflet/leaflet.js"></script>
 <script>
 const map = L.map('map', { preferCanvas:true }).setView([35.062, 134.004], 15);
 L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', {
