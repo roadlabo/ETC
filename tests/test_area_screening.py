@@ -129,6 +129,8 @@ class AreaScreeningTest(unittest.TestCase):
                 rows = list(csv.reader(fh))
             self.assertEqual(rows[0][6], "20250101080500")
             self.assertEqual(rows[-1][6], "20250101081500")
+            self.assertEqual(rows[0][12], "0")
+            self.assertEqual(rows[-1][12], "1")
             self.assertEqual(summaries[0]["traffic_class"], "gate_to_gate_through")
 
     def test_outside_to_inside_end_inside_to_outside_all_inside_all_outside(self):

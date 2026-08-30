@@ -521,8 +521,16 @@ def write_subtrip_csv(out_dir: Path, seq_no: int, subtrip_id: str, points: Seque
     out_path = out_dir / filename
     with out_path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.writer(fh)
-        for point in points:
+        for idx, point in enumerate(points):
             base = list(point.values[:16]) + [""] * max(0, 16 - len(point.values))
+            if len(base) <= FLAG_INDEX:
+                base.extend([""] * (FLAG_INDEX + 1 - len(base)))
+            if idx == 0:
+                base[FLAG_INDEX] = "0"
+            elif idx == len(points) - 1:
+                base[FLAG_INDEX] = "1"
+            else:
+                base[FLAG_INDEX] = ""
             writer.writerow(base[:16])
     return out_path
 
