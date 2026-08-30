@@ -10,13 +10,14 @@ SRC_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from PyQt6.QtCore import QProcess, QRect, QSize, Qt, QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import QProcess, QPropertyAnimation, QRect, QSize, Qt, QTimer
+from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QFileDialog,
     QFrame,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -32,8 +33,10 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from common.ui.logo_link import ClickableLogoLabel
 
 APP_TITLE = "20_第２スクリーニング（ルート通過トリップの抽出）"
+UI_LOGO_FILENAME = "logo_20_route_trip_extractor.png"
 FOLDER_ROUTE = "10_ルート(Route)データ"
 FOLDER_OUT = "20_第２スクリーニング(ルート)"
 
@@ -166,6 +169,10 @@ class MainWindow(QMainWindow):
         self.cards: dict[str, RouteCard] = {}
         self._next_pct_log = 10
         self._telemetry_running = False
+        self.splash = None
+        self.corner_logo = None
+        self._pix_small = None
+        self._logo_anim = None
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._update_time_boxes)
@@ -173,7 +180,60 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._set_style()
+        QTimer.singleShot(0, self._init_logo_overlay)
         self.log_info("プロジェクトフォルダと第1スクリーニングフォルダを選択してください。")
+
+    def _resolve_logo_path(self) -> Path | None:
+        logo_path = SRC_DIR / "assets" / "logos" / UI_LOGO_FILENAME
+        return logo_path if logo_path.exists() else None
+
+    def _init_logo_overlay(self) -> None:
+        logo_path = self._resolve_logo_path()
+        if not logo_path:
+            return
+        pixmap = QPixmap(str(logo_path))
+        if pixmap.isNull():
+            return
+        self._pix_small = pixmap.scaledToHeight(76, Qt.TransformationMode.SmoothTransformation)
+        if self.corner_logo:
+            self.corner_logo.setPixmap(self._pix_small)
+            self.corner_logo.setFixedSize(self._pix_small.size())
+
+        pix_big = pixmap.scaledToHeight(300, Qt.TransformationMode.SmoothTransformation)
+        self.splash = QLabel(self)
+        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash.setStyleSheet("background: transparent;")
+        self.splash.setPixmap(pix_big)
+        self.splash.adjustSize()
+        self.splash.move((self.width() - self.splash.width()) // 2, (self.height() - self.splash.height()) // 2)
+        self.splash.show()
+
+        effect = QGraphicsOpacityEffect(self.splash)
+        self.splash.setGraphicsEffect(effect)
+        fade_in = QPropertyAnimation(effect, b"opacity", self)
+        fade_in.setDuration(500)
+        fade_in.setStartValue(0.0)
+        fade_in.setEndValue(1.0)
+        self._logo_anim = fade_in
+
+        def start_fade_out() -> None:
+            fade_out = QPropertyAnimation(effect, b"opacity", self)
+            fade_out.setDuration(500)
+            fade_out.setStartValue(1.0)
+            fade_out.setEndValue(0.0)
+            fade_out.finished.connect(self._show_header_logo)
+            self._logo_anim = fade_out
+            fade_out.start()
+
+        fade_in.finished.connect(lambda: QTimer.singleShot(2600, start_fade_out))
+        fade_in.start()
+
+    def _show_header_logo(self) -> None:
+        if self.splash is not None:
+            self.splash.deleteLater()
+            self.splash = None
+        if self.corner_logo is not None and self._pix_small is not None:
+            self.corner_logo.show()
 
     def _get_root_dir(self) -> str:
         here = os.path.abspath(os.path.dirname(__file__))
@@ -228,7 +288,13 @@ class MainWindow(QMainWindow):
             "抽出結果は第2スクリーニング（ルート）フォルダへ1トリップ1CSVで保存します。"
         )
         about.setWordWrap(True)
-        v.addWidget(about)
+        header = QHBoxLayout()
+        header.addWidget(about, 1)
+        self.corner_logo = ClickableLogoLabel(self)
+        self.corner_logo.setStyleSheet("background: transparent;")
+        self.corner_logo.hide()
+        header.addWidget(self.corner_logo, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        v.addLayout(header)
 
         steps = QGridLayout()
         steps.setHorizontalSpacing(10)

@@ -24,6 +24,7 @@ from common.news.news_fetcher import news_debug
 from common.ui.logo_link import ClickableLogoLabel
 
 APP_TITLE = "10 ルートファイル作成ツール"
+UI_LOGO_FILENAME = "logo_10_route_sampler.png"
 FOLDER_ROUTE = "10_ルート(Route)データ"
 DUPLICATE_MSG = "そのルート名は既に存在します。別名で保存してください。"
 COL_NAME, COL_CSV, COL_PITCH, COL_POINTS = range(4)
@@ -122,8 +123,10 @@ class MainWindow(QMainWindow):
 
     def _resolve_logo_path(self) -> Path | None:
         base = Path(__file__).resolve().parent
-        p = base / "logo.png"
-        return p if p.exists() else None
+        for p in (base / "assets" / "logos" / UI_LOGO_FILENAME, base / "logo.png"):
+            if p.exists():
+                return p
+        return None
 
     def _init_logo_overlay(self) -> None:
         logo_path = self._resolve_logo_path()
