@@ -12,13 +12,14 @@ SRC_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from PyQt6.QtCore import QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import QPropertyAnimation, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QDoubleSpinBox,
     QFileDialog,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -32,6 +33,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from common.ui.logo_link import ClickableLogoLabel
 
 MODULE_PATH = SRC_DIR / "15_area_screening.py"
 spec = importlib.util.spec_from_file_location("area15", MODULE_PATH)
@@ -41,6 +43,7 @@ sys.modules[spec.name] = area15
 spec.loader.exec_module(area15)
 
 APP_TITLE = "15_エリア第1.5スクリーニング"
+UI_LOGO_FILENAME = "logo_15_area_screening.png"
 STATE_PATH = Path.home() / ".etc_area15_screening_ui.json"
 
 
@@ -75,9 +78,92 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._set_style()
         self._load_state()
+        self.splash = None
+        self._pix_small = None
+        self._logo_phase = ""
+        self._logo_anim = None
+        self._corner_logo_visible = False
+        QTimer.singleShot(0, self._init_logo_overlay)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
         self.timer.start(1000)
+
+    def _resolve_logo_path(self) -> Path | None:
+        logo_path = SRC_DIR / "assets" / "logos" / UI_LOGO_FILENAME
+        return logo_path if logo_path.exists() else None
+
+    def _init_logo_overlay(self) -> None:
+        logo_path = self._resolve_logo_path()
+        if not logo_path:
+            return
+        pixmap = QPixmap(str(logo_path))
+        if pixmap.isNull():
+            return
+
+        pix_big = pixmap.scaledToHeight(300, Qt.TransformationMode.SmoothTransformation)
+        self._pix_small = pixmap.scaledToHeight(92, Qt.TransformationMode.SmoothTransformation)
+        self.splash = QLabel(self)
+        self.splash.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.splash.setStyleSheet("background: transparent;")
+        self.splash.setPixmap(pix_big)
+        self.splash.adjustSize()
+        self.splash.move(*self._logo_center_pos(self.splash.width(), self.splash.height()))
+        self._logo_phase = "center"
+        self.splash.show()
+
+        effect = QGraphicsOpacityEffect(self.splash)
+        self.splash.setGraphicsEffect(effect)
+        fade_in = QPropertyAnimation(effect, b"opacity", self)
+        fade_in.setDuration(500)
+        fade_in.setStartValue(0.0)
+        fade_in.setEndValue(1.0)
+        self._logo_anim = fade_in
+
+        def start_fade_out() -> None:
+            fade_out = QPropertyAnimation(effect, b"opacity", self)
+            fade_out.setDuration(500)
+            fade_out.setStartValue(1.0)
+            fade_out.setEndValue(0.0)
+            fade_out.finished.connect(self._show_corner_logo)
+            self._logo_anim = fade_out
+            fade_out.start()
+
+        fade_in.finished.connect(lambda: QTimer.singleShot(2600, start_fade_out))
+        fade_in.start()
+
+    def _show_corner_logo(self) -> None:
+        old = self.splash
+        if old is not None:
+            old.deleteLater()
+        if not self._pix_small:
+            return
+        self.splash = ClickableLogoLabel(self)
+        self.splash.setStyleSheet("background: transparent;")
+        self.splash.setPixmap(self._pix_small)
+        self.splash.adjustSize()
+        self.splash.move(*self._logo_corner_pos(self.splash.width(), self.splash.height()))
+        self.splash.show()
+        self.splash.raise_()
+        self._logo_phase = "corner"
+        self._corner_logo_visible = True
+
+    def _logo_center_pos(self, w: int, h: int) -> tuple[int, int]:
+        r = self.rect()
+        return (r.width() - w) // 2, (r.height() - h) // 2
+
+    def _logo_corner_pos(self, w: int, h: int) -> tuple[int, int]:
+        r = self.rect()
+        return max(8, r.width() - w - 18), 10
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        splash = getattr(self, "splash", None)
+        if splash is None:
+            return
+        if self._logo_phase == "center":
+            splash.move(*self._logo_center_pos(splash.width(), splash.height()))
+        elif self._logo_phase == "corner" and self._corner_logo_visible:
+            splash.move(*self._logo_corner_pos(splash.width(), splash.height()))
 
     def _build_ui(self) -> None:
         root = QWidget()
