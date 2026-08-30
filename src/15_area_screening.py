@@ -6,6 +6,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -87,6 +88,7 @@ class ScreeningConfig:
     merge_gap_sec: float = 10.0
     gate_assign_max_distance_m: float = 35.0
     od_interval_minutes: int = 60
+    max_check_geojson_features: int = 5000
 
 
 @dataclass
@@ -508,6 +510,23 @@ def hour_bucket(dt: datetime | None, minutes: int) -> str:
     return f"{start:%Y%m%d %H:%M}-{end:%H:%M}"
 
 
+def safe_filename(text: str, max_len: int = 96) -> str:
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", str(text)).strip(" ._")
+    return (safe or "subtrip")[:max_len]
+
+
+def write_subtrip_csv(out_dir: Path, seq_no: int, subtrip_id: str, points: Sequence[TripPoint]) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"area15_{seq_no:06d}_{safe_filename(subtrip_id)}.csv"
+    out_path = out_dir / filename
+    with out_path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        for point in points:
+            base = list(point.values[:16]) + [""] * max(0, 16 - len(point.values))
+            writer.writerow(base[:16])
+    return out_path
+
+
 def iter_csv_files(path: Path, recursive: bool) -> list[Path]:
     if path.is_file():
         return [path]
@@ -529,14 +548,15 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
         "merge_gap_sec": config.merge_gap_sec,
         "gate_assign_max_distance_m": config.gate_assign_max_distance_m,
         "od_interval_minutes": config.od_interval_minutes,
+        "max_check_geojson_features": config.max_check_geojson_features,
         "note": "出力値はETC2.0観測トリップ数であり、実交通量ではありません。",
     }
     (config.output_dir / "15_area_screening_settings.json").write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    point_header = [f"col_{i:02d}" for i in range(16)] + EXTRA_POINT_COLUMNS
     summary_header = [
         "original_trip_id",
         "subtrip_id",
+        "subtrip_csv",
         "entry_gate_id",
         "exit_gate_id",
         "entry_time",
@@ -549,24 +569,25 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
         "traffic_class",
         "note",
     ]
-    points_path = config.output_dir / "15_subtrip_points.csv"
+    subtrip_csv_dir = config.output_dir / "15_area_subtrip_csv"
     summary_path = config.output_dir / "15_subtrip_summary.csv"
     excluded_path = config.output_dir / "15_excluded_trips.csv"
     unassigned_path = config.output_dir / "15_unassigned_gate_points.csv"
     multi_path = config.output_dir / "15_multi_entry_trips.csv"
     geojson_path = config.output_dir / "15_subtrip_check.geojson"
-    features: list[dict] = []
+    check_features: list[dict] = []
+    skipped_check_features = 0
     summaries: list[dict[str, str]] = []
     od_counts: dict[tuple[str, str, str], int] = {}
     gate_counts: dict[tuple[str, str, str], int] = {}
 
-    with points_path.open("w", encoding="utf-8-sig", newline="") as pfh, summary_path.open("w", encoding="utf-8-sig", newline="") as sfh, excluded_path.open("w", encoding="utf-8-sig", newline="") as efh, unassigned_path.open("w", encoding="utf-8-sig", newline="") as ufh, multi_path.open("w", encoding="utf-8-sig", newline="") as mfh:
-        point_writer = csv.writer(pfh)
+    subtrip_file_seq = 0
+
+    with summary_path.open("w", encoding="utf-8-sig", newline="") as sfh, excluded_path.open("w", encoding="utf-8-sig", newline="") as efh, unassigned_path.open("w", encoding="utf-8-sig", newline="") as ufh, multi_path.open("w", encoding="utf-8-sig", newline="") as mfh:
         summary_writer = csv.writer(sfh)
         excluded_writer = csv.writer(efh)
         unassigned_writer = csv.writer(ufh)
         multi_writer = csv.writer(mfh)
-        point_writer.writerow(point_header)
         summary_writer.writerow(summary_header)
         excluded_writer.writerow(["source_file", "original_trip_id", "reason"])
         unassigned_writer.writerow(["source_file", "original_trip_id", "subtrip_id", "boundary_point_type", "lon", "lat", "timestamp"])
@@ -622,6 +643,8 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
                     dist = polyline_distance_m(sub)
                     duration = (sub[-1].timestamp - sub[0].timestamp).total_seconds() if sub[0].timestamp and sub[-1].timestamp else 0.0
                     stats.subtrips += 1
+                    subtrip_file_seq += 1
+                    subtrip_path = write_subtrip_csv(subtrip_csv_dir, subtrip_file_seq, sid, sub)
                     bucket = hour_bucket(sub[0].timestamp, config.od_interval_minutes)
                     od_counts[(entry_gate or "AREA_START", exit_gate or "AREA_END", bucket)] = od_counts.get((entry_gate or "AREA_START", exit_gate or "AREA_END", bucket), 0) + 1
                     if entry_gate:
@@ -632,6 +655,7 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
                     summary_row = {
                         "original_trip_id": oid,
                         "subtrip_id": sid,
+                        "subtrip_csv": str(subtrip_path),
                         "entry_gate_id": entry_gate,
                         "exit_gate_id": exit_gate,
                         "entry_time": format_timestamp(sub[0].timestamp, sub[0].timestamp_text),
@@ -646,33 +670,20 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
                     }
                     summaries.append(summary_row)
                     summary_writer.writerow([summary_row[h] for h in summary_header])
-                    for seq, p in enumerate(sub, start=1):
+                    for p in sub:
                         if p.gate_id == "UNASSIGNED":
                             stats.unassigned_gate_points += 1
                             unassigned_writer.writerow([str(csv_path), oid, sid, p.boundary_type, f"{p.lon:.9f}", f"{p.lat:.9f}", format_timestamp(p.timestamp, p.timestamp_text)])
-                        base = list(p.values[:16]) + [""] * max(0, 16 - len(p.values))
-                        point_writer.writerow(
-                            base[:16]
-                            + [
-                                oid,
-                                sid,
-                                seq,
-                                str(p.synthetic),
-                                p.boundary_type,
-                                p.gate_id,
-                                p.gate_direction,
-                                klass,
-                                str(entered_official),
-                                str(perimeter_only),
-                            ]
+                    if len(check_features) < config.max_check_geojson_features:
+                        check_features.append(
+                            {
+                                "type": "Feature",
+                                "properties": summary_row,
+                                "geometry": {"type": "LineString", "coordinates": [[p.lon, p.lat] for p in sub]},
+                            }
                         )
-                    features.append(
-                        {
-                            "type": "Feature",
-                            "properties": summary_row,
-                            "geometry": {"type": "LineString", "coordinates": [[p.lon, p.lat] for p in sub]},
-                        }
-                    )
+                    else:
+                        skipped_check_features += 1
             if progress_cb:
                 progress_cb("PROCESS", file_index, len(files), {"file": csv_path.name, "subtrips": stats.subtrips, "excluded": stats.excluded})
 
@@ -698,7 +709,21 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
         for (gate, direction), count in sorted(all_counts.items()):
             writer.writerow([gate, direction, "ALL", count])
 
-    geojson_path.write_text(json.dumps({"type": "FeatureCollection", "features": features}, ensure_ascii=False), encoding="utf-8")
+    geojson_path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "metadata": {
+                    "note": "品質確認用GeoJSONです。大量データでは先頭側の一部のみを出力します。",
+                    "max_features": config.max_check_geojson_features,
+                    "skipped_features": skipped_check_features,
+                },
+                "features": check_features,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     elapsed = time.time() - started
     log_lines = [
         "=== 15 エリア第1.5スクリーニング ===",
@@ -709,6 +734,7 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
         f"files: {stats.files}",
         f"original_trips: {stats.original_trips}",
         f"subtrips: {stats.subtrips}",
+        f"subtrip_csv_dir: {subtrip_csv_dir}",
         f"excluded: {stats.excluded}",
         f"unassigned_gate_points: {stats.unassigned_gate_points}",
         f"multi_entry_trips: {stats.multi_entry_trips}",
@@ -720,7 +746,7 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
         progress_cb("DONE", len(files), len(files), {"subtrips": stats.subtrips, "excluded": stats.excluded, "unassigned": stats.unassigned_gate_points})
     return {
         "output_dir": str(config.output_dir),
-        "points_csv": str(points_path),
+        "subtrip_csv_dir": str(subtrip_csv_dir),
         "summary_csv": str(summary_path),
         "od_csv": str(od_path),
         "gate_volume_csv": str(gate_path),
@@ -746,6 +772,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--merge-gap-sec", type=float, default=10.0)
     parser.add_argument("--gate-assign-max-distance-m", type=float, default=35.0)
     parser.add_argument("--od-interval-minutes", type=int, choices=[15, 30, 60], default=60)
+    parser.add_argument("--max-check-geojson-features", type=int, default=5000, help="品質確認GeoJSONへ出力するサブトリップ数の上限")
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -763,6 +790,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         merge_gap_sec=args.merge_gap_sec,
         gate_assign_max_distance_m=args.gate_assign_max_distance_m,
         od_interval_minutes=args.od_interval_minutes,
+        max_check_geojson_features=args.max_check_geojson_features,
     )
     result = run_screening(config, progress_cb=lambda stage, done, total, extra: print(f"{stage}: {done}/{total} {extra}", flush=True))
     print(json.dumps(result["stats"], ensure_ascii=False))

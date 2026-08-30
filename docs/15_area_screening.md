@@ -4,6 +4,8 @@
 
 第1スクリーニングで抽出した完全トリップCSVから、指定した分析区域を通行した部分だけを切り出します。区域境界をまたぐ連続2点間では、線分と境界の交点を人工点として作成し、その点をエリア内サブトリップの起点または終点にします。
 
+主出力は、第2スクリーニングと同じ考え方で **1サブトリップ1CSV** です。何十万トリップ規模でも扱えるよう、全トリップ点列を1つのExcelや1つの巨大CSVへまとめる設計にはしていません。
+
 出力する件数は **ETC2.0観測トリップ数** です。サンプルデータから得られた観測件数であり、道路上の実交通量そのものではありません。
 
 ## 第1、第1.5、第2スクリーニングの関係
@@ -138,14 +140,14 @@ runtime\python\python.exe src\15_area_screening.py --input "D:\_EtcData\out(1st)
 
 ## 出力ファイル
 
-- `15_subtrip_points.csv`: サブトリップ軌跡。元の16列を `col_00` から `col_15` とし、追加列を末尾に付けます。
-- `15_subtrip_summary.csv`: 1サブトリップ1行の集計表。
+- `15_area_subtrip_csv/`: エリア内に切り出したサブトリップCSVの保存フォルダ。第2スクリーニングと同様、1サブトリップ1CSVです。境界交点の人工点を含め、元の様式1-2互換の16列で保存します。
+- `15_subtrip_summary.csv`: 1サブトリップ1行の索引・集計表。各サブトリップCSVのパス、流入ゲート、流出ゲート、所要時間、距離などを持ちます。
 - `15_gate_od.csv`: 流入ゲート、流出ゲート、時間帯別のETC2.0観測トリップ数。`ALL` 行も出力します。
 - `15_gate_volume.csv`: ゲート別・方向別・時間帯別のETC2.0観測トリップ数。
 - `15_excluded_trips.csv`: 除外トリップと理由。
 - `15_unassigned_gate_points.csv`: ゲート未割当の境界点。
 - `15_multi_entry_trips.csv`: 1トリップで複数回出入りした一覧。
-- `15_subtrip_check.geojson`: 地図確認用のサブトリップLineString。
+- `15_subtrip_check.geojson`: 地図確認用のサブトリップLineString。大量データでは先頭側の一部のみ出力します。
 - `15_area_screening_settings.json`: 解析条件の記録。
 - `15_area_screening_log_YYYYMMDD_HHMMSS.txt`: 件数と警告のログ。
 

@@ -86,7 +86,7 @@ class MainWindow(QMainWindow):
         main = QVBoxLayout(root)
 
         about = QLabel(
-            "第1スクリーニング出力の各トリップから、指定した分析区域を通行する部分だけを切り出します。"
+            "第1スクリーニング出力の各トリップから、指定した分析区域を通行する部分だけを切り出し、1サブトリップ1CSVで保存します。"
             "集計値はETC2.0観測トリップ数であり、実交通量ではありません。"
         )
         about.setWordWrap(True)

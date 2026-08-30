@@ -79,7 +79,10 @@
 </div>
 <script>
 const map = L.map('map').setView([35.069095, 134.004512], 14);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {maxZoom:19, attribution:'© OpenStreetMap contributors © CARTO'}).addTo(map);
+L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', {
+  maxZoom:18,
+  attribution:'地理院タイル'
+}).addTo(map);
 
 const state = { official:[], analysis:[], oldRoad:[], gates:[], gateDraft:[], selected:null, history:[] };
 const layers = { official:L.layerGroup().addTo(map), analysis:L.layerGroup().addTo(map), oldRoad:L.layerGroup().addTo(map), gates:L.layerGroup().addTo(map), draft:L.layerGroup().addTo(map) };

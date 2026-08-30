@@ -108,26 +108,27 @@ def run_case(tmp: Path, files: dict[str, list[list[str]]], include_gate: bool = 
     )
     with Path(result["summary_csv"]).open("r", encoding="utf-8-sig", newline="") as fh:
         summaries = list(csv.DictReader(fh))
-    with Path(result["points_csv"]).open("r", encoding="utf-8-sig", newline="") as fh:
-        points = list(csv.DictReader(fh))
+    subtrip_files = sorted(Path(result["subtrip_csv_dir"]).glob("*.csv"))
     with Path(result["excluded_csv"]).open("r", encoding="utf-8-sig", newline="") as fh:
         excluded = list(csv.DictReader(fh))
-    return result, summaries, points, excluded
+    return result, summaries, subtrip_files, excluded
 
 
 class AreaScreeningTest(unittest.TestCase):
     def test_outside_inside_outside_interpolates_boundary_and_assigns_gates(self):
         with tempfile.TemporaryDirectory() as td:
-            result, summaries, points, _ = run_case(
+            result, summaries, subtrip_files, _ = run_case(
                 Path(td),
                 {"trip.csv": [row("12345", 1, "20250101080000", 134.995, 35.005), row("12345", 1, "20250101081000", 135.005, 35.005), row("12345", 1, "20250101082000", 135.015, 35.005)]},
             )
             self.assertEqual(result["stats"]["subtrips"], 1)
             self.assertEqual(summaries[0]["entry_gate_id"], "W")
             self.assertEqual(summaries[0]["exit_gate_id"], "E")
-            synthetic = [p for p in points if p["is_synthetic_boundary_point"] == "True"]
-            self.assertEqual([p["boundary_point_type"] for p in synthetic], ["entry", "exit"])
-            self.assertEqual(synthetic[0]["col_06"], "20250101080500")
+            self.assertEqual(len(subtrip_files), 1)
+            with subtrip_files[0].open("r", encoding="utf-8", newline="") as fh:
+                rows = list(csv.reader(fh))
+            self.assertEqual(rows[0][6], "20250101080500")
+            self.assertEqual(rows[-1][6], "20250101081500")
             self.assertEqual(summaries[0]["traffic_class"], "gate_to_gate_through")
 
     def test_outside_to_inside_end_inside_to_outside_all_inside_all_outside(self):
