@@ -130,17 +130,17 @@ def find_reusable(root, z, x, y):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="指定範囲内の国土地理院 淡色地図タイルを保存します")
-    parser.add_argument("boundary", type=Path, help="対象範囲の Polygon/MultiPolygon GeoJSON")
+    parser = argparse.ArgumentParser(description="Download GSI pale map tiles within a supplied boundary.")
+    parser.add_argument("boundary", type=Path, help="Polygon/MultiPolygon GeoJSON boundary")
     parser.add_argument("--output", type=Path, default=Path(__file__).parent / "tiles" / "gsi_pale")
-    parser.add_argument("--reuse", type=Path, help="既存タイルを先に探すフォルダー")
+    parser.add_argument("--reuse", type=Path, help="folder to search for existing tiles first")
     parser.add_argument("--min-zoom", type=int, default=9)
     parser.add_argument("--max-zoom", type=int, default=18)
-    parser.add_argument("--delay", type=float, default=.05, help="ダウンロード間隔（秒）")
+    parser.add_argument("--delay", type=float, default=.05, help="download interval in seconds")
     args = parser.parse_args(argv)
     rings = list(iter_rings(json.loads(args.boundary.read_text(encoding="utf-8-sig"))))
     if not rings:
-        parser.error("GeoJSON に Polygon または MultiPolygon がありません")
+        parser.error("GeoJSON does not contain a Polygon or MultiPolygon")
     copied = downloaded = skipped = 0
     for z in range(args.min_zoom, args.max_zoom + 1):
         for x, y in candidate_tiles(rings, z):
@@ -167,7 +167,7 @@ def main(argv=None):
                 temporary.unlink(missing_ok=True)
             downloaded += 1
             time.sleep(args.delay)
-    print(f"完了: 再利用={copied}, ダウンロード={downloaded}, 既存={skipped}, 保存先={args.output}")
+    print(f"Done: reused={copied}, downloaded={downloaded}, existing={skipped}, output={args.output}")
 
 
 if __name__ == "__main__":
