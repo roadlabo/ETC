@@ -1134,12 +1134,12 @@ def main(argv: Sequence[str]) -> None:
 
     busy = make_busy_dialog("起動中", "Qt初期化中…（初回は時間がかかることがあります）")
 
-    # インターネット未接続通知（既存白背景ロジックは変更しない）
+    # インターネット未接続通知
     if not is_internet_available():
         QMessageBox.information(
             None,
             "オフライン表示",
-            "インターネット接続が無いため白背景で表示します。"
+            "インターネット接続がありません。スタンドアロン用地図を用います。"
         )
 
     initial_directory = Path(folder_arg) if folder_arg else None

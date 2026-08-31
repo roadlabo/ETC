@@ -979,7 +979,7 @@ function offsetPoint(a, b, side, meters) {{
 }}
 function initFallbackMap() {{
   const mapEl = document.getElementById('map');
-  mapEl.innerHTML = '<svg id="fallbackSvg" xmlns="http://www.w3.org/2000/svg"><g id="fallbackLayer"></g></svg><div style="position:absolute;right:12px;bottom:12px;background:#ffffffdd;padding:4px 8px;border-radius:4px;font-size:12px;">背景地図なし / ルート形状のみ</div>';
+  mapEl.innerHTML = '<svg id="fallbackSvg" xmlns="http://www.w3.org/2000/svg"><g id="fallbackLayer"></g></svg><div style="position:absolute;right:12px;bottom:12px;background:#ffffffdd;padding:4px 8px;border-radius:4px;font-size:12px;">インターネット接続がありません。スタンドアロン用地図を用います。</div>';
   const bounds = MANIFEST.bounds || {{}};
   const minLon = Number(bounds.min_lon ?? 139.7);
   const maxLon = Number(bounds.max_lon ?? 139.8);

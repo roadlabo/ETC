@@ -1014,7 +1014,7 @@ map.fitBounds(poly.getBounds(), {{ padding: [20, 20] }});
         except Exception:
             self.map_stack.setCurrentWidget(self.map_widget)
             self.lbl_map_mode.setText("地図表示: SIMPLE")
-            self.append_uiwarn("ベースマップ取得に失敗したため簡易地図表示に切替")
+            self.append_uiwarn("インターネット接続がありません。スタンドアロン用地図を用います。")
 
     def _render_web_map_aux(
         self,
@@ -1133,7 +1133,7 @@ if (zonesGroup.getLayers().length > 0) {{
         except Exception:
             self.map_stack.setCurrentWidget(self.map_widget)
             self.lbl_map_mode.setText("地図表示: SIMPLE")
-            self.append_uiwarn("ベースマップ取得に失敗したため簡易地図表示に切替")
+            self.append_uiwarn("インターネット接続がありません。スタンドアロン用地図を用います。")
 
     def increment_zone_hit_count(self, zone_name: str) -> None:
         resolved_name = zone_name

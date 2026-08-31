@@ -1066,12 +1066,12 @@ class BranchCheckWindow(QMainWindow):
         self.LOGO_CORNER_DY = -4
         QTimer.singleShot(0, self._init_logo_overlay)
 
-        # インターネット未接続時は通知のみ（地図ロジックは既存のまま）
+        # インターネット未接続時は通知のみ
         if not is_internet_available():
             QMessageBox.information(
                 self,
                 "オフライン表示",
-                "インターネット接続が無いため白背景で表示します。"
+                "インターネット接続がありません。スタンドアロン用地図を用います。"
             )
 
         # 初期選択
