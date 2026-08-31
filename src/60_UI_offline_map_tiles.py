@@ -1,21 +1,22 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from PyQt6.QtCore import QProcess, Qt, QTimer
+from PyQt6.QtCore import QObject, QProcess, QTimer, QUrl, Qt, pyqtSlot
 from PyQt6.QtGui import QFont, QIcon, QPixmap
+from PyQt6.QtWebChannel import QWebChannel
+from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import (
     QApplication,
-    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -27,6 +28,7 @@ from PyQt6.QtWidgets import (
 
 SRC_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SRC_DIR.parent
+TILE_DIR = SRC_DIR / "tiles" / "gsi_pale"
 LOGO_FILENAME = "logo_60_offline_map_tiles.png"
 GSI_TEST_URL = "https://cyberjapandata.gsi.go.jp/xyz/pale/9/451/198.png"
 OFFLINE_MESSAGE = "現在、オフライン環境です。インターネット環境で立ち上げなおしてください。"
@@ -43,15 +45,50 @@ def can_connect_to_gsi(timeout: float = 3.0) -> bool:
         return False
 
 
+def rectangle_geojson(bounds: tuple[float, float, float, float]) -> dict:
+    south, west, north, east = bounds
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"name": "offline_tile_area"},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[
+                        [west, south],
+                        [east, south],
+                        [east, north],
+                        [west, north],
+                        [west, south],
+                    ]],
+                },
+            }
+        ],
+    }
+
+
+class MapBridge(QObject):
+    def __init__(self, window: "MainWindow") -> None:
+        super().__init__()
+        self.window = window
+
+    @pyqtSlot(float, float, float, float)
+    def setBounds(self, south: float, west: float, north: float, east: float) -> None:
+        self.window.set_map_bounds(south, west, north, east)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.process: QProcess | None = None
+        self.map_bounds: tuple[float, float, float, float] | None = None
         self.setWindowTitle("60_オフライン地図作成")
-        self.resize(980, 720)
+        self.resize(1280, 860)
         self._set_icon()
         self._build_ui()
         self._set_style()
+        self._load_map()
         QTimer.singleShot(200, self.check_network_on_startup)
 
     def _set_icon(self) -> None:
@@ -63,19 +100,19 @@ class MainWindow(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(22, 18, 22, 18)
-        outer.setSpacing(14)
+        outer.setContentsMargins(20, 16, 20, 16)
+        outer.setSpacing(12)
 
         header = QHBoxLayout()
         logo = QLabel()
         logo_path = SRC_DIR / "assets" / "logos" / LOGO_FILENAME
         if logo_path.exists():
-            pix = QPixmap(str(logo_path)).scaledToHeight(88, Qt.TransformationMode.SmoothTransformation)
+            pix = QPixmap(str(logo_path)).scaledToHeight(78, Qt.TransformationMode.SmoothTransformation)
             logo.setPixmap(pix)
         title_box = QVBoxLayout()
         title = QLabel("スタンドアロン用地図データ作成")
         title.setObjectName("title")
-        subtitle = QLabel("インターネットがない場所でも、指定した範囲だけ背景地図を表示できるようにします。")
+        subtitle = QLabel("地図上の赤い枠を、オフラインでも背景地図を見たい範囲に合わせてください。")
         subtitle.setObjectName("subtitle")
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
@@ -84,32 +121,35 @@ class MainWindow(QMainWindow):
         outer.addLayout(header)
 
         note = QLabel(
-            "通常、津山市街地用の地図データはすでに同梱済みです。この画面は、津山以外の地域や、"
-            "別の調査範囲を追加したい場合に使います。地図を残したい範囲を示すGeoJSONファイルを選ぶと、"
-            "国土地理院の淡色地図タイルを src/tiles/gsi_pale に保存します。"
+            "津山市街地用の地図データは同梱済みです。津山以外の地域や別の調査範囲を追加したい場合は、"
+            "下の地図を移動・拡大し、赤い枠に必要な範囲を収めてから作成開始してください。"
+            "保存先は固定で ETC\\src\\tiles\\gsi_pale です。"
         )
         note.setWordWrap(True)
         note.setObjectName("note")
         outer.addWidget(note)
 
-        form = QFrame()
-        form.setObjectName("panel")
-        grid = QGridLayout(form)
+        map_panel = QFrame()
+        map_panel.setObjectName("panel")
+        map_layout = QVBoxLayout(map_panel)
+        map_layout.setContentsMargins(10, 10, 10, 10)
+        map_help = QLabel("操作: 地図をドラッグして移動、マウスホイールで拡大縮小。赤枠の内側が保存対象です。")
+        map_help.setObjectName("help")
+        self.map_view = QWebEngineView()
+        self.map_view.setMinimumHeight(390)
+        self.bounds_label = QLabel("選択範囲: 地図を読み込み中です")
+        self.bounds_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        map_layout.addWidget(map_help)
+        map_layout.addWidget(self.map_view, 1)
+        map_layout.addWidget(self.bounds_label)
+        outer.addWidget(map_panel, 1)
+
+        settings = QFrame()
+        settings.setObjectName("panel")
+        grid = QGridLayout(settings)
         grid.setColumnStretch(1, 1)
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(10)
-
-        self.boundary = QLineEdit()
-        self.boundary.setPlaceholderText("例: D:\\data\\調査範囲.geojson")
-        btn_boundary = QPushButton("選択")
-        btn_boundary.clicked.connect(self.pick_boundary)
-        btn_tsuyama = QPushButton("同梱の津山市街地範囲を使う")
-        btn_tsuyama.clicked.connect(self.use_tsuyama_boundary)
-
-        boundary_row = QHBoxLayout()
-        boundary_row.addWidget(self.boundary, 1)
-        boundary_row.addWidget(btn_boundary)
-        boundary_row.addWidget(btn_tsuyama)
 
         self.min_zoom = QSpinBox()
         self.min_zoom.setRange(1, 20)
@@ -117,7 +157,6 @@ class MainWindow(QMainWindow):
         self.max_zoom = QSpinBox()
         self.max_zoom.setRange(1, 20)
         self.max_zoom.setValue(18)
-
         zoom_row = QHBoxLayout()
         zoom_row.addWidget(QLabel("最小"))
         zoom_row.addWidget(self.min_zoom)
@@ -126,25 +165,15 @@ class MainWindow(QMainWindow):
         zoom_row.addWidget(self.max_zoom)
         zoom_row.addStretch(1)
 
-        self.reuse = QLineEdit()
-        self.reuse.setPlaceholderText("既存の z/x/y.png タイルがある場合だけ指定します。空欄でOKです。")
-        btn_reuse = QPushButton("選択")
-        btn_reuse.clicked.connect(self.pick_reuse)
-        reuse_row = QHBoxLayout()
-        reuse_row.addWidget(self.reuse, 1)
-        reuse_row.addWidget(btn_reuse)
+        output = QLabel(str(TILE_DIR))
+        output.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
-        self.output = QLabel(str(SRC_DIR / "tiles" / "gsi_pale"))
-        self.output.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-
-        self._add_row(grid, 0, "地図を残したい範囲", self._wrap(boundary_row), "Polygon / MultiPolygon形式のGeoJSONを指定します。市町村界や調査区域の境界ファイルです。")
-        self._add_row(grid, 1, "ズーム範囲", self._wrap(zoom_row), "標準は9から18です。広い範囲で18まで作ると容量が大きくなります。")
-        self._add_row(grid, 2, "既存タイル再利用", self._wrap(reuse_row), "過去に作った地図タイルがある場合だけ指定します。同じタイルはダウンロードせず再利用します。")
-        self._add_row(grid, 3, "保存先", self.output, "ここに入ったタイルが、オフライン時の背景地図として自動的に使われます。")
-        outer.addWidget(form)
+        self._add_row(grid, 0, "ズーム範囲", self._wrap(zoom_row), "標準は9から18です。範囲が広いほど時間と容量が大きくなります。")
+        self._add_row(grid, 1, "保存先", output, "固定です。ETC2.0アナライザーの各地図画面は、オフライン時にこのフォルダーを自動で読みます。")
+        outer.addWidget(settings)
 
         actions = QHBoxLayout()
-        self.run_btn = QPushButton("作成開始")
+        self.run_btn = QPushButton("赤枠の範囲で作成開始")
         self.run_btn.clicked.connect(self.start_download)
         self.cancel_btn = QPushButton("中止")
         self.cancel_btn.clicked.connect(self.cancel_download)
@@ -159,9 +188,103 @@ class MainWindow(QMainWindow):
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
+        self.log.setMaximumHeight(130)
         self.log.setPlaceholderText("実行状況がここに表示されます。")
-        outer.addWidget(self.log, 1)
+        outer.addWidget(self.log)
         self.append_log("準備完了。津山市街地だけで使う場合は、追加作成は不要です。")
+
+    def _load_map(self) -> None:
+        channel = QWebChannel(self.map_view.page())
+        self.bridge = MapBridge(self)
+        channel.registerObject("bridge", self.bridge)
+        self.map_view.page().setWebChannel(channel)
+        self.map_view.setHtml(self._map_html(), QUrl.fromLocalFile(str(SRC_DIR) + os.sep))
+
+    def _map_html(self) -> str:
+        leaflet_css = (SRC_DIR / "leaflet" / "leaflet.css").as_uri()
+        leaflet_js = (SRC_DIR / "leaflet" / "leaflet.js").as_uri()
+        return f"""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="{leaflet_css}">
+  <script src="{leaflet_js}"></script>
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <style>
+    html, body, #map {{ height: 100%; margin: 0; }}
+    .leaflet-control-attribution {{ font-size: 11px; }}
+    .area-help {{
+      background: rgba(255,255,255,.94);
+      border: 1px solid #d8d8d8;
+      border-radius: 4px;
+      padding: 8px 10px;
+      font: 14px sans-serif;
+      color: #172018;
+      box-shadow: 0 1px 5px rgba(0,0,0,.18);
+    }}
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script>
+    let bridge = null;
+    new QWebChannel(qt.webChannelTransport, function(channel) {{
+      bridge = channel.objects.bridge;
+      updateRectangle();
+    }});
+
+    const map = L.map('map', {{ center: [35.069, 134.004], zoom: 12 }});
+    L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{{z}}/{{x}}/{{y}}.png', {{
+      attribution: '地理院タイル',
+      maxZoom: 18
+    }}).addTo(map);
+
+    const help = L.control({{ position: 'topright' }});
+    help.onAdd = function() {{
+      const div = L.DomUtil.create('div', 'area-help');
+      div.innerHTML = '赤枠の内側を保存します';
+      return div;
+    }};
+    help.addTo(map);
+
+    let rectangle = null;
+    function selectedBounds() {{
+      const b = map.getBounds();
+      const sw = b.getSouthWest();
+      const ne = b.getNorthEast();
+      const latPad = (ne.lat - sw.lat) * 0.18;
+      const lngPad = (ne.lng - sw.lng) * 0.18;
+      return L.latLngBounds(
+        [sw.lat + latPad, sw.lng + lngPad],
+        [ne.lat - latPad, ne.lng - lngPad]
+      );
+    }}
+    function updateRectangle() {{
+      const b = selectedBounds();
+      if (!rectangle) {{
+        rectangle = L.rectangle(b, {{
+          color: '#d83b3b',
+          weight: 3,
+          fillColor: '#d83b3b',
+          fillOpacity: 0.08,
+          interactive: false
+        }}).addTo(map);
+      }} else {{
+        rectangle.setBounds(b);
+      }}
+      if (bridge) {{
+        const sw = b.getSouthWest();
+        const ne = b.getNorthEast();
+        bridge.setBounds(sw.lat, sw.lng, ne.lat, ne.lng);
+      }}
+    }}
+    map.on('moveend zoomend resize', updateRectangle);
+    setTimeout(updateRectangle, 300);
+  </script>
+</body>
+</html>
+"""
 
     def check_network_on_startup(self) -> None:
         self.append_log("インターネット接続を確認しています。")
@@ -174,6 +297,10 @@ class MainWindow(QMainWindow):
         self.run_btn.setEnabled(False)
         self.append_log(OFFLINE_MESSAGE)
         QMessageBox.warning(self, "オフライン環境", OFFLINE_MESSAGE)
+
+    def set_map_bounds(self, south: float, west: float, north: float, east: float) -> None:
+        self.map_bounds = (south, west, north, east)
+        self.bounds_label.setText(f"選択範囲: 南 {south:.6f} / 西 {west:.6f} / 北 {north:.6f} / 東 {east:.6f}")
 
     def _wrap(self, layout: QHBoxLayout) -> QWidget:
         widget = QWidget()
@@ -211,7 +338,7 @@ class MainWindow(QMainWindow):
             }
             QLabel#fieldLabel { font-weight: 700; }
             QLabel#help { color: #57665d; }
-            QLineEdit, QSpinBox, QPlainTextEdit {
+            QSpinBox, QPlainTextEdit {
                 background: #ffffff;
                 border: 1px solid #bfc9c0;
                 border-radius: 4px;
@@ -230,28 +357,23 @@ class MainWindow(QMainWindow):
             """
         )
 
-    def pick_boundary(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "範囲GeoJSONを選択", str(ROOT_DIR), "GeoJSON (*.geojson *.json);;All files (*.*)")
-        if path:
-            self.boundary.setText(path)
-
-    def use_tsuyama_boundary(self) -> None:
-        self.boundary.setText(str(SRC_DIR / "tsuyama_urban_area.geojson"))
-        self.append_log("同梱の津山市街地範囲を選択しました。既存タイルの確認だけなら短時間で終わります。")
-
-    def pick_reuse(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "既存タイルのフォルダーを選択", str(ROOT_DIR))
-        if path:
-            self.reuse.setText(path)
-
     def open_output(self) -> None:
-        out = SRC_DIR / "tiles" / "gsi_pale"
-        out.mkdir(parents=True, exist_ok=True)
+        TILE_DIR.mkdir(parents=True, exist_ok=True)
         if sys.platform.startswith("win"):
-            os.startfile(out)  # type: ignore[attr-defined]
+            os.startfile(TILE_DIR)  # type: ignore[attr-defined]
 
     def append_log(self, text: str) -> None:
         self.log.appendPlainText(text)
+
+    def selected_boundary_path(self) -> Path | None:
+        if not self.map_bounds:
+            QMessageBox.warning(self, "範囲を確認してください", "地図の読み込みが終わるまで待ってから、もう一度実行してください。")
+            return None
+        boundary_dir = ROOT_DIR / "logs"
+        boundary_dir.mkdir(parents=True, exist_ok=True)
+        path = boundary_dir / "60_offline_map_selected_area.geojson"
+        path.write_text(json.dumps(rectangle_geojson(self.map_bounds), ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
 
     def start_download(self) -> None:
         if not can_connect_to_gsi():
@@ -259,17 +381,11 @@ class MainWindow(QMainWindow):
             self.append_log(OFFLINE_MESSAGE)
             QMessageBox.warning(self, "オフライン環境", OFFLINE_MESSAGE)
             return
-
-        boundary = Path(self.boundary.text().strip().strip('"'))
-        if not boundary.is_file():
-            QMessageBox.warning(self, "範囲ファイルがありません", "地図を残したい範囲のGeoJSONファイルを選択してください。")
-            return
         if self.min_zoom.value() > self.max_zoom.value():
             QMessageBox.warning(self, "ズーム範囲を確認してください", "最小ズームは最大ズーム以下にしてください。")
             return
-        reuse_text = self.reuse.text().strip().strip('"')
-        if reuse_text and not Path(reuse_text).exists():
-            QMessageBox.warning(self, "再利用元がありません", "既存タイル再利用フォルダーが見つかりません。空欄にするか、正しいフォルダーを選択してください。")
+        boundary = self.selected_boundary_path()
+        if boundary is None:
             return
 
         script = SRC_DIR / "download_offline_tiles.py"
@@ -277,15 +393,12 @@ class MainWindow(QMainWindow):
             str(script),
             str(boundary),
             "--output",
-            str(SRC_DIR / "tiles" / "gsi_pale"),
+            str(TILE_DIR),
             "--min-zoom",
             str(self.min_zoom.value()),
             "--max-zoom",
             str(self.max_zoom.value()),
         ]
-        if reuse_text:
-            args.extend(["--reuse", reuse_text])
-
         python = ROOT_DIR / "runtime" / "python" / "python.exe"
         program = str(python if python.exists() else Path(sys.executable))
 
@@ -302,8 +415,9 @@ class MainWindow(QMainWindow):
         self.cancel_btn.setEnabled(True)
         self.log.clear()
         self.append_log("地図タイルの作成を開始します。国土地理院の淡色地図を取得します。")
-        self.append_log(f"範囲: {boundary}")
+        self.append_log(f"赤枠の範囲: {boundary}")
         self.append_log(f"ズーム: {self.min_zoom.value()} - {self.max_zoom.value()}")
+        self.append_log(f"保存先: {TILE_DIR}")
         self.append_log("広い範囲では時間と容量が大きくなります。途中で止める場合は「中止」を押してください。")
         self.process.start()
 
