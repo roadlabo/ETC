@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -214,6 +215,20 @@ class MainWindow(QMainWindow):
         actions.addStretch(1)
         outer.addLayout(actions)
 
+        self.busy_frame = QFrame()
+        self.busy_frame.setObjectName("busy")
+        busy_layout = QHBoxLayout(self.busy_frame)
+        busy_layout.setContentsMargins(12, 8, 12, 8)
+        self.busy_label = QLabel("しばらくお待ちください。ただいま国土地理院からデータをダウンロード中です。")
+        self.busy_label.setObjectName("busyLabel")
+        self.busy_bar = QProgressBar()
+        self.busy_bar.setRange(0, 0)
+        self.busy_bar.setTextVisible(False)
+        busy_layout.addWidget(self.busy_label, 1)
+        busy_layout.addWidget(self.busy_bar, 1)
+        self.busy_frame.hide()
+        outer.addWidget(self.busy_frame)
+
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumHeight(130)
@@ -285,7 +300,6 @@ class MainWindow(QMainWindow):
     let bridge = null;
     new QWebChannel(qt.webChannelTransport, function(channel) {{
       bridge = channel.objects.bridge;
-      updateRectangle();
     }});
 
     const map = L.map('map', {{ center: [35.069, 134.004], zoom: 12 }});
@@ -463,6 +477,23 @@ class MainWindow(QMainWindow):
             }
             QPushButton:hover { background: #2f7146; }
             QPushButton:disabled { background: #aeb8b0; border-color: #aeb8b0; }
+            QFrame#busy {
+                background: #fff6db;
+                border: 1px solid #e1c36d;
+                border-radius: 6px;
+            }
+            QLabel#busyLabel {
+                background: transparent;
+                color: #4a3710;
+                font-weight: 700;
+            }
+            QProgressBar {
+                background: #fffaf0;
+                border: 1px solid #d7c694;
+                border-radius: 4px;
+                min-height: 18px;
+            }
+            QProgressBar::chunk { background: #245b37; }
             """
         )
 
@@ -526,8 +557,10 @@ class MainWindow(QMainWindow):
 
         self.run_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
+        self.busy_frame.show()
         self.log.clear()
         self.append_log("地図タイルの作成を開始します。国土地理院の淡色地図を取得します。")
+        self.append_log("しばらくお待ちください。ただいま国土地理院からデータをダウンロード中です。")
         self.append_log(f"赤枠の範囲: {boundary}")
         self.append_log(f"ズーム: {self.min_zoom.value()} - {self.max_zoom.value()}")
         self.append_log(f"保存先: {TILE_DIR}")
@@ -549,6 +582,7 @@ class MainWindow(QMainWindow):
     def finished(self, exit_code: int, _status: QProcess.ExitStatus) -> None:
         self.run_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
+        self.busy_frame.hide()
         if exit_code == 0:
             self.append_log("完了しました。オフライン時は、保存済みタイルがある範囲だけ背景地図が表示されます。")
             QMessageBox.information(self, "完了", "スタンドアロン用地図データの作成が完了しました。")
@@ -560,12 +594,29 @@ class MainWindow(QMainWindow):
     def process_error(self, error: QProcess.ProcessError) -> None:
         self.run_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
+        self.busy_frame.hide()
         self.append_log(f"プロセスを開始できませんでした: {error.name}")
 
     def cancel_download(self) -> None:
         if self.process:
             self.process.kill()
+            self.busy_frame.hide()
             self.append_log("中止しました。")
+
+    def closeEvent(self, event) -> None:
+        if self.process and self.process.state() != QProcess.ProcessState.NotRunning:
+            reply = QMessageBox.question(
+                self,
+                "ダウンロード中です",
+                "しばらくお待ちください。ただいま国土地理院からデータをダウンロード中です。\n終了すると途中までの処理で止まります。終了しますか？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            self.process.kill()
+        super().closeEvent(event)
 
 
 def main() -> None:
