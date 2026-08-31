@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download only GSI tiles intersecting a supplied Tsuyama boundary GeoJSON."""
+"""Download only GSI tiles intersecting a supplied Polygon/MultiPolygon GeoJSON."""
 from __future__ import annotations
 
 import argparse
@@ -89,7 +89,7 @@ def segment_intersects_tile(a, b, x, y):
 
 
 def candidate_tiles(rings, zoom):
-    """Yield every tile intersected by the municipal boundary or its interior."""
+    """Yield every tile intersected by the supplied boundary or its interior."""
     projected = [[lonlat_to_tile(*p[:2], zoom) for p in ring] for ring in rings]
     min_x = math.floor(min(p[0] for ring in projected for p in ring))
     max_x = math.floor(max(p[0] for ring in projected for p in ring))
@@ -130,8 +130,8 @@ def find_reusable(root, z, x, y):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="津山市境界内の地理院淡色タイルを保存します")
-    parser.add_argument("boundary", type=Path, help="津山市境界の Polygon/MultiPolygon GeoJSON")
+    parser = argparse.ArgumentParser(description="指定範囲内の国土地理院 淡色地図タイルを保存します")
+    parser.add_argument("boundary", type=Path, help="対象範囲の Polygon/MultiPolygon GeoJSON")
     parser.add_argument("--output", type=Path, default=Path(__file__).parent / "tiles" / "gsi_pale")
     parser.add_argument("--reuse", type=Path, help="既存タイルを先に探すフォルダー")
     parser.add_argument("--min-zoom", type=int, default=9)
