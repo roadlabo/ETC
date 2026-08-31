@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -10,6 +11,7 @@ from urllib.request import Request, urlopen
 from PyQt6.QtCore import QObject, QProcess, QTimer, QUrl, Qt, pyqtSlot
 from PyQt6.QtGui import QFont, QIcon, QPixmap
 from PyQt6.QtWebChannel import QWebChannel
+from PyQt6.QtWebEngineCore import QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import (
     QApplication,
@@ -32,6 +34,8 @@ TILE_DIR = SRC_DIR / "tiles" / "gsi_pale"
 LOGO_FILENAME = "logo_60_offline_map_tiles.png"
 GSI_TEST_URL = "https://cyberjapandata.gsi.go.jp/xyz/pale/9/451/198.png"
 OFFLINE_MESSAGE = "現在、オフライン環境です。インターネット環境で立ち上げなおしてください。"
+AREA_TOO_LARGE_MESSAGE = "データ量が大きくなります。もう一度狭い範囲で再指定してください。"
+MAX_ESTIMATED_TILES = 50_000
 
 
 def can_connect_to_gsi(timeout: float = 3.0) -> bool:
@@ -66,6 +70,28 @@ def rectangle_geojson(bounds: tuple[float, float, float, float]) -> dict:
             }
         ],
     }
+
+
+def lonlat_to_tile(lon: float, lat: float, zoom: int) -> tuple[float, float]:
+    n = 2**zoom
+    x = (lon + 180.0) / 360.0 * n
+    lat_r = math.radians(max(-85.05112878, min(85.05112878, lat)))
+    y = (1 - math.asinh(math.tan(lat_r)) / math.pi) / 2 * n
+    return x, y
+
+
+def estimate_tile_count(bounds: tuple[float, float, float, float], min_zoom: int, max_zoom: int) -> int:
+    south, west, north, east = bounds
+    total = 0
+    for zoom in range(min_zoom, max_zoom + 1):
+        x1, y1 = lonlat_to_tile(west, north, zoom)
+        x2, y2 = lonlat_to_tile(east, south, zoom)
+        min_x, max_x = sorted((math.floor(x1), math.floor(x2)))
+        min_y, max_y = sorted((math.floor(y1), math.floor(y2)))
+        total += (max_x - min_x + 1) * (max_y - min_y + 1)
+        if total > MAX_ESTIMATED_TILES:
+            return total
+    return total
 
 
 class MapBridge(QObject):
@@ -112,7 +138,7 @@ class MainWindow(QMainWindow):
         title_box = QVBoxLayout()
         title = QLabel("スタンドアロン用地図データ作成")
         title.setObjectName("title")
-        subtitle = QLabel("地図上の赤い枠を、オフラインでも背景地図を見たい範囲に合わせてください。")
+        subtitle = QLabel("地図を移動してから、範囲指定モードで保存したい範囲をドラッグしてください。")
         subtitle.setObjectName("subtitle")
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
@@ -122,7 +148,7 @@ class MainWindow(QMainWindow):
 
         note = QLabel(
             "津山市街地用の地図データは同梱済みです。津山以外の地域や別の調査範囲を追加したい場合は、"
-            "下の地図を移動・拡大し、赤い枠に必要な範囲を収めてから作成開始してください。"
+            "下の地図を移動・拡大し、範囲指定モードで必要な範囲をドラッグしてから作成開始してください。"
             "保存先は固定で ETC\\src\\tiles\\gsi_pale です。"
         )
         note.setWordWrap(True)
@@ -133,11 +159,11 @@ class MainWindow(QMainWindow):
         map_panel.setObjectName("panel")
         map_layout = QVBoxLayout(map_panel)
         map_layout.setContentsMargins(10, 10, 10, 10)
-        map_help = QLabel("操作: 地図をドラッグして移動、マウスホイールで拡大縮小。赤枠の内側が保存対象です。")
+        map_help = QLabel("操作: 「地図を動かす」で位置調整、「範囲を指定」で地図上をドラッグ。赤枠の内側が保存対象です。")
         map_help.setObjectName("help")
         self.map_view = QWebEngineView()
         self.map_view.setMinimumHeight(390)
-        self.bounds_label = QLabel("選択範囲: 地図を読み込み中です")
+        self.bounds_label = QLabel("選択範囲: 未指定")
         self.bounds_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         map_layout.addWidget(map_help)
         map_layout.addWidget(self.map_view, 1)
@@ -157,6 +183,8 @@ class MainWindow(QMainWindow):
         self.max_zoom = QSpinBox()
         self.max_zoom.setRange(1, 20)
         self.max_zoom.setValue(18)
+        self.min_zoom.valueChanged.connect(self.refresh_bounds_label)
+        self.max_zoom.valueChanged.connect(self.refresh_bounds_label)
         zoom_row = QHBoxLayout()
         zoom_row.addWidget(QLabel("最小"))
         zoom_row.addWidget(self.min_zoom)
@@ -173,7 +201,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(settings)
 
         actions = QHBoxLayout()
-        self.run_btn = QPushButton("赤枠の範囲で作成開始")
+        self.run_btn = QPushButton("指定した範囲で作成開始")
         self.run_btn.clicked.connect(self.start_download)
         self.cancel_btn = QPushButton("中止")
         self.cancel_btn.clicked.connect(self.cancel_download)
@@ -198,6 +226,9 @@ class MainWindow(QMainWindow):
         self.bridge = MapBridge(self)
         channel.registerObject("bridge", self.bridge)
         self.map_view.page().setWebChannel(channel)
+        settings = self.map_view.page().settings()
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
         self.map_view.setHtml(self._map_html(), QUrl.fromLocalFile(str(SRC_DIR) + os.sep))
 
     def _map_html(self) -> str:
@@ -223,6 +254,29 @@ class MainWindow(QMainWindow):
       color: #172018;
       box-shadow: 0 1px 5px rgba(0,0,0,.18);
     }}
+    .area-tools {{
+      background: rgba(255,255,255,.96);
+      border: 1px solid #d8d8d8;
+      border-radius: 4px;
+      box-shadow: 0 1px 5px rgba(0,0,0,.18);
+      padding: 6px;
+      display: flex;
+      gap: 6px;
+      font: 14px sans-serif;
+    }}
+    .area-tools button {{
+      border: 1px solid #b9c5bb;
+      background: #fff;
+      border-radius: 4px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }}
+    .area-tools button.active {{
+      background: #245b37;
+      border-color: #245b37;
+      color: #fff;
+    }}
+    #map.selecting {{ cursor: crosshair; }}
   </style>
 </head>
 <body>
@@ -243,25 +297,48 @@ class MainWindow(QMainWindow):
     const help = L.control({{ position: 'topright' }});
     help.onAdd = function() {{
       const div = L.DomUtil.create('div', 'area-help');
-      div.innerHTML = '赤枠の内側を保存します';
+      div.innerHTML = '範囲指定モードでドラッグしてください';
       return div;
     }};
     help.addTo(map);
 
+    const tools = L.control({{ position: 'topleft' }});
+    tools.onAdd = function() {{
+      const div = L.DomUtil.create('div', 'area-tools');
+      div.innerHTML = '<button id="panMode" class="active" type="button">地図を動かす</button><button id="selectMode" type="button">範囲を指定</button>';
+      L.DomEvent.disableClickPropagation(div);
+      return div;
+    }};
+    tools.addTo(map);
+
     let rectangle = null;
-    function selectedBounds() {{
-      const b = map.getBounds();
+    let selectMode = false;
+    let dragStart = null;
+    let isDrawing = false;
+
+    function setMode(mode) {{
+      selectMode = mode === 'select';
+      document.getElementById('panMode').classList.toggle('active', !selectMode);
+      document.getElementById('selectMode').classList.toggle('active', selectMode);
+      document.getElementById('map').classList.toggle('selecting', selectMode);
+      if (selectMode) {{
+        map.dragging.disable();
+      }} else {{
+        map.dragging.enable();
+      }}
+    }}
+
+    document.getElementById('panMode').onclick = function() {{ setMode('pan'); }};
+    document.getElementById('selectMode').onclick = function() {{ setMode('select'); }};
+
+    function reportBounds(b) {{
+      if (!bridge || !b) return;
       const sw = b.getSouthWest();
       const ne = b.getNorthEast();
-      const latPad = (ne.lat - sw.lat) * 0.18;
-      const lngPad = (ne.lng - sw.lng) * 0.18;
-      return L.latLngBounds(
-        [sw.lat + latPad, sw.lng + lngPad],
-        [ne.lat - latPad, ne.lng - lngPad]
-      );
+      bridge.setBounds(sw.lat, sw.lng, ne.lat, ne.lng);
     }}
-    function updateRectangle() {{
-      const b = selectedBounds();
+
+    function drawRectangle(b) {{
       if (!rectangle) {{
         rectangle = L.rectangle(b, {{
           color: '#d83b3b',
@@ -273,14 +350,35 @@ class MainWindow(QMainWindow):
       }} else {{
         rectangle.setBounds(b);
       }}
-      if (bridge) {{
-        const sw = b.getSouthWest();
-        const ne = b.getNorthEast();
-        bridge.setBounds(sw.lat, sw.lng, ne.lat, ne.lng);
-      }}
+      reportBounds(b);
     }}
-    map.on('moveend zoomend resize', updateRectangle);
-    setTimeout(updateRectangle, 300);
+
+    map.on('mousedown', function(e) {{
+      if (!selectMode) return;
+      isDrawing = true;
+      dragStart = e.latlng;
+      drawRectangle(L.latLngBounds(dragStart, dragStart));
+      L.DomEvent.preventDefault(e);
+    }});
+
+    map.on('mousemove', function(e) {{
+      if (!selectMode || !isDrawing || !dragStart) return;
+      drawRectangle(L.latLngBounds(dragStart, e.latlng));
+    }});
+
+    map.on('mouseup', function(e) {{
+      if (!selectMode || !isDrawing || !dragStart) return;
+      isDrawing = false;
+      drawRectangle(L.latLngBounds(dragStart, e.latlng));
+      dragStart = null;
+    }});
+
+    map.on('mouseout', function(e) {{
+      if (!selectMode || !isDrawing || !dragStart) return;
+      isDrawing = false;
+      dragStart = null;
+      if (rectangle) reportBounds(rectangle.getBounds());
+    }});
   </script>
 </body>
 </html>
@@ -300,7 +398,18 @@ class MainWindow(QMainWindow):
 
     def set_map_bounds(self, south: float, west: float, north: float, east: float) -> None:
         self.map_bounds = (south, west, north, east)
-        self.bounds_label.setText(f"選択範囲: 南 {south:.6f} / 西 {west:.6f} / 北 {north:.6f} / 東 {east:.6f}")
+        self.refresh_bounds_label()
+
+    def refresh_bounds_label(self) -> None:
+        if not self.map_bounds:
+            self.bounds_label.setText("選択範囲: 未指定")
+            return
+        south, west, north, east = self.map_bounds
+        tile_count = estimate_tile_count(self.map_bounds, self.min_zoom.value(), self.max_zoom.value())
+        self.bounds_label.setText(
+            f"選択範囲: 南 {south:.6f} / 西 {west:.6f} / 北 {north:.6f} / 東 {east:.6f}"
+            f" / 概算 {tile_count:,} タイル"
+        )
 
     def _wrap(self, layout: QHBoxLayout) -> QWidget:
         widget = QWidget()
@@ -383,6 +492,10 @@ class MainWindow(QMainWindow):
             return
         if self.min_zoom.value() > self.max_zoom.value():
             QMessageBox.warning(self, "ズーム範囲を確認してください", "最小ズームは最大ズーム以下にしてください。")
+            return
+        if self.map_bounds and estimate_tile_count(self.map_bounds, self.min_zoom.value(), self.max_zoom.value()) > MAX_ESTIMATED_TILES:
+            self.append_log(AREA_TOO_LARGE_MESSAGE)
+            QMessageBox.warning(self, "範囲が広すぎます", AREA_TOO_LARGE_MESSAGE)
             return
         boundary = self.selected_boundary_path()
         if boundary is None:
