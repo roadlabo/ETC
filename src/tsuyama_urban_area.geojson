@@ -1,0 +1,22 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Tsuyama urban offline tile area",
+        "note": "Approximate central Tsuyama area excluding mountainous municipal outskirts."
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [133.930, 35.020],
+          [134.090, 35.020],
+          [134.090, 35.115],
+          [133.930, 35.115],
+          [133.930, 35.020]
+        ]]
+      }
+    }
+  ]
+}

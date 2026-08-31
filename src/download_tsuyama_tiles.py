@@ -76,6 +76,18 @@ def ring_intersects_tile(ring, x, y):
     )
 
 
+def segment_intersects_tile(a, b, x, y):
+    corners = [(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)]
+    if x <= a[0] <= x + 1 and y <= a[1] <= y + 1:
+        return True
+    if x <= b[0] <= x + 1 and y <= b[1] <= y + 1:
+        return True
+    return any(
+        segments_intersect(a, b, c, d)
+        for c, d in zip(corners, corners[1:] + corners[:1])
+    )
+
+
 def candidate_tiles(rings, zoom):
     """Yield every tile intersected by the municipal boundary or its interior."""
     projected = [[lonlat_to_tile(*p[:2], zoom) for p in ring] for ring in rings]
@@ -83,13 +95,27 @@ def candidate_tiles(rings, zoom):
     max_x = math.floor(max(p[0] for ring in projected for p in ring))
     min_y = math.floor(min(p[1] for ring in projected for p in ring))
     max_y = math.floor(max(p[1] for ring in projected for p in ring))
-    vertex_tiles = {(math.floor(x), math.floor(y)) for ring in projected for x, y in ring}
-    for x in range(min_x, max_x + 1):
+    tiles = set()
+    for ring in projected:
+        edges = list(zip(ring, ring[1:] + ring[:1]))
+        for a, b in edges:
+            for x in range(math.floor(min(a[0], b[0])), math.floor(max(a[0], b[0])) + 1):
+                for y in range(math.floor(min(a[1], b[1])), math.floor(max(a[1], b[1])) + 1):
+                    if segment_intersects_tile(a, b, x, y):
+                        tiles.add((x, y))
         for y in range(min_y, max_y + 1):
-            if ((x, y) in vertex_tiles or
-                    any(point_in_ring(x + .5, y + .5, r) or ring_intersects_tile(r, x, y)
-                        for r in projected)):
-                yield x, y
+            scan_y = y + .5
+            intersections = []
+            for (x1, y1), (x2, y2) in edges:
+                if (y1 > scan_y) != (y2 > scan_y):
+                    intersections.append(x1 + (scan_y - y1) * (x2 - x1) / (y2 - y1))
+            intersections.sort()
+            for left, right in zip(intersections[0::2], intersections[1::2]):
+                start = math.ceil(left - .5)
+                end = math.ceil(right - .5) - 1
+                for x in range(max(min_x, start), min(max_x, end) + 1):
+                    tiles.add((x, y))
+    yield from sorted(tiles)
 
 
 def find_reusable(root, z, x, y):
