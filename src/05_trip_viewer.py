@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import socket
 import sys
 import webbrowser
@@ -82,6 +83,7 @@ MIN_LAT, MAX_LAT = 20.0, 50.0
 
 TYPE_MAP = {0: "軽二輪", 1: "大型", 2: "普通", 3: "小型", 4: "軽自動車"}
 USE_MAP = {0: "未使用", 1: "乗用", 2: "貨物", 3: "特殊", 4: "乗合"}
+FILE_LIST_PROGRESS_INTERVAL = 2000
 
 
 def parse_gps_time(val: object) -> Optional[datetime]:
@@ -205,6 +207,28 @@ def make_busy_dialog(title: str, text: str) -> QProgressDialog:
     dlg.show()
     QApplication.processEvents()
     return dlg
+
+
+def update_progress_dialog(
+    dlg: Optional[QProgressDialog],
+    text: str,
+    value: Optional[int] = None,
+    maximum: Optional[int] = None,
+) -> None:
+    if dlg is None:
+        return
+    try:
+        if maximum is not None:
+            if maximum <= 0:
+                dlg.setRange(0, 0)
+            else:
+                dlg.setRange(0, maximum)
+        if value is not None:
+            dlg.setValue(max(0, value))
+        dlg.setLabelText(text)
+        QApplication.processEvents()
+    except Exception:
+        pass
 
 
 def close_busy_dialog(dlg: Optional[QProgressDialog]) -> None:
@@ -950,12 +974,58 @@ class RouteMapperWindow(QMainWindow):
             QMessageBox.warning(self, "Directory not found", f"Directory does not exist:\n{self.directory}")
             return
 
-        self.files = sorted([p for p in self.directory.glob(self.pattern) if p.is_file()])
+        if self._msg_loading is None:
+            self._msg_loading = make_busy_dialog("処理中", "CSVファイルを確認しています…")
+
+        discovered: List[tuple[str, str]] = []
+        update_progress_dialog(self._msg_loading, "CSVファイルを確認しています… 0 件検出", None, 0)
+        with os.scandir(self.directory) as entries:
+            for entry in entries:
+                name = entry.name
+                if not name.lower().endswith(".csv"):
+                    continue
+                discovered.append((name, entry.path))
+                count = len(discovered)
+                if count == 1 or count % FILE_LIST_PROGRESS_INTERVAL == 0:
+                    update_progress_dialog(
+                        self._msg_loading,
+                        f"CSVファイルを確認しています… {count:,} 件検出",
+                        None,
+                        0,
+                    )
+
+        update_progress_dialog(
+            self._msg_loading,
+            f"CSVファイルを並べ替えています… {len(discovered):,} 件",
+            0,
+            100,
+        )
+        discovered.sort(key=lambda item: item[0].casefold())
+        self.files = [Path(path) for _, path in discovered]
         self.lbl_dir.setText(self._directory_label_text())
         self.lbl_nfiles.setText(f"ファイル数：{len(self.files)}")
+
+        update_progress_dialog(
+            self._msg_loading,
+            f"CSV一覧を作成しています… 0 / {len(self.files):,}",
+            0,
+            len(self.files) or 1,
+        )
         self.list.clear()
-        for p in self.files:
-            self.list.addItem(QListWidgetItem(p.name))
+        self.list.setUpdatesEnabled(False)
+        try:
+            for start in range(0, len(self.files), FILE_LIST_PROGRESS_INTERVAL):
+                chunk = self.files[start:start + FILE_LIST_PROGRESS_INTERVAL]
+                self.list.addItems([p.name for p in chunk])
+                done = min(start + len(chunk), len(self.files))
+                update_progress_dialog(
+                    self._msg_loading,
+                    f"CSV一覧を作成しています… {done:,} / {len(self.files):,}",
+                    done,
+                    len(self.files) or 1,
+                )
+        finally:
+            self.list.setUpdatesEnabled(True)
 
         if not self.files:
             self._show_empty_state("CSVファイルが見つかりません。")
@@ -977,21 +1047,17 @@ class RouteMapperWindow(QMainWindow):
             QMessageBox.warning(self, "地図の読み込み失敗", "地図の読み込みに失敗しました。leaflet/ の配置を確認してください。")
             return
 
-        # 何も選ばれていない場合でも map 初期化だけはしておく
-        if self.files:
-            try:
-                df0 = read_route_data(self.files[0])
-                if not df0.empty:
-                    self._init_map(float(df0.iloc[0]["lat"]), float(df0.iloc[0]["lon"]))
-                    self._render_current()
-            except Exception:
-                pass
-        else:
+        # 何も選ばれていない場合でも map 初期化だけはしておく。
+        # CSV本体は選択変更時のワーカーで読むため、ここでは同期読込しない。
+        if not self.files:
             self._clear_map()
+        elif self.list.currentRow() >= 0 and self._load_thread is None:
+            self._render_current()
 
         # 地図準備完了 → 処理中メッセージを閉じる
-        close_busy_dialog(self._msg_loading)
-        self._msg_loading = None
+        if self._load_thread is None:
+            close_busy_dialog(self._msg_loading)
+            self._msg_loading = None
 
     def _init_map(self, lat: float, lon: float) -> None:
         self._run_js(f"window._routeMapper.initMap({lat}, {lon}, 12);")
@@ -1125,29 +1191,10 @@ def main(argv: Sequence[str]) -> None:
     pattern = "*.csv"
 
     app = QApplication(sys.argv)
-    skip_news_check = "--skip-news-check" in sys.argv
-    if not skip_news_check:
-        try:
-            show_news_dialogs()
-        except Exception as e:
-            news_debug(f"お知らせ表示をスキップしました: {e!r}")
-
-    busy = make_busy_dialog("起動中", "Qt初期化中…（初回は時間がかかることがあります）")
-
-    # インターネット未接続通知
-    if not is_internet_available():
-        QMessageBox.information(
-            None,
-            "オフライン表示",
-            "インターネット接続がありません。スタンドアロン用地図を用います。"
-        )
-
     initial_directory = Path(folder_arg) if folder_arg else None
+    busy = None
     if initial_directory is not None:
-        busy.setLabelText("データ読込中…")
-    else:
-        close_busy_dialog(busy)
-        busy = None
+        busy = make_busy_dialog("起動中", "データ読込中…")
 
     w = RouteMapperWindow(directory=initial_directory, pattern=pattern)
 
@@ -1155,6 +1202,24 @@ def main(argv: Sequence[str]) -> None:
     w._msg_loading = busy
 
     w.showMaximized()
+
+    def run_startup_checks() -> None:
+        skip_news_check = "--skip-news-check" in sys.argv
+        if not skip_news_check:
+            try:
+                show_news_dialogs()
+            except Exception as e:
+                news_debug(f"お知らせ表示をスキップしました: {e!r}")
+
+        # インターネット未接続通知は本体UI表示後に出す。
+        if not is_internet_available():
+            QMessageBox.information(
+                w,
+                "オフライン表示",
+                "インターネット接続がありません。スタンドアロン用地図を用います。"
+            )
+
+    QTimer.singleShot(500, run_startup_checks)
     sys.exit(app.exec())
 
 
