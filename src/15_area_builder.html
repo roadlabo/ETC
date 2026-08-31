@@ -62,12 +62,10 @@
   <div class="status" id="status"></div>
 </div>
 <script src="leaflet/leaflet.js"></script>
+<script src="offline_map.js"></script>
 <script>
 const map = L.map('map', { preferCanvas:true }).setView([35.062, 134.004], 15);
-L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', {
-  maxZoom:18,
-  attribution:'地理院タイル'
-}).addTo(map);
+addGsiOfflineLayer(map);
 
 const style = {
   official: { color:'#e83e8c', weight:3, fillColor:'#e83e8c', fillOpacity:.16 },

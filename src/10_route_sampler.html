@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8">
   <title>Route Sampler</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <link rel="stylesheet" href="leaflet/leaflet.css"/>
+  <script src="leaflet/leaflet.js"></script>
+  <script src="offline_map.js"></script>
   <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
   <style>
     html, body { height:100%; margin:0; padding:0; }
@@ -44,7 +45,7 @@ map.createPane('routePane'); map.getPane('routePane').style.zIndex=430;
 map.createPane('pointPane'); map.getPane('pointPane').style.zIndex=630;
 map.createPane('leaderPane'); map.getPane('leaderPane').style.zIndex=640;
 map.createPane('labelPane'); map.getPane('labelPane').style.zIndex=650;
-L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors © CARTO'}).addTo(map);
+addGsiOfflineLayer(map);
 let points=[];
 let editMode=true;
 const savedRouteLayer=L.layerGroup().addTo(map);
