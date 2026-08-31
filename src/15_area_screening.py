@@ -25,6 +25,7 @@ FLAG_INDEX = 12
 DATE_INDEX = 6
 OP_ID_INDEX = 3
 TRIP_NO_INDEX = 8
+MIN_OUTPUT_COLUMNS = 33  # 様式1-3のA列からAG列まで
 EARTH_RADIUS_M = 6_371_000.0
 
 
@@ -392,11 +393,13 @@ def write_subtrip_csv(out_dir: Path, seq_no: int, subtrip_id: str, points: Seque
     with out_path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.writer(fh)
         for idx, point in enumerate(points):
-            base = list(point.values[:16]) + [""] * max(0, 16 - len(point.values))
+            base = list(point.values)
+            if len(base) < MIN_OUTPUT_COLUMNS:
+                base.extend([""] * (MIN_OUTPUT_COLUMNS - len(base)))
             if len(base) <= FLAG_INDEX:
                 base.extend([""] * (FLAG_INDEX + 1 - len(base)))
             base[FLAG_INDEX] = "0" if idx == 0 else "1" if idx == len(points) - 1 else ""
-            writer.writerow(base[:16])
+            writer.writerow(base)
     return out_path
 
 

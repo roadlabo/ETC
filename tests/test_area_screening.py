@@ -73,6 +73,12 @@ def row(opid: str, trip_no: int, ts: str, lon: str | float, lat: str | float) ->
     return values
 
 
+def row33(opid: str, trip_no: int, ts: str, lon: str | float, lat: str | float) -> list[str]:
+    values = row(opid, trip_no, ts, lon, lat)
+    values.extend([f"col{idx:02d}" for idx in range(16, 33)])
+    return values
+
+
 def write_trip_file(path: Path, rows: list[list[str]]) -> None:
     with path.open("w", encoding="utf-8-sig", newline="") as fh:
         csv.writer(fh).writerows(rows)
@@ -124,6 +130,27 @@ class AreaScreeningTest(unittest.TestCase):
             self.assertEqual(rows[-1][12], "1")
             self.assertEqual(summaries[0]["start_time"], "20250101080500")
             self.assertEqual(summaries[0]["end_time"], "20250101081500")
+
+    def test_writes_style_1_3_columns_and_preserves_original_values_except_flags(self):
+        with tempfile.TemporaryDirectory() as td:
+            original_rows = [
+                row33("wide", 1, "20250101080000", 135.003, 35.003),
+                row33("wide", 1, "20250101081000", 135.007, 35.007),
+            ]
+            original_rows[0][12] = "2"
+            original_rows[1][12] = "2"
+            _, _, subtrip_files, _ = run_case(Path(td), {"wide.csv": original_rows})
+
+            with subtrip_files[0].open("r", encoding="utf-8", newline="") as fh:
+                rows = list(csv.reader(fh))
+
+            self.assertEqual([len(r) for r in rows], [33, 33])
+            self.assertEqual(rows[0][:12], original_rows[0][:12])
+            self.assertEqual(rows[0][13:], original_rows[0][13:])
+            self.assertEqual(rows[1][:12], original_rows[1][:12])
+            self.assertEqual(rows[1][13:], original_rows[1][13:])
+            self.assertEqual(rows[0][12], "0")
+            self.assertEqual(rows[1][12], "1")
 
     def test_outside_to_inside_end_inside_to_outside_all_inside_all_outside(self):
         with tempfile.TemporaryDirectory() as td:
