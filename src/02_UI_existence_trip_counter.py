@@ -17,7 +17,7 @@ SRC_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from PyQt6.QtCore import QObject, QProcess, QProcessEnvironment, QPropertyAnimation, QRect, Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QProcess, QProcessEnvironment, QPropertyAnimation, QRect, Qt, QTimer, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -344,7 +344,7 @@ class MapPickDialog(QDialog):
             channel = QWebChannel(self.web.page())
             channel.registerObject("bridge", self.bridge)
             self.web.page().setWebChannel(channel)
-            self.web.setHtml(self._html(lon, lat))
+            self.web.setHtml(self._html(lon, lat), QUrl.fromLocalFile(str(SRC_DIR) + "/"))
         else:
             v.addWidget(QLabel("QWebEngineが無効なため地図表示できません。既定値利用か手入力が必要です。"), 1)
 
@@ -367,13 +367,14 @@ class MapPickDialog(QDialog):
         return f"""
 <!doctype html><html><head>
 <meta charset='utf-8'/><meta name='viewport' content='width=device-width,initial-scale=1'/>
-<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>
-<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
+<link rel='stylesheet' href='leaflet/leaflet.css'/>
+<script src='leaflet/leaflet.js'></script>
+<script src='offline_map.js'></script>
 <script src='qrc:///qtwebchannel/qwebchannel.js'></script>
-<style>html,body,#map{{height:100%;margin:0;background:#000}}</style></head>
+<style>html,body,#map{{height:100%;margin:0;background:#fff}}</style></head>
 <body><div id='map'></div><script>
 let map=L.map('map').setView([{lat},{lon}],11);
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:19}}).addTo(map);
+addGsiOfflineLayer(map, {{maxZoom:19}});
 let marker=L.marker([{lat},{lon}]).addTo(map);
 let bridge=null; new QWebChannel(qt.webChannelTransport,function(ch){{bridge=ch.objects.bridge;}});
 map.on('click', function(e){{marker.setLatLng(e.latlng); if(bridge) bridge.setPoint(e.latlng.lng, e.latlng.lat);}});

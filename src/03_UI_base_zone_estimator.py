@@ -976,8 +976,9 @@ class MainWindow(QMainWindow):
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="leaflet/leaflet.css"/>
+<script src="leaflet/leaflet.js"></script>
+<script src="offline_map.js"></script>
 <style>
 html, body, #map {{ height:100%; margin:0; background:#fff; }}
 .ttl {{
@@ -993,10 +994,7 @@ html, body, #map {{ height:100%; margin:0; background:#fff; }}
 <div id="map"></div>
 <script>
 const map = L.map('map').setView([{lat_center}, {lon_center}], 13);
-L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/voyager/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-  maxZoom: 19,
-  attribution: '© OpenStreetMap contributors © CARTO'
-}}).addTo(map);
+addGsiOfflineLayer(map, {{ maxZoom: 19 }});
 
 const pts = [{coords}];
 const poly = L.polygon(pts, {{
@@ -1010,7 +1008,7 @@ map.fitBounds(poly.getBounds(), {{ padding: [20, 20] }});
 </body>
 </html>
 """
-            self.web_map.setHtml(html, QUrl("https://unpkg.com/"))
+            self.web_map.setHtml(html, QUrl.fromLocalFile(str(SRC_DIR) + "/"))
             self.map_stack.setCurrentWidget(self.web_map)
             self.lbl_map_mode.setText("地図表示: WEB")
         except Exception:
@@ -1043,8 +1041,9 @@ map.fitBounds(poly.getBounds(), {{ padding: [20, 20] }});
 <head>
 <meta charset=\"utf-8\"/>
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/>
-<link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\"/>
-<script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script>
+<link rel=\"stylesheet\" href=\"leaflet/leaflet.css\"/>
+<script src=\"leaflet/leaflet.js\"></script>
+<script src=\"offline_map.js\"></script>
 <style>
 html, body, #map {{ height:100%; margin:0; background:#fff; }}
 .ttl {{
@@ -1065,10 +1064,7 @@ html, body, #map {{ height:100%; margin:0; background:#fff; }}
 <div id=\"map\"></div>
 <script>
 const map = L.map('map').setView([{center_point[1]}, {center_point[0]}], 12);
-L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/voyager/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-  maxZoom: 19,
-  attribution: '© OpenStreetMap contributors © CARTO'
-}}).addTo(map);
+addGsiOfflineLayer(map, {{ maxZoom: 19 }});
 
 const zones = [{all_zone_js}];
 
@@ -1131,7 +1127,7 @@ if (zonesGroup.getLayers().length > 0) {{
 </body>
 </html>
 """
-            self.web_map.setHtml(html, QUrl("https://unpkg.com/"))
+            self.web_map.setHtml(html, QUrl.fromLocalFile(str(SRC_DIR) + "/"))
             self.map_stack.setCurrentWidget(self.web_map)
             self.lbl_map_mode.setText("地図表示: WEB")
         except Exception:

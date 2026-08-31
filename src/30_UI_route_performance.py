@@ -95,6 +95,7 @@ ROUTE_MAP_HTML = r"""
   <title>Route Map</title>
   <link rel="stylesheet" href="leaflet/leaflet.css"/>
   <script src="leaflet/leaflet.js"></script>
+  <script src="offline_map.js"></script>
   <style>
     html, body { height:100%; margin:0; background:#fff; overflow:hidden; font-family:"Segoe UI","Meiryo UI",sans-serif; }
     #map, #fallback { position:absolute; inset:0; background:#fff; }
@@ -161,7 +162,7 @@ function initMap() {
   if (map) return true;
   try {
     map = L.map('map', { zoomControl:true, preferCanvas:true }).setView([35.069095, 134.004512], 12);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors © CARTO' }).addTo(map);
+    addGsiOfflineLayer(map, { maxZoom: 19 });
     routeLayer = L.layerGroup().addTo(map);
     setStatus('WEB');
     return true;

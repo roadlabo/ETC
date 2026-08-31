@@ -2,7 +2,7 @@
 
 This script scans a target directory for CSV files and lets the user
 select one via a Tkinter listbox UI. When a file is selected, its route
-is rendered to a Folium map (OpenStreetMap background) and saved as
+is rendered to a Folium map (GSI pale-map background) and saved as
 ``map_kp.html`` beside this script. The browser tab is opened only once on
 the first render to avoid duplicate tabs.
 
@@ -29,6 +29,12 @@ import numpy as np
 import tkinter as tk
 import webbrowser
 from tkinter import Tk, filedialog, messagebox, ttk
+
+SRC_DIR = Path(__file__).resolve().parent.parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from offline_leaflet import apply_offline_tile_support
 
 
 # ====== KP label settings ======
@@ -504,7 +510,12 @@ class RouteMapperApp:
 
     def render_map(self, csv_path: Path, df: pd.DataFrame) -> None:
         start_location = [df.iloc[0]["lat"], df.iloc[0]["lon"]]
-        fmap = folium.Map(location=start_location, zoom_start=12, tiles="OpenStreetMap")
+        fmap = folium.Map(
+            location=start_location,
+            zoom_start=12,
+            tiles="https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png",
+            attr="国土地理院",
+        )
 
         for i, row in enumerate(df.itertuples(index=False)):
             base_tip = fmt_tooltip(row.time, row.speed)
@@ -533,7 +544,7 @@ class RouteMapperApp:
             folium.PolyLine(segment, **LINE_STYLE).add_to(fmap)
 
         out_path = Path(__file__).with_name("map_kp.html")
-        fmap.save(out_path.as_posix())
+        out_path.write_text(apply_offline_tile_support(fmap.get_root().render()), encoding="utf-8")
 
         # disable old auto-refresh call
         # ensure_auto_refresh(out_path)

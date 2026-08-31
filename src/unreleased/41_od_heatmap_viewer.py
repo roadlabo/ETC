@@ -34,6 +34,11 @@ from PyQt6.QtWidgets import (
 
 BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from offline_leaflet import apply_offline_tile_support
+
 TEMP_DIR = ROOT_DIR / "temp"
 LOGO_DIR = ROOT_DIR / "assets" / "logos"
 TEMP_HTML_PATH = TEMP_DIR / "41_od_heatmap_current.html"
@@ -420,7 +425,7 @@ class ODHeatmapViewer(QMainWindow):
             location=[center_lat, center_lon],
             zoom_start=zoom,
             control_scale=True,
-            tiles="https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png",
+            tiles="https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png",
             attr="国土地理院",
         )
 
@@ -437,7 +442,7 @@ class ODHeatmapViewer(QMainWindow):
                 max_zoom=settings["max_zoom"],
             ).add_to(m)
 
-        return m.get_root().render()
+        return apply_offline_tile_support(m.get_root().render())
 
     def render_map(self, center_lat: float, center_lon: float, zoom: int) -> None:
         if self.df_valid is None:

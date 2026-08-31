@@ -726,6 +726,10 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
     leaflet_css_path = SRC_DIR / "leaflet" / "leaflet.css"
     leaflet_js_path = SRC_DIR / "leaflet" / "leaflet.js"
+    if not leaflet_css_path.exists():
+        leaflet_css_path = SRC_DIR.parent / "leaflet" / "leaflet.css"
+    if not leaflet_js_path.exists():
+        leaflet_js_path = SRC_DIR.parent / "leaflet" / "leaflet.js"
     leaflet_css = leaflet_css_path.read_text(encoding="utf-8") if leaflet_css_path.exists() else ""
     leaflet_css_link = ""
     leaflet_script = (
@@ -733,6 +737,15 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
         if leaflet_js_path.exists()
         else ""
     )
+    offline_map_path = SRC_DIR / "offline_map.js"
+    if not offline_map_path.exists():
+        offline_map_path = SRC_DIR.parent / "offline_map.js"
+    offline_map_script = (
+        f"<script>{offline_map_path.read_text(encoding='utf-8')}</script>"
+        if offline_map_path.exists()
+        else ""
+    )
+    local_tile_url = (offline_map_path.parent / "tiles" / "gsi_pale").as_uri() + "/{z}/{x}/{y}.png"
     html = f"""<!doctype html>
 <html lang="ja">
 <head>
@@ -763,6 +776,7 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
     select {{ min-width:130px; background:#fff; border:1px solid #b8c2cc; border-radius:6px; padding:4px; }}
   </style>
   {leaflet_script}
+  {offline_map_script}
 </head>
 <body>
 <div id="map"></div>
@@ -791,7 +805,7 @@ let map = null;
 let fallback = null;
 if (HAS_LEAFLET) {{
   map = L.map('map').setView([{center_lat:.7f}, {center_lon:.7f}], 13);
-  L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }}).addTo(map);
+  addGsiOfflineLayer(map, {{ maxZoom: 19, localUrl: {json.dumps(local_tile_url)} }});
 }} else {{
   initFallbackMap();
 }}

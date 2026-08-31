@@ -8,13 +8,19 @@ from datetime import datetime
 import math
 from math import cos, hypot, radians, sin
 from pathlib import Path
+import sys
 import time
 from typing import Dict, Iterable, Optional, Set, Tuple
+
+SRC_DIR = Path(__file__).resolve().parent.parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 import folium
 import numpy as np
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from offline_leaflet import apply_offline_tile_support
 
 # 解析範囲（中心からの距離）
 # 2km四方 = 半径1km
@@ -293,7 +299,12 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
     GRID_SIZE×GRID_SIZE のマトリクスを 25m メッシュの矩形として描画し、
     中心黒丸と A/B 方向矢印を最前面に重ねる。
     """
-    m = folium.Map(location=[lat0, lon0], zoom_start=16, tiles="OpenStreetMap")
+    m = folium.Map(
+        location=[lat0, lon0],
+        zoom_start=16,
+        tiles="https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png",
+        attr="国土地理院",
+    )
     vmax = _compute_vmax(matrix)
     _add_palette_legend(m, title="凡例（メッシュ内の割合%）")
 
@@ -377,7 +388,7 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
 """
     m.get_root().html.add_child(folium.Element(zoom_scale_js))
 
-    m.save(str(output_dir / filename))
+    (output_dir / filename).write_text(apply_offline_tile_support(m.get_root().render()), encoding="utf-8")
 
 
 def load_single_trip(csv_path: Path, lon0: float, lat0: float) -> np.ndarray:

@@ -16,6 +16,7 @@ if str(SRC_DIR) not in sys.path:
 import folium
 import numpy as np
 import pandas as pd
+from offline_leaflet import apply_offline_tile_support
 
 NOGUI_MODE = "--nogui" in sys.argv[1:]
 
@@ -187,7 +188,7 @@ def split_segments(points: List[Tuple[float, float, int]]) -> List[List[Tuple[fl
 
 def is_internet_available(timeout_sec: float = 1.0) -> bool:
     try:
-        with socket.create_connection(("tile.openstreetmap.org", 443), timeout=timeout_sec):
+        with socket.create_connection(("cyberjapandata.gsi.go.jp", 443), timeout=timeout_sec):
             return True
     except Exception:
         return False
@@ -280,6 +281,7 @@ LEAFLET_HTML = r"""
   <title>Route Mapper</title>
   <link rel="stylesheet" href="leaflet/leaflet.css"/>
   <script src="leaflet/leaflet.js"></script>
+  <script src="offline_map.js"></script>
   <style>
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
@@ -506,30 +508,8 @@ LEAFLET_HTML = r"""
     try { if (base) map.removeLayer(base); } catch(e) {}
     base = null;
 
-    const layer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      maxZoom: 20,
-      attribution: '© OpenStreetMap contributors © CARTO',
-      crossOrigin: true,
-      updateWhenIdle: true,
-      keepBuffer: 2,
-    });
-
-    let okOnce = false;
-    layer.on('tileload', () => {
-      okOnce = true;
-    });
-    layer.on('tileerror', (ev) => {
-      console.warn('Positron tile load error', ev);
-    });
-
-    layer.addTo(map);
+    const layer = addGsiOfflineLayer(map, { maxZoom: 20 });
     base = layer;
-
-    setTimeout(() => {
-      if (!okOnce) {
-        console.warn('Positron tile load is slow; keeping base layer mounted and waiting for tiles.');
-      }
-    }, 15000);
   }
 
   function initMap(lat, lon, zoom){
@@ -1197,8 +1177,8 @@ def run_without_gui(folder_path: str) -> Optional[str]:
     fmap = folium.Map(
         location=[lat0, lon0],
         zoom_start=12,
-        tiles="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-        attr="© OpenStreetMap contributors © CARTO",
+        tiles="https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png",
+        attr="国土地理院",
     )
 
     points: List[Tuple[float, float, int]] = []
@@ -1213,7 +1193,7 @@ def run_without_gui(folder_path: str) -> Optional[str]:
         folium.Marker([points[-1][0], points[-1][1]], tooltip="Goal").add_to(fmap)
 
     out_path = csv_path.with_name(f"{csv_path.stem}_route_map.html")
-    fmap.save(str(out_path))
+    out_path.write_text(apply_offline_tile_support(fmap.get_root().render()), encoding="utf-8")
     return str(out_path)
 
 

@@ -1,4 +1,4 @@
-/* GSI pale-map layer with an on-disk-first, online-fallback policy. */
+/* GSI pale-map layer with online-first, on-disk-fallback, white-outside policy. */
 (function (root) {
   "use strict";
 
@@ -18,22 +18,31 @@
         tile.setAttribute("role", "presentation");
         var localUrl = L.Util.template(localTemplate, coords);
         var remoteUrl = L.Util.template(remoteTemplate, coords);
+        var triedRemote = false;
+        var triedLocal = false;
         var finished = false;
         function complete(error) {
           if (finished) return;
           finished = true;
           done(error || null, tile);
         }
+        function loadRemote() {
+          triedRemote = true;
+          tile.src = remoteUrl;
+        }
+        function loadLocal() {
+          triedLocal = true;
+          tile.src = localUrl;
+        }
         tile.onload = function () { complete(); };
         tile.onerror = function () {
-          if (tile.src.indexOf(remoteUrl) === -1 && navigator.onLine !== false) {
-            tile.src = remoteUrl;
-          } else {
-            tile.src = transparentPixel();
-            complete();
-          }
+          if (!triedRemote && navigator.onLine !== false) return loadRemote();
+          if (!triedLocal) return loadLocal();
+          tile.src = transparentPixel();
+          complete();
         };
-        tile.src = localUrl;
+        if (navigator.onLine !== false) loadRemote();
+        else loadLocal();
         return tile;
       }
     });

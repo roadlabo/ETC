@@ -30,7 +30,7 @@ from math import asin, atan2, cos, pi, radians, sin, sqrt
 from pathlib import Path
 from typing import List, Tuple
 
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, render_template_string, request, send_from_directory
 
 
 # ------------------------------
@@ -162,6 +162,7 @@ DEFAULT_SPEED = 30.0  # km/h（ダミー）
 TIME_STEP_SEC = 10     # 各点を+10秒でダミー時刻生成
 
 app = Flask(__name__)
+SRC_DIR = Path(__file__).resolve().parent.parent
 
 # Flaskのエンドポイントから参照する出力先ディレクトリ。
 # main() 実行時に上書きされるが、インポート時にも有効なパスを持たせておく。
@@ -174,8 +175,9 @@ INDEX_HTML = """
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>サンプルルート作成</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="/leaflet/leaflet.css" />
+  <script src="/leaflet/leaflet.js"></script>
+  <script src="/offline_map.js"></script>
   <style>
     html, body, #map { height: 100%; margin: 0; }
     .toolbar { position:absolute; top:10px; left:10px; z-index:1000; background:#fff; padding:8px; border-radius:6px; box-shadow:0 2px 6px rgba(0,0,0,.2); }
@@ -195,10 +197,7 @@ INDEX_HTML = """
 </div>
 <script>
   const map = L.map('map').setView([35.069095, 134.004512], 12); // 津山市役所周辺
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; OpenStreetMap contributors'
-  }).addTo(map);
+  addGsiOfflineLayer(map, { maxZoom: 19, localUrl: "/tiles/gsi_pale/{z}/{x}/{y}.png" });
 
   const points = []; // {lat, lon}
   const markers = [];
@@ -289,6 +288,21 @@ def build_rows(points: List[Tuple[float, float]], start_time: datetime) -> List[
 @app.route("/")
 def index():
     return render_template_string(INDEX_HTML)
+
+
+@app.route("/leaflet/<path:filename>")
+def leaflet_assets(filename):
+    return send_from_directory(SRC_DIR / "leaflet", filename)
+
+
+@app.route("/offline_map.js")
+def offline_map_asset():
+    return send_from_directory(SRC_DIR, "offline_map.js")
+
+
+@app.route("/tiles/gsi_pale/<int:z>/<int:x>/<path:filename>")
+def offline_tile_asset(z, x, filename):
+    return send_from_directory(SRC_DIR / "tiles" / "gsi_pale" / str(z) / str(x), filename)
 
 
 @app.route("/save", methods=["POST"])

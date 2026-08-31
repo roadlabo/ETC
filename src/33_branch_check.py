@@ -13,6 +13,7 @@ if str(SRC_DIR) not in sys.path:
 import numpy as np
 import pandas as pd
 import folium
+from offline_leaflet import apply_offline_tile_support
 
 NOGUI_MODE = "--nogui" in sys.argv[1:]
 
@@ -177,7 +178,7 @@ def ensure_columns(df: pd.DataFrame, cols: List[str]) -> None:
 
 def is_internet_available(timeout_sec: float = 1.0) -> bool:
     try:
-        with socket.create_connection(("tile.openstreetmap.org", 443), timeout=timeout_sec):
+        with socket.create_connection(("cyberjapandata.gsi.go.jp", 443), timeout=timeout_sec):
             return True
     except Exception:
         return False
@@ -309,6 +310,7 @@ LEAFLET_HTML = r"""
   <title>Branch Check</title>
   <link rel="stylesheet" href="leaflet/leaflet.css"/>
   <script src="leaflet/leaflet.js"></script>
+  <script src="offline_map.js"></script>
   <style>
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
@@ -590,41 +592,8 @@ LEAFLET_HTML = r"""
     try { if (base) map.removeLayer(base); } catch(e) {}
     base = null;
 
-    const layer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      maxZoom: 20,
-      attribution: '© OpenStreetMap contributors © CARTO',
-      crossOrigin: true,
-      updateWhenIdle: true,
-      keepBuffer: 2,
-    });
-
-    let okOnce = false;
-    let firstOkAt = 0;
-
-    layer.on('tileload', () => {
-      if (!okOnce) {
-        okOnce = true;
-        firstOkAt = Date.now();
-      }
-    });
-
-    // tileerror は数えるだけ。成功していれば剥がさない
-    let errCount = 0;
-    layer.on('tileerror', () => {
-      errCount += 1;
-    });
-
-    layer.addTo(map);
-
-    // 6秒待っても1枚も成功しなければ、オフライン扱いでタイルを外す
-    setTimeout(() => {
-      if (!okOnce) {
-        try { map.removeLayer(layer); } catch(e) {}
-        base = null;
-      } else {
-        base = layer;
-      }
-    }, 6000);
+    const layer = addGsiOfflineLayer(map, { maxZoom: 20 });
+    base = layer;
   }
 
   function initMap(centerLat, centerLon, zoom){
@@ -1883,8 +1852,8 @@ def run_without_gui(args: List[str]) -> Optional[str]:
     fmap = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=17,
-        tiles="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-        attr="© OpenStreetMap contributors © CARTO",
+        tiles="https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png",
+        attr="国土地理院",
     )
 
     for _, row in df.head(300).iterrows():
@@ -1900,7 +1869,7 @@ def run_without_gui(args: List[str]) -> Optional[str]:
 
     folium.Marker([center_lat, center_lon], tooltip="Center").add_to(fmap)
     out_path = csv_path.with_name(f"{csv_path.stem}_branch_check.html")
-    fmap.save(str(out_path))
+    out_path.write_text(apply_offline_tile_support(fmap.get_root().render()), encoding="utf-8")
     return str(out_path)
 
 
