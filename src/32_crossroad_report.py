@@ -14,6 +14,7 @@ except Exception as _exc:
     XLImage = None
     print(f"[WARN] openpyxl image feature disabled (Pillow missing?): {_exc}")
 from openpyxl.styles import Alignment, Border, Font, Side
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
 
 print(
@@ -391,21 +392,7 @@ class _ExcelReportHelper:
         return [c / total_days for c in counts], time_parse_ng_count, sum(counts)
 
     def _populate_delay_data_sheet(self, ws, combos: list[dict]) -> None:
-        headers = [
-            "流入方向",
-            "流出方向",
-            "日あたり総遅れ時間（分/日）",
-            "平均遅れ時間（秒）",
-            "時間帯",
-            "30分総遅れ時間（分）",
-            "30分平均遅れ時間（秒）",
-        ]
-        ws.append(headers)
-
-        for col_idx in range(1, len(headers) + 1):
-            ws.cell(row=1, column=col_idx).font = Font(bold=True)
-
-        fixed_slots = build_fixed_halfhour_slots()
+        fixed_slots = [slot for slot in build_fixed_halfhour_slots() if 12 <= slot["slot_idx"] <= 41]
         total_days = len(self.unique_dates)
         delay_df = self.clean_df.copy()
         delay_df = delay_df[delay_df["time_valid"] == 1].copy()
@@ -437,73 +424,201 @@ class _ExcelReportHelper:
 
         sorted_combos = sorted(
             [c for c in combos if c["in_b"] != c["out_b"]],
-            key=lambda c: (c["in_b"], c["out_b"]),
+            key=lambda c: (-c["daily_total_delay"], c["in_b"], c["out_b"]),
         )
+        slot_total_min = {
+            slot["slot_idx"]: sum(
+                slot_stats_map.get((int(c["in_b"]), int(c["out_b"])), {})
+                .get(slot["slot_idx"], {})
+                .get("delay_total_min", 0.0)
+                for c in sorted_combos
+            )
+            for slot in fixed_slots
+        }
+        total_daily_delay_min = sum(c["daily_total_delay"] for c in sorted_combos) / 60.0
+        total_delay_s = sum(c.get("total_delay", 0.0) for c in sorted_combos)
+        total_ok = sum(c.get("ok_count", 0) for c in sorted_combos)
+        total_avg_delay = (total_delay_s / total_ok) if total_ok else 0.0
+
+        def write_header(start_row: int, title: str, unit_label: str) -> int:
+            max_col = 4 + len(fixed_slots)
+            ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row + 2, end_column=1)
+            ws.cell(row=start_row, column=1, value="方向（流入→流出）")
+            ws.merge_cells(start_row=start_row, start_column=2, end_row=start_row, end_column=4)
+            ws.cell(row=start_row, column=2, value="日あたり集計")
+            ws.merge_cells(start_row=start_row, start_column=5, end_row=start_row, end_column=max_col)
+            ws.cell(row=start_row, column=5, value=title)
+
+            headers = [
+                "日あたり総遅れ時間\n（分・台/日）",
+                "総遅れ時間\n構成率（％）",
+                "平均遅れ時間\n（秒）",
+            ]
+            for col, value in enumerate(headers, start=2):
+                ws.cell(row=start_row + 1, column=col, value=value)
+                ws.cell(row=start_row + 2, column=col, value=unit_label if col == 4 else "")
+            for col, slot in enumerate(fixed_slots, start=5):
+                ws.cell(row=start_row + 1, column=col, value=slot["label"])
+                ws.cell(row=start_row + 2, column=col, value=unit_label)
+
+            for row in range(start_row, start_row + 3):
+                for col in range(1, max_col + 1):
+                    cell = ws.cell(row=row, column=col)
+                    cell.font = Font(bold=True)
+                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            ws.row_dimensions[start_row].height = 22
+            ws.row_dimensions[start_row + 1].height = 42
+            ws.row_dimensions[start_row + 2].height = 24
+            return max_col
+
+        def write_block(start_row: int, title: str, unit_label: str, mode: str) -> int:
+            max_col = write_header(start_row, title, unit_label)
+            row_idx = start_row + 3
+            for combo in sorted_combos:
+                in_b = int(combo["in_b"])
+                out_b = int(combo["out_b"])
+                direction_slots = slot_stats_map.get((in_b, out_b), {})
+                daily_total_delay_min = (combo["total_delay"] / total_days / 60.0) if total_days else 0.0
+                daily_share_pct = (daily_total_delay_min / total_daily_delay_min * 100.0) if total_daily_delay_min else 0.0
+                values = [
+                    f"{in_b}→{out_b}",
+                    daily_total_delay_min,
+                    daily_share_pct,
+                    float(combo["avg_delay"] or 0.0),
+                ]
+                for slot in fixed_slots:
+                    slot_idx = slot["slot_idx"]
+                    slot_min = direction_slots.get(slot_idx, {}).get("delay_total_min", 0.0)
+                    if mode == "share":
+                        values.append((slot_min / slot_total_min[slot_idx] * 100.0) if slot_total_min[slot_idx] else 0.0)
+                    else:
+                        values.append(slot_min)
+
+                for col, val in enumerate(values, start=1):
+                    cell = ws.cell(row=row_idx, column=col, value=round(val, 1) if isinstance(val, float) else val)
+                    cell.alignment = Alignment(horizontal="center" if col == 1 else "right", vertical="center")
+                    if col >= 2:
+                        cell.number_format = "0.0"
+                row_idx += 1
+
+            total_values = [
+                "合計or平均",
+                total_daily_delay_min,
+                100.0 if total_daily_delay_min else 0.0,
+                total_avg_delay,
+            ]
+            for slot in fixed_slots:
+                slot_idx = slot["slot_idx"]
+                total_values.append(100.0 if mode == "share" and slot_total_min[slot_idx] else slot_total_min[slot_idx])
+
+            for col, val in enumerate(total_values, start=1):
+                cell = ws.cell(row=row_idx, column=col, value=round(val, 1) if isinstance(val, float) else val)
+                cell.font = Font(bold=True)
+                cell.alignment = Alignment(horizontal="center" if col == 1 else "right", vertical="center")
+                if col >= 2:
+                    cell.number_format = "0.0"
+
+            self.apply_table_borders(ws, start_row, 1, row_idx, max_col)
+            self._apply_row_bottom_border(ws, start_row + 2, 1, max_col)
+            self._apply_row_bottom_border(ws, row_idx, 1, max_col)
+            return row_idx + 2
+
+        next_row = write_block(1, "30分毎集計（構成率）", "構成率（％）", "share")
+        write_block(next_row, "30分毎集計（総遅れ時間）", "総遅れ時間（分）", "total")
+
+        max_col = 4 + len(fixed_slots)
+        ws.freeze_panes = "E4"
+        ws.column_dimensions["A"].width = 16
+        ws.column_dimensions["B"].width = 18
+        ws.column_dimensions["C"].width = 14
+        ws.column_dimensions["D"].width = 14
+        for col_idx in range(5, max_col + 1):
+            ws.column_dimensions[get_column_letter(col_idx)].width = 11
+
+    def _calc_hourly_per_day_counts(self, time_series: pd.Series, total_days: int) -> list[float]:
+        counts = [0 for _ in range(24)]
+        for value in time_series.tolist():
+            dt = parse_center_datetime(value)
+            if dt is None:
+                continue
+            counts[dt.hour] += 1
+        if total_days == 0:
+            return [0.0 for _ in range(24)]
+        return [c / total_days for c in counts]
+
+    def _populate_time_data_sheet(self, ws, combos: list[dict]) -> None:
+        hour_labels = [f"{hour}時台" for hour in range(24)]
+        max_col = 3 + len(hour_labels)
+        ws.merge_cells(start_row=1, start_column=4, end_row=1, end_column=max_col)
+        ws.cell(row=1, column=4, value="時間帯ヒストグラム（台/日・時）")
+        headers = ["方向（流入→流出）", "日あたり台数（台/日）", "昼夜率（24h/7-19時）", *hour_labels]
+        for col, value in enumerate(headers, start=1):
+            ws.cell(row=2, column=col, value=value)
+        for row in range(1, 3):
+            for col in range(1, max_col + 1):
+                cell = ws.cell(row=row, column=col)
+                cell.font = Font(bold=True)
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        total_days = len(self.unique_dates)
+        sorted_combos = sorted(
+            [c for c in combos if c["in_b"] != c["out_b"]],
+            key=lambda c: (-c["daily_count"], c["in_b"], c["out_b"]),
+        )
+        direction_hourly: dict[tuple[int, int], list[float]] = {}
+        clean_by_direction = self.clean_df[self.clean_df["in_b"] != self.clean_df["out_b"]].copy()
+        if not clean_by_direction.empty:
+            for (in_b, out_b), subset in clean_by_direction.groupby(["in_b", "out_b"]):
+                direction_hourly[(int(in_b), int(out_b))] = self._calc_hourly_per_day_counts(subset["time"], total_days)
+
+        row_idx = 3
         for combo in sorted_combos:
             in_b = int(combo["in_b"])
             out_b = int(combo["out_b"])
-            daily_total_delay_min = (combo["total_delay"] / total_days / 60.0) if total_days else 0.0
-            avg_delay_s = float(combo["avg_delay"] or 0.0)
-            direction_slots = slot_stats_map.get((in_b, out_b), {})
-            for slot in fixed_slots:
-                slot_data = direction_slots.get(slot["slot_idx"], None)
-                ws.append(
-                    [
-                        in_b,
-                        out_b,
-                        daily_total_delay_min,
-                        avg_delay_s,
-                        slot["label"],
-                        slot_data["delay_total_min"] if slot_data else 0.0,
-                        slot_data["delay_avg_s"] if slot_data else 0.0,
-                    ]
-                )
+            hourly = direction_hourly.get((in_b, out_b), [0.0 for _ in range(24)])
+            daytime_total = sum(hourly[7:19])
+            day_night_ratio = (sum(hourly) / daytime_total) if daytime_total else None
+            values = [f"{in_b}→{out_b}", combo["daily_count"], day_night_ratio, *hourly]
+            for col, val in enumerate(values, start=1):
+                if isinstance(val, float):
+                    val = round(val, 2) if col == 3 else round(val, 1)
+                cell = ws.cell(row=row_idx, column=col, value=val)
+                cell.alignment = Alignment(horizontal="center" if col == 1 else "right", vertical="center")
+                if col == 3:
+                    cell.number_format = "0.00"
+                elif col >= 2:
+                    cell.number_format = "0.0"
+            row_idx += 1
 
-        for row in ws.iter_rows(min_row=2, min_col=3, max_col=4):
-            for cell in row:
-                cell.number_format = "0.0"
-        for row in ws.iter_rows(min_row=2, min_col=6, max_col=7):
-            for cell in row:
-                cell.number_format = "0.0"
-
-        ws.column_dimensions["A"].width = 8
-        ws.column_dimensions["B"].width = 8
-        ws.column_dimensions["C"].width = 20
-        ws.column_dimensions["D"].width = 15
-        ws.column_dimensions["E"].width = 15
-        ws.column_dimensions["F"].width = 17
-        ws.column_dimensions["G"].width = 17
-
-    def _populate_time_data_sheet(self, ws, combos: list[dict]) -> None:
-        headers = [
-            "方向（流入→流出）",
-            "総台数（台）",
-            "日あたり台数（台/日）",
-            "平均遅れ時間（秒）",
-            "1日あたり総遅れ時間（秒/日）",
-            "階級（時）",
-            "台数（台/日）",
+        total_hourly = [
+            sum(direction_hourly.get((int(c["in_b"]), int(c["out_b"])), [0.0 for _ in range(24)])[hour] for c in sorted_combos)
+            for hour in range(24)
         ]
-        ws.append(headers)
-        sorted_combos = sorted(combos, key=lambda c: (c["in_b"], c["out_b"]))
-        for combo in sorted_combos:
-            direction = f"{combo['in_b']}→{combo['out_b']}"
-            base_info = [
-                direction,
-                combo["count_total"],
-                combo["daily_count"],
-                combo["avg_delay"],
-                combo["daily_total_delay"],
-            ]
-            for label, per_day in zip(TIME_LABELS, combo["time_per_day"]):
-                ws.append(base_info + [label, per_day])
+        daytime_total = sum(total_hourly[7:19])
+        total_ratio = (sum(total_hourly) / daytime_total) if daytime_total else None
+        total_values = ["合計", sum(total_hourly), total_ratio, *total_hourly]
+        for col, val in enumerate(total_values, start=1):
+            if isinstance(val, float):
+                val = round(val, 2) if col == 3 else round(val, 1)
+            cell = ws.cell(row=row_idx, column=col, value=val)
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center" if col == 1 else "right", vertical="center")
+            if col == 3:
+                cell.number_format = "0.00"
+            elif col >= 2:
+                cell.number_format = "0.0"
 
-        for row in ws.iter_rows(min_row=2, min_col=3, max_col=5):
-            for cell in row:
-                cell.number_format = "0.0"
-        for row in ws.iter_rows(min_row=2, min_col=7, max_col=7):
-            for cell in row:
-                cell.number_format = "0.0"
+        self.apply_table_borders(ws, 1, 1, row_idx, max_col)
+        self._apply_row_bottom_border(ws, 2, 1, max_col)
+        self._apply_row_bottom_border(ws, row_idx, 1, max_col)
+        ws.freeze_panes = "D3"
+        ws.row_dimensions[1].height = 22
+        ws.row_dimensions[2].height = 42
+        ws.column_dimensions["A"].width = 16
+        ws.column_dimensions["B"].width = 18
+        ws.column_dimensions["C"].width = 16
+        for col_idx in range(4, max_col + 1):
+            ws.column_dimensions[get_column_letter(col_idx)].width = 8
 
     def _populate_report_sheet(self, ws, combos: list[dict]) -> None:
         cross_name = self.crossroad_path.stem

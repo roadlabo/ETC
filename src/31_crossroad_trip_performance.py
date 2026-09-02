@@ -38,10 +38,8 @@ CONFIG = [
 ]
 
 # 抜粋したい曜日（TRIP_DATE から算出した MON〜SUN の略称）
-# 例：火・水・木のみ抽出したい場合
-TARGET_WEEKDAYS = ["TUE", "WED", "THU"]
-# ALLを対象にしたい場合は空リストにする：
-# TARGET_WEEKDAYS: list[str] = []
+# 空リストの場合は全曜日対象。曜日を絞る場合は --weekdays を指定する。
+TARGET_WEEKDAYS: list[str] = []
 
 WEEKDAY_KANJI_TO_ABBR = {
     "月": "MON",
