@@ -22,11 +22,15 @@ FOLDER_OUT = "15_エリア第1.5スクリーニング"
 LON_INDEX = 14
 LAT_INDEX = 15
 FLAG_INDEX = 12
+OP_DATE_INDEX = 2
 DATE_INDEX = 6
 OP_ID_INDEX = 3
+VEHICLE_TYPE_INDEX = 4
+VEHICLE_USE_INDEX = 5
 TRIP_NO_INDEX = 8
-MIN_OUTPUT_COLUMNS = 33  # 様式1-3のA列からAG列まで
+MIN_OUTPUT_COLUMNS = 33  # 様式1-2のA列からAG列まで
 EARTH_RADIUS_M = 6_371_000.0
+WEEKDAY_ABBR = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
 
 
 @dataclass(frozen=True)
@@ -387,9 +391,68 @@ def safe_filename(text: str, max_len: int = 96) -> str:
     return (safe or "subtrip")[:max_len]
 
 
-def write_subtrip_csv(out_dir: Path, seq_no: int, subtrip_id: str, points: Sequence[TripPoint]) -> Path:
+def _weekday_abbr_from_ymd(ymd: str) -> str | None:
+    try:
+        py = datetime.strptime(ymd[:8], "%Y%m%d").weekday()
+    except ValueError:
+        return None
+    return "SUN" if py == 6 else WEEKDAY_ABBR[py + 1]
+
+
+def _first_value(points: Sequence[TripPoint], index: int, default: str = "") -> str:
+    for point in points:
+        if len(point.values) > index:
+            token = point.values[index].strip()
+            if token:
+                return token
+    return default
+
+
+def _numeric_tag(prefix: str, value: str, width: int, default: int = 0) -> str:
+    try:
+        number = int(float(value.strip()))
+    except (TypeError, ValueError):
+        number = default
+    return f"{prefix}{number:0{width}d}"
+
+
+def build_subtrip_filename(seq_no: int, subtrip_index: int, points: Sequence[TripPoint]) -> str:
+    op_dates: set[str] = set()
+    for point in points:
+        if len(point.values) > OP_DATE_INDEX:
+            token = point.values[OP_DATE_INDEX].strip()[:8]
+            if len(token) == 8 and token.isdigit():
+                op_dates.add(token)
+    if not op_dates:
+        for point in points:
+            if len(point.values) > DATE_INDEX:
+                token = point.values[DATE_INDEX].strip()[:8]
+                if len(token) == 8 and token.isdigit():
+                    op_dates.add(token)
+
+    primary_date = min(op_dates) if op_dates else "00000000"
+    weekdays = {_weekday_abbr_from_ymd(d) for d in op_dates}
+    weekday_part = "-".join(abbr for abbr in WEEKDAY_ABBR if abbr in weekdays) or "UNK"
+
+    opid12 = _first_value(points, OP_ID_INDEX, "000000000000").zfill(12)
+    trip_tag = _numeric_tag("t", _first_value(points, TRIP_NO_INDEX, "0"), 3)
+    etype_tag = _numeric_tag("E", _first_value(points, VEHICLE_TYPE_INDEX, "0"), 2)
+    fuse_tag = _numeric_tag("F", _first_value(points, VEHICLE_USE_INDEX, "0"), 2)
+
+    base = f"area_{primary_date}_{weekday_part}_ID{opid12}_{trip_tag}_{etype_tag}_{fuse_tag}"
+    if subtrip_index >= 2:
+        base += f"_s{subtrip_index:02d}"
+    return f"{safe_filename(base, 140)}.csv"
+
+
+def write_subtrip_csv(out_dir: Path, seq_no: int, subtrip_index: int, points: Sequence[TripPoint]) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"area15_{seq_no:06d}_{safe_filename(subtrip_id)}.csv"
+    filename = build_subtrip_filename(seq_no, subtrip_index, points)
+    out_path = out_dir / filename
+    if out_path.exists():
+        stem = out_path.stem
+        suffix = out_path.suffix
+        out_path = out_dir / f"{safe_filename(stem, 130)}_n{seq_no:06d}{suffix}"
     with out_path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.writer(fh)
         for idx, point in enumerate(points):
@@ -398,7 +461,7 @@ def write_subtrip_csv(out_dir: Path, seq_no: int, subtrip_id: str, points: Seque
                 base.extend([""] * (MIN_OUTPUT_COLUMNS - len(base)))
             if len(base) <= FLAG_INDEX:
                 base.extend([""] * (FLAG_INDEX + 1 - len(base)))
-            base[FLAG_INDEX] = "0" if idx == 0 else "1" if idx == len(points) - 1 else ""
+            base[FLAG_INDEX] = "0" if idx == 0 else "1" if idx == len(points) - 1 else "2"
             writer.writerow(base)
     return out_path
 
@@ -493,7 +556,7 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
                     duration = (sub[-1].timestamp - sub[0].timestamp).total_seconds() if sub[0].timestamp and sub[-1].timestamp else 0.0
                     stats.subtrips += 1
                     subtrip_file_seq += 1
-                    subtrip_path = write_subtrip_csv(subtrip_csv_dir, subtrip_file_seq, sid, sub)
+                    subtrip_path = write_subtrip_csv(subtrip_csv_dir, subtrip_file_seq, sub_idx, sub)
                     row = {
                         "source_file": str(csv_path),
                         "original_trip_id": oid,

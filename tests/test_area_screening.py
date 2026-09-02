@@ -131,26 +131,35 @@ class AreaScreeningTest(unittest.TestCase):
             self.assertEqual(summaries[0]["start_time"], "20250101080500")
             self.assertEqual(summaries[0]["end_time"], "20250101081500")
 
-    def test_writes_style_1_3_columns_and_preserves_original_values_except_flags(self):
+    def test_writes_style_1_2_columns_and_preserves_original_values_except_flags(self):
         with tempfile.TemporaryDirectory() as td:
             original_rows = [
-                row33("wide", 1, "20250101080000", 135.003, 35.003),
-                row33("wide", 1, "20250101081000", 135.007, 35.007),
+                row33("14007", 1, "20250101080000", 135.003, 35.003),
+                row33("14007", 1, "20250101080500", 135.005, 35.005),
+                row33("14007", 1, "20250101081000", 135.007, 35.007),
             ]
             original_rows[0][12] = "2"
             original_rows[1][12] = "2"
+            original_rows[2][12] = "2"
+            for original_row in original_rows:
+                original_row[4] = "2"
+                original_row[5] = "1"
             _, _, subtrip_files, _ = run_case(Path(td), {"wide.csv": original_rows})
 
             with subtrip_files[0].open("r", encoding="utf-8", newline="") as fh:
                 rows = list(csv.reader(fh))
 
-            self.assertEqual([len(r) for r in rows], [33, 33])
+            self.assertEqual(subtrip_files[0].name, "area_20250101_WED_ID000000014007_t001_E02_F01.csv")
+            self.assertEqual([len(r) for r in rows], [33, 33, 33])
             self.assertEqual(rows[0][:12], original_rows[0][:12])
             self.assertEqual(rows[0][13:], original_rows[0][13:])
             self.assertEqual(rows[1][:12], original_rows[1][:12])
             self.assertEqual(rows[1][13:], original_rows[1][13:])
+            self.assertEqual(rows[2][:12], original_rows[2][:12])
+            self.assertEqual(rows[2][13:], original_rows[2][13:])
             self.assertEqual(rows[0][12], "0")
-            self.assertEqual(rows[1][12], "1")
+            self.assertEqual(rows[1][12], "2")
+            self.assertEqual(rows[2][12], "1")
 
     def test_outside_to_inside_end_inside_to_outside_all_inside_all_outside(self):
         with tempfile.TemporaryDirectory() as td:
