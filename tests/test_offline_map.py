@@ -41,6 +41,14 @@ class OfflineMapTests(unittest.TestCase):
             self.assertIn("addGsiOfflineLayer(map", html)
             self.assertNotIn("unpkg.com/leaflet", html)
 
+    def test_crossroad_sampler_uses_visible_red_guides_and_online_tiles_first(self):
+        html = (Path(__file__).parents[1] / "src" / "11_crossroad_sampler.html").read_text(encoding="utf-8")
+        self.assertIn('addGsiOfflineLayer(map);', html)
+        self.assertNotIn("preferLocal: true", html)
+        self.assertIn('var COLOR_LINE = "#D71920"', html)
+        self.assertIn('var COLOR_CENTER = "#D71920"', html)
+        self.assertNotIn("cdn.jsdelivr.net", html)
+
     def test_python_map_builders_use_offline_support(self):
         src = Path(__file__).parents[1] / "src"
         for name in (

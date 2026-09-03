@@ -211,8 +211,14 @@ class Bridge(QObject):
             csv_norm = csv_norm.rstrip("\n") + "\n"
             with open(csv_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(csv_norm)
-            image_b64 = str(jpg_data_url).split(",", 1)[1]
-            jpg_path.write_bytes(base64.b64decode(image_b64))
+            jpg_data_url = str(jpg_data_url)
+            if jpg_data_url.startswith("data:image/") and "," in jpg_data_url:
+                image_b64 = jpg_data_url.split(",", 1)[1]
+                jpg_path.write_bytes(base64.b64decode(image_b64))
+            else:
+                pixmap = self.window.web.grab()
+                if pixmap.isNull() or not pixmap.save(str(jpg_path), "JPG", 90):
+                    raise RuntimeError("JPG画像を生成できませんでした。")
         except Exception as exc:
             self.error.emit(f"保存に失敗しました: {exc}")
             return

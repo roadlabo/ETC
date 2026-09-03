@@ -11,6 +11,7 @@
     var localTemplate = options.localUrl || "tiles/gsi_pale/{z}/{x}/{y}.png";
     var remoteTemplate = options.remoteUrl ||
       "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png";
+    var preferLocal = !!options.preferLocal;
     var Layer = L.TileLayer.extend({
       createTile: function (coords, done) {
         var tile = document.createElement("img");
@@ -36,12 +37,14 @@
         }
         tile.onload = function () { complete(); };
         tile.onerror = function () {
-          if (!triedRemote && navigator.onLine !== false) return loadRemote();
+          if (preferLocal && !triedRemote && navigator.onLine !== false) return loadRemote();
+          if (!preferLocal && !triedRemote && navigator.onLine !== false) return loadRemote();
           if (!triedLocal) return loadLocal();
           tile.src = transparentPixel();
           complete();
         };
-        if (navigator.onLine !== false) loadRemote();
+        if (preferLocal) loadLocal();
+        else if (navigator.onLine !== false) loadRemote();
         else loadLocal();
         return tile;
       }
