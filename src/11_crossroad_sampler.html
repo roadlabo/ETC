@@ -120,6 +120,7 @@
     var BRANCH_LINE_WEIGHT = 8;
     var BRANCH_END_SCALE = 2.0;
     var LABEL_PUSH_PX = 80;
+    var SAVE_ZOOM = 16;
     var LABEL_SIDE_PX = 0;
     var branchPoints = [];
     var branchMarkers = [];
@@ -438,43 +439,16 @@
         });
       }
 
-      var pCenter = map.latLngToLayerPoint(centerLatLng);
-      var bounds = L.latLngBounds([centerLatLng]);
-      for (var i = 0; i < branchPoints.length; i++) {
-        var pEnd = map.latLngToLayerPoint(branchPoints[i]);
-        var dx = pEnd.x - pCenter.x;
-        var dy = pEnd.y - pCenter.y;
-        var len = Math.sqrt(dx * dx + dy * dy);
-        if (len === 0) len = 1;
-        var ux = dx / len;
-        var uy = dy / len;
-
-        var pEndDraw = L.point(
-          pCenter.x + dx * BRANCH_END_SCALE,
-          pCenter.y + dy * BRANCH_END_SCALE
-        );
-        var endDrawLL = map.layerPointToLatLng(pEndDraw);
-        bounds.extend(endDrawLL);
-
-        var pLabel = L.point(
-          pEndDraw.x + ux * LABEL_PUSH_PX,
-          pEndDraw.y + uy * LABEL_PUSH_PX
-        );
-        var labelLL = map.layerPointToLatLng(pLabel);
-        bounds.extend(labelLL);
-      }
-
-      map.once("moveend", function() {
+      map.setView(centerLatLng, SAVE_ZOOM, { animate: false });
+      setTimeout(function() {
         updateBranches();
 
         // タイル読込み待ち（ネットワーク環境差吸収）
         setTimeout(function() {
           updateBranches();
           captureAndSave();
-        }, 2000);  // ← 2秒待つ
-      });
-
-      map.fitBounds(bounds.pad(0.15), { animate: false });
+        }, 2000);
+      }, 0);
     }
 
     // CSV保存

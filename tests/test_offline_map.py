@@ -47,6 +47,9 @@ class OfflineMapTests(unittest.TestCase):
         self.assertNotIn("preferLocal: true", html)
         self.assertIn('var COLOR_LINE = "#D71920"', html)
         self.assertIn('var COLOR_CENTER = "#D71920"', html)
+        self.assertIn("var SAVE_ZOOM = 16", html)
+        self.assertIn("map.setView(centerLatLng, SAVE_ZOOM", html)
+        self.assertNotIn("map.fitBounds", html)
         self.assertNotIn("cdn.jsdelivr.net", html)
 
     def test_python_map_builders_use_offline_support(self):
