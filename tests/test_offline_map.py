@@ -66,7 +66,7 @@ class OfflineMapTests(unittest.TestCase):
             "unreleased/30_route_performance.py",
             "unreleased/41_od_heatmap_viewer.py",
             "unreleased/43_UI_peak30min_od.py",
-            "unreleased/50_Path_Analysis.py",
+            "50_Path_Analysis.py",
         ):
             text = (src / name).read_text(encoding="utf-8")
             self.assertTrue(

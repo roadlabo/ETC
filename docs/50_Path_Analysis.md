@@ -2,7 +2,7 @@
 
 ## 追加：ルート通過交通分析モード
 
-実体は `src/unreleased/50_Path_Analysis.py` です。既存の交差点・A/B・in/outモードは既定のまま維持しています。
+正式版の実体は `src/50_Path_Analysis.py` です（unreleasedから移動済み）。既存の交差点・A/B・in/outモードは既定のまま維持しています。
 
 1. `bat/50_UI_route_path_analysis.bat` を起動します。
 2. STEP 1でプロジェクトフォルダを1つ選びます。区域・analysis_area・ルート第2スクリーニングを自動確認します。
@@ -11,7 +11,7 @@
 5. 「HTMLレポート・経路地図を開く」で結果を開きます。地図右上から全交通・通過交通・外内・内外・内内・指定Gate ODを切り替えます。
 
 ```bat
-runtime\python\python.exe src\unreleased\50_Path_Analysis.py --mode route --project_dir "D:\PROJECT" --route "対象路線"
+runtime\python\python.exe src\50_Path_Analysis.py --mode route --project_dir "D:\PROJECT" --route "対象路線"
 ```
 
 `--dry_run` は走査のみです。`--route` を省略するとUIを起動します。

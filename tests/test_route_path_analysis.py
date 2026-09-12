@@ -27,7 +27,7 @@ def load(name, path):
 
 area15 = load('path_area15', '15_area_screening.py')
 route20 = load('path_route20', '20_route_trip_extractor.py')
-path50 = load('path_engine50', 'unreleased/50_Path_Analysis.py')
+path50 = load('path_engine50', '50_Path_Analysis.py')
 viewer05 = load('path_viewer05', '05_trip_viewer.py')
 
 def fixture(project, multiple=False):
@@ -179,7 +179,7 @@ class RoutePathTest(unittest.TestCase):
             self.assertIn('第1.5', window.status.text())
             self.assertTrue(window.run_button.isEnabled())
             window.close()
-            args = [sys.executable, str(ROOT / 'src/unreleased/50_Path_Analysis.py'), '--mode', 'route', '--project_dir', str(project), '--route', '対象路線']
+            args = [sys.executable, str(ROOT / 'src/50_Path_Analysis.py'), '--mode', 'route', '--project_dir', str(project), '--route', '対象路線']
             proc = subprocess.run(args, capture_output=True, text=True, encoding='utf-8', env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertIn('"official": true', proc.stdout)
@@ -234,14 +234,15 @@ class RoutePathTest(unittest.TestCase):
             self.assertTrue(first > 0)
             self.assertEqual([r['events'] for r in result['results']], [first, first])
 
-    def test_intersection_engine_regression_against_head(self):
+    def test_intersection_engine_regression_against_pre_promotion(self):
         import types
         baseline = types.ModuleType('baseline_path50')
         baseline.__file__ = str(ROOT / 'src/unreleased/50_Path_Analysis.py')
         sys.modules[baseline.__name__] = baseline
         tk_stub = types.ModuleType('tkinter')
         tk_stub.filedialog = tk_stub.messagebox = None
-        code = subprocess.check_output(['git', 'show', 'HEAD:src/unreleased/50_Path_Analysis.py'], cwd=ROOT)
+        # Pin the pre-promotion baseline so this still works after committing the move.
+        code = subprocess.check_output(['git', 'show', '6f24a3b97c9ecac49fff1b6b369034be3758030b:src/unreleased/50_Path_Analysis.py'], cwd=ROOT)
         with patch.dict(sys.modules, {'tkinter': tk_stub}):
             exec(compile(code, baseline.__file__, 'exec'), baseline.__dict__)
         with tempfile.TemporaryDirectory() as tmp:
