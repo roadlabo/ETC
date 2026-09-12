@@ -2,6 +2,22 @@
 
 ## 追加：ルート通過交通分析モード
 
+### UI外観・フォント（2026-09-12更新）
+
+20系と共通の黒地・緑の計器盤風パネルに統一しました。上部に実行状態と経過時間、左側にプロジェクト・路線選択、右側に対象トリップ数・通過交通数・通過交通率と分類表・主要ODを表示します。小さいウィンドウでは選択パネルをスクロールできます。路線変更時は前路線の結果を消去します。
+
+`QFont::setPointSize: Point size <= 0 (-1)` は表示フォントの警告です。従来の `font-size:14px` ではQtのpointSizeが-1になることを確認したため、50では正のポイントサイズ（標準10pt）を使用し、別ウィンドウになるコンボボックスのアプリ既定フォントも補正します。警告を非表示にする処置ではありません。
+
+新しい `src/assets/logos/logo_50_Path_Analysis.png` は既存15/20ロゴと同系統です。起動時に中央でフェード表示し、右上とウィンドウアイコンにも使用します。右上のロゴは他UIと同じ `ClickableLogoLabel` を使い、道路ラボを開きます。50を配布するときは共通コードとこの画像も含めてください。
+
+検証では旧画面のpointSize=-1、新画面のpointSize=10を確認。アプリ既定をピクセルフォントにした条件でも、全子ウィジェットと文書フォントが正のポイントサイズとなり、ロゴのフェード・解析ワーカー完了・路線切替までQFont警告0件でした。1180×820と960×720で外観を確認しています。全39テスト中37成功、残る2件は既知の30系summaryキー不一致です。
+
+ロゴは組み込みimagegenで生成。参照画像はlogo_20_route_trip_extractor.png、logo_15_area_screening.png。使用プロンプト：
+
+> Create a new matching suite logo for tool 50, using the two supplied images as visual style references. Asset type: a wide 2:1 landscape software splash/header logo PNG. Preserve the same dark navy background, luminous cyan and green roadway/data graphics, purple-blue italic ETC wordmark, metallic white Japanese lettering, and professional dimensional style. Exact text: small upper-left 'Presented by 津山市'; large central 'ETCアナライザー'; bottom subtitle '経路分析'. Replace the screening imagery with a road network and glowing paths connecting two gate portals across a fine square analysis mesh, plus a small bar chart and wireless signal in the same style as references. Keep clean readable Japanese typography, balanced margins, and the same visual family. Do not include NASA lettering or any NASA seal. The result will be displayed in a launch splash and a small header logo; prioritize legibility and cohesive branding.
+
+### 起動・操作
+
 正式版の実体は `src/50_Path_Analysis.py` です（unreleasedから移動済み）。既存の交差点・A/B・in/outモードは既定のまま維持しています。
 
 1. `bat/50_UI_route_path_analysis.bat` を起動します。

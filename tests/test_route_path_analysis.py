@@ -200,6 +200,60 @@ class RoutePathTest(unittest.TestCase):
             self.assertIn('一致', targets[0].warning)
             self.assertFalse(analyze(project, targets[0], path50)['official'])
 
+    def test_ui_fonts_logo_and_worker_results(self):
+        from PyQt6.QtCore import qInstallMessageHandler, QEventLoop, QTimer
+        from PyQt6.QtGui import QFont
+        from PyQt6.QtWidgets import QApplication, QWidget
+        from common.route_path_ui import RouteWindow
+        app = QApplication.instance() or QApplication([])
+        original_font = app.font()
+        pixel_font = QFont(original_font)
+        pixel_font.setPixelSize(14)
+        app.setFont(pixel_font)
+        messages = []
+        old_handler = qInstallMessageHandler(lambda kind, context, message: messages.append(message))
+        window = None
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp)
+                fixture(project, True)
+                window = RouteWindow(path50, project, show_splash=False)
+                window.show()
+                app.processEvents()
+                self.assertTrue(all(w.font().pointSizeF() > 0 for w in [window] + window.findChildren(QWidget)))
+                self.assertGreater(window.result.document().defaultFont().pointSizeF(), 0)
+                self.assertFalse(window.corner_logo.pixmap().isNull())
+                self.assertFalse(window.windowIcon().isNull())
+                window.show_logo_splash()
+                loop = QEventLoop()
+                QTimer.singleShot(2800, loop.quit)
+                loop.exec()
+                self.assertIsNone(window.splash)
+                window.start()
+                loop = QEventLoop()
+                window.worker.finished.connect(loop.quit)
+                QTimer.singleShot(10000, loop.quit)
+                loop.exec()
+                self.assertFalse(window.worker.isRunning())
+                app.processEvents()
+                self.assertEqual(window.metrics['ALL'].text(), '6')
+                self.assertEqual(window.metrics['RATE'].text(), '50.0%')
+                self.assertTrue(window.open_button.isEnabled())
+                self.assertIn('主要通過OD', window.result.toPlainText())
+                window.resize(960, 720)
+                app.processEvents()
+                self.assertEqual(window.setup_scroll.horizontalScrollBar().maximum(), 0)
+                window.routes.setCurrentIndex(1)
+                self.assertEqual(window.metrics['RATE'].text(), '—')
+                self.assertFalse(window.open_button.isEnabled())
+                self.assertFalse(any('QFont::setPointSize' in m for m in messages), messages)
+                window.close()
+        finally:
+            if window and not (window.worker and window.worker.isRunning()):
+                window.close()
+            qInstallMessageHandler(old_handler)
+            app.setFont(original_font)
+
     def test_15_sidecars_and_rerun_protection(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
