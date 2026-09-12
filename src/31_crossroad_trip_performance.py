@@ -116,6 +116,8 @@ EARTH_RADIUS_M = 6_371_000.0
 #   第6判定：10-20m  / 閾値30°
 #   その他：枝不明
 # ============================================================
+INTERSECTION_MODES = {"normal": ("通常交差点", 1.0), "small": ("小交差点", 0.5)}
+
 BRANCH_JUDGE_STEPS = [
     {"near": 20.0, "far": 50.0, "th": 30.0},
     {"near": 20.0, "far": 70.0, "th": 35.0},
@@ -953,6 +955,7 @@ HEADER = [
     "point+2経度", "point+2緯度", "point+2GPS時刻",
     "point+3経度", "point+3緯度", "point+3GPS時刻",
     "point+4経度", "point+4緯度", "point+4GPS時刻",
+    "枝判定モード", "枝判定距離倍率",
 ]
 
 
@@ -1064,7 +1067,10 @@ def main() -> None:
         help="non-tty時の進捗出力間隔（例: 1=毎ファイル, 10=10ファイルごと）",
     )
     parser.add_argument("--radius-m", type=float, default=30.0, help="交差点中心からのHIT半径(m)")
+    parser.add_argument("--intersection-mode", choices=INTERSECTION_MODES, default="normal",
+                        help="枝判定距離: normal=100%（既定）, small=50%")
     args = parser.parse_args()
+    branch_mode_label, branch_distance_scale = INTERSECTION_MODES[args.intersection_mode]
 
     CROSSROAD_HIT_DIST_M = args.radius_m
     CROSSROAD_SEG_HIT_DIST_M = args.radius_m
@@ -1085,6 +1091,7 @@ def main() -> None:
     print(f"出力フォルダ: {output_base_dir}")
     print(f"設定セット数: {len(run_config)}")
     print(f"[INFO] radius_m={args.radius_m}")
+    print(f"[INFO] 枝判定モード={branch_mode_label}, 枝判定距離倍率={branch_distance_scale}")
     if target_weekdays:
         print(f"対象曜日: {', '.join(target_weekdays)}")
     else:
@@ -1363,8 +1370,8 @@ def main() -> None:
                                 last_p_far = None
 
                                 for step in BRANCH_JUDGE_STEPS:
-                                    near = step["near"]
-                                    far = step["far"]
+                                    near = step["near"] * branch_distance_scale
+                                    far = step["far"] * branch_distance_scale
                                     th = step["th"]
 
                                     if is_in:
@@ -1380,7 +1387,7 @@ def main() -> None:
                                         angle_try = (approach_bearing + 180.0) % 360.0
                                         br, diff = find_nearest_branch_with_diff(angle_try, cross.branches)
                                         if diff <= th:
-                                            return angle_try, br, diff, f"IN:{int(near)}-{int(far)}m", p_near, p_far
+                                            return angle_try, br, diff, f"IN:{near:g}-{far:g}m", p_near, p_far
                                     else:
                                         p_near = interpolate_point_at_distance(points, cumdist, center_pos_val + near)
                                         p_far = interpolate_point_at_distance(points, cumdist, center_pos_val + far)
@@ -1393,7 +1400,7 @@ def main() -> None:
                                         angle_try = bearing_deg(p_near[0], p_near[1], p_far[0], p_far[1])
                                         br, diff = find_nearest_branch_with_diff(angle_try, cross.branches)
                                         if diff <= th:
-                                            return angle_try, br, diff, f"OUT:{int(near)}-{int(far)}m", p_near, p_far
+                                            return angle_try, br, diff, f"OUT:{near:g}-{far:g}m", p_near, p_far
 
                                 if not any_in_range:
                                     return None, "", float("inf"), ("IN:OUT_OF_RANGE" if is_in else "OUT:OUT_OF_RANGE"), None, None
@@ -1635,6 +1642,7 @@ def main() -> None:
                                 center_lon_calc_s, center_lat_calc_s, center_time_calc_s,
                             ])
                             row_out.extend(raw_cols)
+                            row_out.extend([branch_mode_label, str(branch_distance_scale)])
 
                             assert len(row_out) == len(HEADER)
                             row_out[idx_t0] = ""

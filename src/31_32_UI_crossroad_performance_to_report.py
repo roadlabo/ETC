@@ -872,9 +872,19 @@ class MainWindow(QMainWindow):
         lbl_m.setStyleSheet("border:none; color:#7cffc6;")
         rad_l.addWidget(lbl_radius); rad_l.addWidget(self.spin_radius); rad_l.addWidget(lbl_m); rad_l.addWidget(m_lbl)
 
-        self.btn_run = QPushButton("分析＋レポート作成"); self.btn_run.clicked.connect(self.start_batch)
+        self.intersection_mode = "normal"
+        self.btn_run = QPushButton("通常交差点")
+        self.btn_run.clicked.connect(lambda: self.start_batch("normal"))
+        self.btn_run_small = QPushButton("小交差点")
+        self.btn_run_small.clicked.connect(lambda: self.start_batch("small"))
+        self.btn_run_small.setMinimumHeight(36)
         self.btn_run.setMinimumHeight(36)
-        run_w = QWidget(); run_l = QHBoxLayout(run_w); run_l.setContentsMargins(0, 0, 0, 0); run_l.addWidget(self.btn_run)
+        run_w = QWidget(); run_l = QVBoxLayout(run_w); run_l.setContentsMargins(0, 0, 0, 0)
+        run_l.addWidget(QLabel("分析＋レポート作成"))
+        run_buttons = QHBoxLayout()
+        run_buttons.addWidget(self.btn_run)
+        run_buttons.addWidget(self.btn_run_small)
+        run_l.addLayout(run_buttons)
 
         box1 = StepBox("STEP 1  プロジェクトフォルダの選択", proj_w)
         box2 = StepBox("STEP 2  分析対象とする曜日を選択", wd_w)
@@ -1217,6 +1227,7 @@ class MainWindow(QMainWindow):
     def _set_run_controls_enabled(self, enabled: bool) -> None:
         self.btn_project.setEnabled(enabled)
         self.btn_run.setEnabled(enabled)
+        self.btn_run_small.setEnabled(enabled)
         self.chk_all.setEnabled(enabled)
         self.spin_radius.setEnabled(enabled)
         for chk in self.weekday_checks.values():
@@ -1447,7 +1458,7 @@ class MainWindow(QMainWindow):
         except OSError:
             return True
 
-    def start_batch(self) -> None:
+    def start_batch(self, intersection_mode: str = "normal") -> None:
         if not self.project_dir:
             QMessageBox.warning(self, "未設定", "①プロジェクトフォルダを選択してください。")
             return
@@ -1499,6 +1510,7 @@ class MainWindow(QMainWindow):
                 self.log_info("ユーザーによりキャンセルされました。")
                 return
 
+        self.intersection_mode = intersection_mode
         self.batch_started_at = datetime.now()
         self.batch_start_perf = perf_counter()
         self.batch_ended_at = None
@@ -1585,6 +1597,7 @@ class MainWindow(QMainWindow):
 
         def _launch():
             args = [str(script31), "--project", str(self.project_dir), "--targets", name, "--progress-step", "1", "--radius-m", str(self.spin_radius.value())]
+            args.extend(["--intersection-mode", self.intersection_mode])
             selected = self._selected_weekdays_for_cli()
             if selected:
                 args.extend(["--weekdays", *selected])
