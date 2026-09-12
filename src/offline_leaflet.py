@@ -55,17 +55,19 @@ def apply_offline_tile_support(html: str) -> str:
         flags=re.IGNORECASE,
     )
     if "offline_map.js" not in html and "function addGsiOfflineLayer" not in html:
-        html = html.replace("</head>", embedded_leaflet_assets() + "\n</head>")
+        # Leaflet must be defined before any dependent plugin script executes.
+        html = html.replace("<head>", "<head>\n" + embedded_leaflet_assets(), 1)
 
     tile_pattern = re.compile(
-        r"var\s+(tile_layer_[a-f0-9]+)\s*=\s*L\.tileLayer\(\s*"
-        r"(?:`[^`]*`|'[^']*'|\"[^\"]*\")\s*,\s*\{.*?\}\s*"
-        r"\)\.addTo\((map_[a-f0-9]+)\);",
+        r"var\s+(?P<layer>tile_layer_[a-f0-9]+)\s*=\s*L\.tileLayer\(\s*"
+        r"(?:`[^`]*`|'[^']*'|\"[^\"]*\")\s*,\s*\{(?:(?!\}\s*\)).)*\}\s*"
+        r"\)\s*(?:\.addTo\((?P<chained>map_[a-f0-9]+)\)"
+        r"|;\s*(?P=layer)\.addTo\((?P<separate>map_[a-f0-9]+)\))\s*;",
         flags=re.DOTALL,
     )
     local_template = quote(LOCAL_GSI_TILE_TEMPLATE, safe="/:{}")
     html = tile_pattern.sub(
-        rf"var \1 = addGsiOfflineLayer(\2, {{ localUrl: '{local_template}' }});",
+        lambda match: f"var {match['layer']} = addGsiOfflineLayer({match['chained'] or match['separate']}, {{ localUrl: '{local_template}' }});",
         html,
     )
     return html

@@ -12,10 +12,15 @@ import json
 import math
 import re
 import time
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator, Sequence
+
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common.screening import digest, relative, write_gate_contract, write_info, read_info
 
 FOLDER_OUT = "15_エリア第1.5スクリーニング"
 
@@ -475,6 +480,9 @@ def iter_csv_files(path: Path, recursive: bool) -> list[Path]:
 def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cancel_flag=None) -> dict:
     started = time.time()
     area = load_area_definition(config.area_geojson)
+    existing_csv_dir = config.output_dir / '15_area_subtrip_csv'
+    if existing_csv_dir.exists() and any(existing_csv_dir.glob('*.csv')):
+        raise ValueError('既存サブトリップとの混在を避けるため、空の出力先を指定してください')
     config.output_dir.mkdir(parents=True, exist_ok=True)
     files = iter_csv_files(config.input_path, config.recursive)
     stats = ScreeningStats(files=len(files))
@@ -486,7 +494,7 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
         "min_subtrip_duration_sec": config.min_subtrip_duration_sec,
         "merge_gap_sec": config.merge_gap_sec,
         "max_check_geojson_features": config.max_check_geojson_features,
-        "note": "第1.5スクリーニングは分析区域内サブトリップCSVの切り出しのみを行います。",
+        "note": "分析区域内サブトリップ全体とGate・由来sidecarを保存します。",
     }
     (config.output_dir / "15_area_screening_settings.json").write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -499,6 +507,8 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
     check_features: list[dict] = []
     skipped_check_features = 0
     subtrip_file_seq = 0
+    trip_index = []
+    write_info(config.output_dir, {'screening_stage': '1.5', 'status': 'running'})
 
     with summary_path.open("w", encoding="utf-8-sig", newline="") as sfh, excluded_path.open("w", encoding="utf-8-sig", newline="") as efh, multi_path.open("w", encoding="utf-8-sig", newline="") as mfh:
         summary_writer = csv.writer(sfh)
@@ -557,6 +567,13 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
                     stats.subtrips += 1
                     subtrip_file_seq += 1
                     subtrip_path = write_subtrip_csv(subtrip_csv_dir, subtrip_file_seq, sub_idx, sub)
+                    record = {'trip_id': subtrip_path.stem, 'source_file': subtrip_path.name,
+                              'sha256': digest(subtrip_path)}
+                    for side, point in [('start', sub[0]), ('end', sub[-1])]:
+                        boundary = point_on_any_boundary(Point(point.lon, point.lat), area.analysis_polygons, 0.05)
+                        record.update({f'{side}_type': 'GATE' if boundary else 'INSIDE',
+                                       f'{side}_gate_id': '', f'{side}_lon': point.lon, f'{side}_lat': point.lat})
+                    trip_index.append(record)
                     row = {
                         "source_file": str(csv_path),
                         "original_trip_id": oid,
@@ -598,6 +615,18 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
         ),
         encoding="utf-8",
     )
+    project = config.area_geojson.parent.parent
+    info = {'screening_stage': '1.5', 'source_stage': '1st_screening',
+            'status': 'cancelled' if cancel_flag is not None and cancel_flag.is_set() else 'complete',
+            'area_file': relative(config.area_geojson, project), 'area_role': 'analysis_area',
+            'area_sha256': digest(config.area_geojson), 'program': '15_area_screening.py',
+            'source_data': relative(config.input_path, project),
+            'parameters': {k: v for k, v in settings.items() if k not in ('input_path', 'area_geojson')}}
+    subtrip_csv_dir.mkdir(parents=True, exist_ok=True)
+    write_gate_contract(config.output_dir, trip_index, {**info, 'trip_data_dir': '15_area_subtrip_csv'})
+    contract = read_info(config.output_dir)
+    contract.pop('trip_data_dir')
+    write_info(subtrip_csv_dir, {**contract, 'contract_parent': True})
     elapsed = time.time() - started
     log_lines = [
         "=== 15 エリア第1.5スクリーニング ===",

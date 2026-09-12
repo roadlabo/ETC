@@ -440,7 +440,7 @@ def list_route_csvs(route_dir: str | Path) -> list[Path]:
 def list_input_csvs(input_dir: str | Path, recursive: bool = True) -> list[Path]:
     root = Path(input_dir)
     pattern = "**/*.csv" if recursive else "*.csv"
-    return sorted(p for p in root.glob(pattern) if p.is_file())
+    return sorted(p for p in root.glob(pattern) if p.is_file() and p.name not in ('15_trip_index.csv', 'gate_master.csv'))
 
 
 def extract_available_dates(input_dir: str | Path, recursive: bool = True) -> list[str]:
@@ -1744,6 +1744,17 @@ def analyze_project(
     valid_points_by_route = [0 for _ in routes]
     total_rows = 0
 
+    # New route folders contain independent copies of the same source trip.
+    # Apply each copy only to its declared route; legacy flat inputs retain the
+    # original all-route projection behavior.
+    route_membership = {}
+    for folder in {p.parent for p in files}:
+        info_path = folder / 'screening_info.json'
+        if info_path.exists():
+            info = json.loads(info_path.read_text(encoding='utf-8-sig'))
+            if info.get('screening_stage') == '2_route':
+                route_membership[folder] = info.get('route_name')
+
     def emit(percent: int, message: str, stats: dict[str, object]) -> None:
         if progress_callback:
             progress_callback(percent, message, stats)
@@ -1797,6 +1808,8 @@ def analyze_project(
                 continue
             trip = trip_key(path, row, row_index)
             for route_index, route in enumerate(routes):
+                if path.parent in route_membership and route_membership[path.parent] != route.name:
+                    continue
                 min_lat, max_lat, min_lon, max_lon = route_bounds[route_index]
                 if lat < min_lat or lat > max_lat or lon < min_lon or lon > max_lon:
                     continue

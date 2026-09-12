@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from common.ui.logo_link import ClickableLogoLabel
+from common.screening import read_info, INDEX_FILE
 
 APP_TITLE = "20_第２スクリーニング（ルート通過トリップの抽出）"
 UI_LOGO_FILENAME = "logo_20_route_trip_extractor.png"
@@ -318,7 +319,7 @@ class MainWindow(QMainWindow):
         steps.addWidget(QLabel("STEP 1 プロジェクトフォルダ"), 0, 0)
         steps.addWidget(self.btn_project, 0, 1)
         steps.addWidget(self.lbl_project, 0, 2)
-        steps.addWidget(QLabel("STEP 2 第1スクリーニングフォルダ"), 1, 0)
+        steps.addWidget(QLabel("STEP 2 第1 / 第1.5スクリーニングフォルダ"), 1, 0)
         steps.addWidget(self.btn_input, 1, 1)
         steps.addWidget(self.lbl_input, 1, 2)
         steps.addWidget(self.chk_recursive, 1, 3)
@@ -461,7 +462,7 @@ class MainWindow(QMainWindow):
         if not self.input_dir:
             return 0
         iterator = self.input_dir.rglob("*.csv") if self.chk_recursive.isChecked() else self.input_dir.glob("*.csv")
-        return sum(1 for _ in iterator)
+        return sum(1 for p in iterator if p.name not in (INDEX_FILE, 'gate_master.csv'))
 
     def select_project(self):
         selected = QFileDialog.getExistingDirectory(self, "プロジェクトフォルダを選択")
@@ -472,10 +473,15 @@ class MainWindow(QMainWindow):
         self.scan_routes()
 
     def select_input(self):
-        selected = QFileDialog.getExistingDirectory(self, "第1スクリーニングフォルダを選択")
+        selected = QFileDialog.getExistingDirectory(self, "第1 / 第1.5スクリーニングフォルダを選択")
         if not selected:
             return
         self.input_dir = Path(selected).resolve()
+        info = read_info(self.input_dir)
+        if info.get('trip_data_dir') == '15_area_subtrip_csv':
+            self.input_dir = self.input_dir / '15_area_subtrip_csv'
+            info = read_info(self.input_dir)
+        self.log_info('入力由来：' + ('第1.5スクリーニング' if info.get('screening_stage') == '1.5' else '第1スクリーニング（第1.5由来未確認）'))
         self.lbl_input.setText(str(self.input_dir))
         self.total_files = self._count_input_files()
         self.lbl_file_total.setText(f"第1スクリーニングCSV数: {self.total_files:,}")
@@ -507,16 +513,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "未設定", "第1スクリーニングフォルダを選択してください。")
             return
         route_dir, out_dir = resolve_project_paths(self.project_dir)
-        if out_dir.exists() and any(out_dir.glob("*.csv")):
-            ret = QMessageBox.question(
+        if out_dir.exists() and any(out_dir.glob("*/*.csv")):
+            QMessageBox.warning(
                 self,
                 "確認",
-                f"既に第2スクリーニング（ルート）CSVが存在します。\n同名ファイルは上書きされます。\n\n{out_dir}\n\n続行しますか？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+                f"ルート別出力が存在します。既存フォルダを移動してから再実行してください。\n\n{out_dir}",
             )
-            if ret != QMessageBox.StandardButton.Yes:
-                return
+            return
         if not route_dir.exists() or not any(route_dir.glob("*.csv")):
             QMessageBox.warning(self, "対象なし", "ルートCSVがありません。")
             return
@@ -658,14 +661,14 @@ class MainWindow(QMainWindow):
         enabled = False
         if self.project_dir:
             _route_dir, out_dir = resolve_project_paths(self.project_dir)
-            enabled = out_dir.exists() and any(out_dir.glob("*.csv"))
+            enabled = out_dir.exists() and any(p.name not in (INDEX_FILE, 'gate_master.csv') for p in out_dir.rglob('*.csv'))
         self.btn_viewer.setEnabled(enabled)
 
     def open_trip_viewer(self):
         if not self.project_dir:
             return
         _route_dir, out_dir = resolve_project_paths(self.project_dir)
-        if not out_dir.exists() or not any(out_dir.glob("*.csv")):
+        if not out_dir.exists() or not any(p.name not in (INDEX_FILE, 'gate_master.csv') for p in out_dir.rglob('*.csv')):
             QMessageBox.information(self, "CSVなし", f"第2スクリーニング（ルート）CSVがありません:\n{out_dir}")
             return
         self._launch_05_viewer(str(out_dir.resolve()))

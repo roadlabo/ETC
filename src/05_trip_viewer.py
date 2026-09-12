@@ -67,8 +67,8 @@ else:
 UI_LOGO_FILENAME = "logo_05_trip_viewer.png"
 UI_LOGO_FALLBACK_FILENAMES = ("logo_05_route_mapper_simple.png",)
 EMPTY_DIRECTORY_GUIDE = "左上のフォルダ選択ボタンからフォルダを指定してください。"
-LON_COL = 15    # 16列目（経度）
-LAT_COL = 14    # 15列目（緯度）
+LON_COL = 14    # O列（経度）
+LAT_COL = 15    # P列（緯度）
 FLAG_COL = 12   # 13列目（フラグ）
 TYPE_COL = 4    # 種別
 USE_COL = 5     # 用途
@@ -982,6 +982,12 @@ class RouteMapperWindow(QMainWindow):
         with os.scandir(self.directory) as entries:
             for entry in entries:
                 name = entry.name
+                if entry.is_dir():
+                    for path in sorted(Path(entry.path).glob('2nd_route_*.csv')):
+                        discovered.append((f'{name}/{path.name}', str(path)))
+                    continue
+                if name in ('15_trip_index.csv', 'gate_master.csv'):
+                    continue
                 if not name.lower().endswith(".csv"):
                     continue
                 discovered.append((name, entry.path))
@@ -1226,7 +1232,9 @@ def main(argv: Sequence[str]) -> None:
 def run_without_gui(folder_path: str) -> Optional[str]:
     target = Path(folder_path).expanduser()
     if target.is_dir():
-        candidates = sorted(target.glob("*.csv"))
+        candidates = sorted(p for p in target.glob("*.csv") if p.name not in ('15_trip_index.csv', 'gate_master.csv'))
+        if not candidates:
+            candidates = sorted(target.glob('*/2nd_route_*.csv'))
         if not candidates:
             raise FileNotFoundError(f"CSV not found in directory: {target}")
         csv_path = candidates[0]

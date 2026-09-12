@@ -1,38 +1,44 @@
-# 20_route_trip_extractor
-## 目的（何をする）
-サンプルルートに近接するトリップ区間を抽出し、第1/第2スクリーニング済みの様式1-2 互換 CSV を生成する。運行 ID や曜日でタグ付けしたファイル名により、後続集計のフィルタを容易にする。
-## 位置づけ（分析フロー上のどこ）
-- **第1/第2スクリーニング**フェーズ（ルートベース）。
-- PDF 用語での「第1スクリーニング（粗判定）」「第2スクリーニング（厳格判定）」を一つのスクリプトで行い、`2nd_*.csv` を出力する。
-## 入力
-- サンプルルート CSV (`--sample` または DEFAULT_SAMPLE_PATH)。列: 緯度=14, 経度=15 を使用。
-- トリップ CSV 群 (`--input-dir` または DEFAULT_INPUT_DIR)。FLAG 列=12, GPS時刻=6, 運行日=2, 運行ID=3, 種別=4, 用途=5, TRIP_NO=8 を前提。
-- オプション: RECURSIVE=True でサブフォルダも探索、TARGET_WEEKDAYS で曜日フィルタ。
-## 出力
-- `--output-dir` 直下に `2nd_{route}_{weekday}_ID{opid12}_{yyyymmdd}_{tXXX}_{E??}_{F??}.csv`
-  - weekday 部は抽出区間に含まれる曜日略称をソートして連結（例: MON-TUE）。
-  - TRIP_NO, 車種/用途をタグに付与。
-  - 行内容は元 CSV の行をそのまま保存（ヘッダなし、UTF-8）。
+# 20 第2スクリーニング（ルート）
 
-※作業フォルダ構成は `docs/05_work_folder_structure.md` を正とする。  
-本スクリプトの成果物は `{PROJECT_ID}/20_第２スクリーニング/`（該当番号フォルダ）に出力して運用する。
-## 実行方法
-- コマンド例: `python 20_route_trip_extractor.py --sample sample_route.csv --input-dir ./opid_split --output-dir ./screening2`
-- 閾値はスクリプト冒頭の定数で調整: `THRESH_M`（距離[m]）, `MIN_HITS`（一致点数）, `TARGET_WEEKDAYS`（曜日集合）, `DRY_RUN`（保存しない場合 True）。
-- 進捗は標準出力にファイル数・ヒット数を表示。
-## 判定ロジック（重要なものだけ）
-- FLAG と TRIP_NO の変化から境界を構築し、区間候補を生成（長さ 2 行以上）。
-- 各区間について: 曜日フィルタ → ハバーサイン距離でサンプルへの最近傍距離を計算 → `MIN_HITS` 以上なら保存。
-- 出力ファイル名に曜日・OPID・TRIP_NO・車種/用途タグを付与し、再現性を担保。
-## できること / できないこと（行政向けの注意）
-- できること: ルート近接条件に基づくトリップ抽出、曜日別のタグ付け、閾値を明示した第2スクリーニング結果の保存。
-- できないこと: 測位誤差の補正や進行方向推定、FLAG/TRIP_NO の欠損補完、経路の断定。抽出されないデータを「不存在」とみなすことは避ける。
-## よくあるミス
-- DEFAULT パスを未設定のまま実行してエラーになる。
-- サンプル CSV の列順が異なり、距離計算が常に失敗する。
-- `MIN_HITS` を大きくし過ぎて実質的に抽出ゼロになる。
-## 関連スクリプト
-- 前段: [docs/01_split_by_opid_streaming.md](./01_split_by_opid_streaming.md)（OPID 分割）。
-- 後段: [docs/30_build_performance.md](./30_build_performance.md), [docs/40_trip_od_screening.md](./40_trip_od_screening.md)。
-- ビューア: [docs/05_trip_viewer.md](./05_trip_viewer.md), [docs/06_route_mapper_kp.md](./06_route_mapper_kp.md)。
-- フロー全体: [docs/01_pipeline.md](./01_pipeline.md)
+`src/20_route_trip_extractor.py` は対象ルート付近を通ったトリップを選別し、**トリップ全体**を保存します。ルート近傍だけの切り抜きはしません。
+
+## 入力・操作
+
+`bat/20_UI_route_trip_extractor.bat` を起動し、プロジェクトと第1または第1.5スクリーニング入力フォルダを選択します。第1.5の親出力フォルダを選んだ場合は `15_area_subtrip_csv` を自動選択します。入力由来はログに表示します。
+
+ルートは `10_ルート(Route)データ/*.csv`。様式1-2と同様、**O列=経度（index 14）、P列=緯度（index 15）**です。C=運行日、D=運行ID、E=種別、F=用途、G=GPS時刻、I=トリップ番号、M=起終点フラグです。
+
+```bat
+runtime\python\python.exe src\20_route_trip_extractor.py --project "D:\PROJECT" --input "D:\PROJECT\15_エリア第1.5スクリーニング" --radius-m 30 --min-route-points 3
+```
+
+`--recursive` は入力サブフォルダ探索、`--dry-run` は保存なしの判定です。対象曜日は既存 `TARGET_WEEKDAYS`（初期値は全曜日）を使い、実行時の値をメタデータに保存します。
+
+## 判定と保存
+
+M列フラグとI列トリップ番号で候補を分割し、既定では同一路線のサンプル点3点以上の30m以内を通る候補を採用します。第1.5入力はsidecarとCSVのハッシュ、単一サブトリップであることも検証します。
+
+```text
+20_第２スクリーニング(ルート)/
+└─ 対象路線/
+   ├─ 2nd_route_*.csv
+   ├─ screening_info.json
+   ├─ 15_trip_index.csv
+   ├─ gate_master.csv       （第1.5由来）
+   └─ gate_master.geojson   （第1.5由来）
+```
+
+複数路線に該当したトリップは各路線へ1回ずつ保存します。ファイル名は従来の `2nd_route_連番_路線_曜日_ID...` 形式です。既存CSVがある路線フォルダへの再実行は混在を防ぐため停止します。以前の結果を別の場所へ移動してから再実行してください。
+
+`screening_info.json` は `screening_stage=2_route`、`source_screening_stage=1.5` または `1st_screening`、路線名・元ルート・区域ハッシュ・件数・半径・必要点数・曜日・再帰探索・作成日時・プログラム・`full_trip=true` を保存します。Gateと起終点種別は15の情報を継承します。CSV本体には列を追加しません。
+
+第1直接入力は従来どおり使用できます。メタデータがない入力を第1.5由来とみなすことはありません。
+
+## 後工程と旧形式
+
+- 05ビューアーは平置きCSVと1階層のルート別CSVに対応し、sidecarを除外します。
+- 30ルートパフォーマンスはsidecarを除外し、新形式の各CSVを宣言された路線だけへ集計します。同じサブトリップの複数路線へのコピーによる二重集計を防ぎます。
+- 50のルートモードは旧平置きも読み込みます。ただし旧 `_plusN` ファイルには全所属路線名がないため「旧形式・ルート所属未確定」として全経路を表示し、正式通過交通率は無効にします。路線別の正式分析には15→20の再実行が必要です。
+- `src/unreleased/20_route_trip_extractor.py` の旧CLIは残しています。座標定義を修正しましたが、正式な由来情報付き新出力は現行 `src/20_route_trip_extractor.py` を使用してください。
+
+関連: [15エリアスクリーニング](15_area_screening.md)、[50経路分析](50_Path_Analysis.md)、[横断設計・仕様](50_route_path_analysis_design.md)。

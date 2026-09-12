@@ -89,8 +89,8 @@ BROWSER_OPENED = False
 AUTO_REFRESH_SECONDS = 0  # disable periodic auto refresh
 
 # CSV column indices (0-based)
-LON_COL = 15    # 16列目（経度）
-LAT_COL = 14    # 15列目（緯度）
+LON_COL = 14    # O列（経度）
+LAT_COL = 15    # P列（緯度）
 FLAG_COL = 12   # 13列目（フラグ）
 TYPE_COL = 4    # 種別
 USE_COL = 5     # 用途

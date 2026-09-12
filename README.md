@@ -1,5 +1,7 @@
 # ETC2.0アナライザー Toolkit (ETC)
 
+ルート通過交通分析：第1.5→ルート第2スクリーニング→50経路分析を接続しました。`bat/50_UI_route_path_analysis.bat` からプロジェクトと路線を選択できます。[操作説明](docs/50_Path_Analysis.md) / [横断設計・検証記録](docs/50_route_path_analysis_design.md)。
+
 ETC2.0アナライザー Toolkit は、  
 ETC2.0プローブデータを行政の意思決定に活かすための  
 **透明性重視・段階的解析型ツール群**です。

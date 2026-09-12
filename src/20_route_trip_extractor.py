@@ -17,6 +17,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterator, List, Sequence, Tuple
 
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common.screening import (read_info, read_index, write_info, write_csv, digest,
+                              relative, INDEX_FILE, INDEX_FIELDS, read_lon_lat, contract_folder)
+
 FOLDER_ROUTE = "10_ルート(Route)データ"
 FOLDER_OUT = "20_第２スクリーニング(ルート)"
 
@@ -70,16 +75,7 @@ def read_csv_rows(path: Path) -> list[CSVRow]:
 
 
 def _read_lon_lat(row: Sequence[str]) -> tuple[float, float] | None:
-    if len(row) <= max(LON_INDEX, LAT_INDEX):
-        return None
-    try:
-        lon = float(row[LON_INDEX])
-        lat = float(row[LAT_INDEX])
-    except (TypeError, ValueError):
-        return None
-    if not (-180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0):
-        return None
-    return lon, lat
+    return read_lon_lat(row)
 
 
 def load_routes(route_dir: Path) -> list[RouteData]:
@@ -289,6 +285,8 @@ def process_file(
     hits_per_route: Dict[str, int],
     save_seq: list[int],
     dry_run: bool,
+    route_records: dict | None = None,
+    source_record: dict | None = None,
 ) -> tuple[int, int]:
     try:
         rows = read_csv_rows(path)
@@ -297,6 +295,8 @@ def process_file(
         return 0, 0
     boundaries = build_boundaries(rows)
     segments = list(iter_segments_from_boundaries(boundaries))
+    if source_record is not None and (len(segments) != 1 or segments[0] != (0, len(rows))):
+        raise ValueError(f'第1.5トリップ全体を保持できないCSVです: {path}')
     matched = 0
     for start, end in segments:
         hit_routes = trip_matches_routes(rows, start, end, route_index, cell_deg, radius_m, min_route_points)
@@ -308,7 +308,14 @@ def process_file(
             print(f"HIT: {name} {hits_per_route[name]}", flush=True)
         if not dry_run:
             save_seq[0] += 1
-            save_trip(rows, start, end, output_dir, hit_routes, save_seq[0])
+            if route_records is None:  # legacy direct caller
+                save_trip(rows, start, end, output_dir, hit_routes, save_seq[0])
+            else:
+                for name in hit_routes:
+                    saved = save_trip(rows, start, end, output_dir / _safe_name(name), [name], save_seq[0])
+                    record = dict(source_record or {})
+                    record.update(source_file=saved.name, trip_id=record.get('trip_id', saved.stem), sha256=digest(saved))
+                    route_records[name].append(record)
     return len(segments), matched
 
 
@@ -325,6 +332,8 @@ def run_second_screening(
     print(f"[INFO] Routes: {route_dir}", flush=True)
     print(f"[INFO] Output: {output_dir}", flush=True)
     print(f"[INFO] radius_m={radius_m} min_route_points={min_route_points}", flush=True)
+    if not math.isfinite(radius_m) or radius_m <= 0 or min_route_points < 1:
+        raise ValueError('判定半径は正の有限値、必要ルート点数は1以上にしてください')
     if not input_dir.is_dir():
         print(f"[ERROR] input dir not found: {input_dir}", flush=True)
         return 1
@@ -332,12 +341,40 @@ def run_second_screening(
         print(f"[ERROR] route dir not found: {route_dir}", flush=True)
         return 1
 
+    source_info = read_info(input_dir)
+    if source_info.get('trip_data_dir') == '15_area_subtrip_csv':
+        input_dir = input_dir / '15_area_subtrip_csv'
+        source_info = read_info(input_dir)
+    is_area = source_info.get('screening_stage') == '1.5'
+    if is_area and source_info.get('status') != 'complete':
+        raise ValueError('第1.5スクリーニングが完了していません')
+    source_index = read_index(input_dir) if is_area else {}
+    if is_area:
+        for filename, key in [(INDEX_FILE, 'trip_index_sha256'), ('gate_master.geojson', 'gate_master_sha256')]:
+            p = contract_folder(input_dir) / filename
+            if not p.exists() or source_info.get(key) != digest(p):
+                raise ValueError(f'第1.5のGate/sidecarが一致しません: {p}')
+        actual = {p.name for p in input_dir.glob('*.csv') if p.name not in (INDEX_FILE, 'gate_master.csv')}
+        if actual != set(source_index):
+            raise ValueError('第1.5 CSVとsidecarの対応が不一致です。空の出力先で第1.5を再実行してください')
+
     routes = load_routes(route_dir)
     if not routes:
         print(f"[ERROR] no valid route csv in: {route_dir}", flush=True)
         return 1
     route_index, cell_deg = build_route_index(routes, radius_m)
     hits_per_route = {route.name: 0 for route in routes}
+    route_records = {route.name: [] for route in routes}
+    safe_names = [_safe_name(r.name) for r in routes]
+    if len(set(n.casefold() for n in safe_names)) != len(safe_names):
+        raise ValueError('ルート名のフォルダ名が重複します')
+    if not dry_run:
+        for route in routes:
+            folder = output_dir / _safe_name(route.name)
+            if folder.exists() and any(folder.glob('*.csv')):
+                raise ValueError(f'既存CSVとの混在を避けるため、出力先を移動してから再実行してください: {folder}')
+        for route in routes:
+            write_info(output_dir / _safe_name(route.name), {'screening_stage': '2_route', 'status': 'running'})
 
     total_files = 0
     total_candidate = 0
@@ -347,6 +384,11 @@ def run_second_screening(
     last_progress_emit = time.monotonic()
 
     for trip_path in iter_csv_files(input_dir, recursive):
+        if trip_path.name in (INDEX_FILE, 'gate_master.csv'):
+            continue
+        source_record = source_index.get(trip_path.name)
+        if is_area and (not source_record or digest(trip_path) != source_record.get('sha256')):
+            raise ValueError(f'第1.5 sidecarとCSVが不一致です: {trip_path}')
         total_files += 1
         cand, matched = process_file(
             trip_path,
@@ -358,6 +400,8 @@ def run_second_screening(
             hits_per_route,
             save_seq,
             dry_run,
+            route_records,
+            source_record,
         )
         total_candidate += cand
         total_matched += matched
@@ -366,20 +410,41 @@ def run_second_screening(
             print(f"進捗ファイル: {total_files} files processed", flush=True)
             last_progress_emit = now
 
+    if not dry_run:
+        import shutil
+        for route in routes:
+            folder = output_dir / _safe_name(route.name)
+            write_csv(folder / INDEX_FILE, INDEX_FIELDS, route_records[route.name])
+            for filename in ('gate_master.csv', 'gate_master.geojson'):
+                if is_area and (contract_folder(input_dir) / filename).exists():
+                    shutil.copy2(contract_folder(input_dir) / filename, folder / filename)
+            write_info(folder, {'screening_stage': '2_route', 'status': 'complete',
+                'source_screening_stage': '1.5' if is_area else '1st_screening',
+                'route_name': route.name, 'route_source': relative(route_dir / (route.name + '.csv'), route_dir.parent),
+                'area_file': source_info.get('area_file'), 'area_sha256': source_info.get('area_sha256'),
+                'area_role': source_info.get('area_role'), 'trip_count': len(route_records[route.name]),
+                'radius_m': radius_m, 'min_route_points': min_route_points, 'recursive': recursive,
+                'weekdays': sorted(TARGET_WEEKDAYS), 'source_data': relative(input_dir, route_dir.parent),
+                'program': '20_route_trip_extractor.py', 'full_trip': True})
+            info = read_info(folder)
+            info['trip_index_sha256'] = digest(folder / INDEX_FILE)
+            if is_area:
+                info['gate_master_sha256'] = digest(folder / 'gate_master.geojson')
+            write_info(folder, info)
     print(f"進捗ファイル: {total_files} files processed", flush=True)
     for name in sorted(hits_per_route):
         print(f"HIT: {name} {hits_per_route[name]}", flush=True)
     print(f"TOTAL 所要時間 : {format_hms(time.time() - started)}", flush=True)
     print(f"TOTAL 候補セグメント数 : {total_candidate}", flush=True)
     print(f"TOTAL HITトリップ数 : {total_matched}", flush=True)
-    print(f"TOTAL 保存ファイル数 : {save_seq[0]}", flush=True)
+    print(f"TOTAL 保存ファイル数 : {sum(len(v) for v in route_records.values())}", flush=True)
     return 0
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Route 第2スクリーニング（プロジェクト駆動）")
     parser.add_argument("--project", required=True, help="project001 のようなプロジェクトフォルダ")
-    parser.add_argument("--input", required=True, help="第1スクリーニングデータフォルダ（CSV群）")
+    parser.add_argument("--input", required=True, help="第1 / 第1.5スクリーニングデータフォルダ（CSV群）")
     parser.add_argument("--radius-m", type=float, default=DEFAULT_RADIUS_M, help="ルート点からの判定半径[m]")
     parser.add_argument("--min-route-points", type=int, default=MIN_ROUTE_POINTS, help="HITに必要な同一ルート上の点数")
     parser.add_argument("--recursive", action="store_true", help="入力フォルダ配下のサブフォルダも探索する")

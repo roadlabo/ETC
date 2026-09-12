@@ -146,8 +146,8 @@ def resample_polyline(
 # 出力CSVの列定義（0-based index）
 # ------------------------------
 # A=0, B=1, ... O=14(lon), P=15(lat), M=12(flag), E=4(type), F=5(use), G=6(time), S=18(speed)
-LAT_COL = 14
-LON_COL = 15
+LAT_COL = 15
+LON_COL = 14
 FLAG_COL = 12
 TYPE_COL = 4
 USE_COL = 5
@@ -279,8 +279,8 @@ def build_rows(points: List[Tuple[float, float]], start_time: datetime) -> List[
         t = start_time + timedelta(seconds=TIME_STEP_SEC * idx)
         row[TIME_COL] = t.strftime("%Y%m%d%H%M%S")
         # ★修正★ 座標: O列=lon, P列=lat（経度→緯度の順）
-        row[LAT_COL] = f"{lon:.10f}"   # 経度をO列に
-        row[LON_COL] = f"{lat:.10f}"   # 緯度をP列に
+        row[LON_COL] = f"{lon:.10f}"   # 経度をO列に
+        row[LAT_COL] = f"{lat:.10f}"   # 緯度をP列に
         rows.append(row)
     return rows
 

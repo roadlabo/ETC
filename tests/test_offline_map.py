@@ -95,6 +95,20 @@ var tile_layer_abc123 = L.tileLayer(
         self.assertIn("file:///D:/GitHub/ETC/src/tiles/gsi_pale/{z}/{x}/{y}.png", patched)
         self.assertNotIn("unpkg.com/leaflet", patched)
 
+    def test_separate_addto_preserves_analysis_layers_and_plugin_order(self):
+        html = '''<html><head><script src="plugin.js"></script></head><body><script>
+var tile_layer_abc123 = L.tileLayer("url", {"maxZoom": 18});
+tile_layer_abc123.addTo(map_abc123);
+var geo_json_abc123 = L.geoJson({"type": "FeatureCollection", "features": []});
+geo_json_abc123.addTo(map_abc123);
+L.control.layers({}, {}).addTo(map_abc123);
+</script></body></html>'''
+        patched = offline_leaflet.apply_offline_tile_support(html)
+        self.assertIn('var tile_layer_abc123 = addGsiOfflineLayer(map_abc123', patched)
+        self.assertIn('var geo_json_abc123 = L.geoJson', patched)
+        self.assertIn('L.control.layers({}, {}).addTo(map_abc123)', patched)
+        self.assertLess(patched.index('function addGsiOfflineLayer'), patched.index('plugin.js'))
+
 
 if __name__ == "__main__":
     unittest.main()

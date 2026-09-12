@@ -18,8 +18,6 @@ if str(SRC_DIR) not in sys.path:
 
 import folium
 import numpy as np
-import tkinter as tk
-from tkinter import filedialog, messagebox
 from offline_leaflet import apply_offline_tile_support
 
 # 解析範囲（中心からの距離）
@@ -394,7 +392,7 @@ def create_mesh_map(matrix: np.ndarray, lon0: float, lat0: float,
 def load_single_trip(csv_path: Path, lon0: float, lat0: float) -> np.ndarray:
     """Load a single trip CSV and return points in XY coordinates."""
     try:
-        data = np.loadtxt(csv_path, delimiter=",", usecols=(COL_LON, COL_LAT))
+        data = np.loadtxt(csv_path, delimiter=",", usecols=(COL_LON, COL_LAT), encoding='utf-8-sig')
     except ValueError:
         return np.empty((0, 2))
 
@@ -1032,6 +1030,8 @@ def _parse_targets_filter(targets_raw: Optional[str]) -> Optional[Set[str]]:
 
 
 def select_project_dir_with_dialog(initial_dir: Path | None = None) -> Path | None:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox
     root = tk.Tk()
     root.withdraw()
     try:
@@ -1069,6 +1069,8 @@ def validate_project_dir(project_dir: Path) -> tuple[bool, list[str]]:
 
 
 def prompt_project_dir_loop(initial_dir: Path | None = None) -> Path | None:
+    import tkinter as tk
+    from tkinter import messagebox
     while True:
         selected = select_project_dir_with_dialog(initial_dir)
         if selected is None:
@@ -1191,11 +1193,30 @@ def run_batch(project_dir: Path, targets_raw: Optional[str], dry_run: bool) -> N
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="50_Path_Analysis batch runner")
+    parser.add_argument('--mode', choices=['intersection', 'route'], default='intersection')
+    parser.add_argument('--route', help='ルート名。未指定ならルートUIを開く')
     parser.add_argument("--project_dir", type=Path, help="プロジェクトフォルダ（未指定ならダイアログで選択）")
     parser.add_argument("--targets", type=str, help="交差点名（カンマ区切り）")
     parser.add_argument("--dry_run", action="store_true", help="走査のみで終了")
 
     args = parser.parse_args()
+
+    if args.mode == 'route':
+        from common.route_path import scan_project, analyze
+        if args.route and args.project_dir:
+            _, targets = scan_project(args.project_dir)
+            selected = [t for t in targets if t.name == args.route]
+            if len(selected) != 1:
+                parser.error('対象ルートが存在しないか名前が重複しています')
+            if args.dry_run:
+                print(selected[0])
+            else:
+                import json
+                print(json.dumps(analyze(args.project_dir, selected[0], sys.modules[__name__]), ensure_ascii=False))
+        else:
+            from common.route_path_ui import launch
+            launch(sys.modules[__name__], args.project_dir)
+        return
 
     project_dir = args.project_dir
     if project_dir is None:
