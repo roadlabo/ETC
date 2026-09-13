@@ -1,5 +1,7 @@
 # ETC2.0アナライザー Toolkit (ETC)
 
+全ツールの起動は `bat/00_ETC_launcher.bat` から。説明付きの親UIで17ツールを一画面に表示します。「デスクトップに配置」で専用ショートカットを作成できます。[親UIの操作説明](docs/00_launcher.md)
+
 ルート通過交通分析：第1.5→ルート第2スクリーニング→50経路分析を接続しました。`bat/50_UI_route_path_analysis.bat` からプロジェクトと路線を選択できます。[操作説明](docs/50_Path_Analysis.md) / [横断設計・検証記録](docs/50_route_path_analysis_design.md)。
 
 ETC2.0アナライザー Toolkit は、  
