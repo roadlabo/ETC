@@ -78,7 +78,7 @@ class RoutePathTest(unittest.TestCase):
             self.assertEqual(args.project_dir, project)
             self.assertEqual(area15.project_area_path(args.project_dir), project / '14_エリアデータ/14_area.geojson')
 
-    def test_50_reclusters_40m_endpoints_without_editing_source(self):
+    def test_50_preserves_manual_gates_without_editing_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
             fixture(project, spread=True)
@@ -88,7 +88,7 @@ class RoutePathTest(unittest.TestCase):
             original_gates = json.loads((target.folder / 'gate_master.geojson').read_text(encoding='utf-8'))
             result = analyze(project, target, path50)
             gates = json.loads((Path(result['output_dir']) / '50_gate_master.geojson').read_text(encoding='utf-8'))
-            self.assertGreater(len(original_gates['features']), len(gates['features']))
+            self.assertEqual(original_gates, gates)
             self.assertEqual(len(gates['features']), 2)
             self.assertEqual([r['trip_count'] for r in result['ranking']], [2, 1])
             self.assertEqual(before, {p: digest(p) for p in before})

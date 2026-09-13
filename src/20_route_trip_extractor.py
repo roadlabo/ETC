@@ -422,7 +422,8 @@ def run_second_screening(
                 'source_screening_stage': '1.5' if is_area else '1st_screening',
                 'route_name': route.name, 'route_source': relative(route_dir / (route.name + '.csv'), route_dir.parent),
                 'area_file': source_info.get('area_file'), 'area_sha256': source_info.get('area_sha256'),
-                'area_role': source_info.get('area_role'), 'trip_count': len(route_records[route.name]),
+                'area_role': source_info.get('area_role'), 'gate_assignment': source_info.get('gate_assignment'),
+                'trip_count': len(route_records[route.name]),
                 'radius_m': radius_m, 'min_route_points': min_route_points, 'recursive': recursive,
                 'weekdays': sorted(TARGET_WEEKDAYS), 'source_data': relative(input_dir, route_dir.parent),
                 'program': '20_route_trip_extractor.py', 'full_trip': True})

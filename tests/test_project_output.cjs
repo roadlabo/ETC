@@ -49,7 +49,7 @@ function setup(picker) {
   assert.equal(aborted, true);
   for (const name of ['12_polygon_builder.html', '14_area_builder.html']) {
     const html = fs.readFileSync(path.join(root, 'src', name), 'utf8');
-    assert.ok(html.includes('src="project_output.js"'));
+    assert.ok(html.includes(name.startsWith('12') ? 'src="project_output.js"' : 'src="qrc:///qtwebchannel/qwebchannel.js"'));
     for (const [, script] of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) new vm.Script(script, {filename: name});
   }
   const polygonHtml = fs.readFileSync(path.join(root, 'src/12_polygon_builder.html'), 'utf8');

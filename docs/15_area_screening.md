@@ -37,12 +37,15 @@ bat\14_area_builder.bat
 4. `分析区域を編集` を選び、外周道路が入るように頂点を調整します。
 5. `プロジェクトを選択` で保存先を選び、`GeoJSON保存` で `14_エリアデータ/14_area.geojson` に保存します。保存時に自己交差などを確認します。
 
+「ゲートを追加」で出入口を指定して保存してください。14はPythonがプロジェクト内へ直接保存する画面です。ゲートの追加・変更後は15→20→50を再実行してください。
+
 ## GeoJSON構造
 
 1つのFeatureCollectionに次のFeatureを保存します。
 
 - `properties.area14_role = official_area`: 正式区域のPolygon
 - `properties.area14_role = analysis_area`: 分析区域のPolygon
+- `properties.area14_role = gate`: 指定ゲートのPoint（gate_id、name）
 
 古いGeoJSONに点や線の追加Featureが含まれていても、第1.5スクリーニングでは無視します。
 
@@ -153,7 +156,7 @@ OD表を作る場合は、後段のOD系プログラムで処理します。境�
 
 `15_エリア第1.5スクリーニング` 直下へ、既存設定・summaryに加えて `screening_info.json`、`15_trip_index.csv`、`gate_master.csv`、`gate_master.geojson` を保存します。トリップCSVフォルダ内には列挙を妨げるsidecar CSVを置かず、親契約を指す `screening_info.json` のみ置きます。
 
-sidecarはCSVファイル名・一意なtrip_id・start_type/start_gate_id/end_type/end_gate_id・起終点座標・CSVのSHA-256を持ちます。起終点が分析区域の境界上（補間精度の許容0.05m）ならGATE、それ以外はINSIDEです。GATE候補は30m以内で統合し、G01から付番します。
+sidecarはCSVファイル名・一意なtrip_id・start_type/start_gate_id/end_type/end_gate_id・起終点座標・CSVのSHA-256を持ちます。起終点が分析区域の境界上（補間精度の許容0.05m）ならGATE、それ以外はINSIDEです。GATE端点は14で手動指定した最寄りのゲートへ割り当てます。位置・番号は14の設定を保持し、自動ゲート生成は行いません。指定ゲートがなければ14での作成を案内して停止します。
 
 由来メタデータはstage=1.5、source_stage=1st_screening、analysis_areaのプロジェクト相対パス・SHA-256、作成日時、入力元、実行パラメータ、プログラム名、完了状態、sidecarとGateマスターのハッシュを保存します。中断結果はcompleteとして扱いません。
 

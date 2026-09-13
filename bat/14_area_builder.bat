@@ -2,5 +2,6 @@
 setlocal EnableExtensions
 
 cd /d "%~dp0.."
-start "" "src\14_area_builder.html"
+"runtime\python\python.exe" "src\14_area_builder.py" %*
+if errorlevel 1 pause
 exit /b

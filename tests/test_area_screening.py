@@ -35,8 +35,13 @@ def write_area(path: Path) -> None:
         },
         {
             "type": "Feature",
-            "properties": {"area14_role": "gate", "gate_id": "ignored"},
+            "properties": {"area14_role": "gate", "gate_id": "G01", "name": "西ゲート"},
             "geometry": {"type": "Point", "coordinates": [135.000, 35.005]},
+        },
+        {
+            "type": "Feature",
+            "properties": {"area14_role": "gate", "gate_id": "G02", "name": "東ゲート"},
+            "geometry": {"type": "Point", "coordinates": [135.010, 35.005]},
         },
     ]
     path.write_text(json.dumps({"type": "FeatureCollection", "features": features}, ensure_ascii=False), encoding="utf-8")

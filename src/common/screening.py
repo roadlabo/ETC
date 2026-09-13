@@ -3,6 +3,7 @@ import csv
 import hashlib
 import json
 import math
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -108,14 +109,61 @@ def cluster_gates(rows, radius_m=30):
         rows[i][f'{side}_gate_id'] = gate['gate_id']
     return gates
 
-def write_gate_contract(folder, rows, info):
+def read_manual_gates(data):
+    gates = []
+    seen = set()
+    for feature in data.get('features', []):
+        props = feature.get('properties') or {}
+        if area_role(props) != 'gate':
+            continue
+        geom = feature.get('geometry') or {}
+        coordinates = geom.get('coordinates') or []
+        gate_id = str(props.get('gate_id', ''))
+        if not re.fullmatch(r'G[0-9]+', gate_id) or gate_id in seen:
+            raise ValueError('14のゲート番号は重複のないG01形式にしてください。')
+        try:
+            lon, lat = map(float, coordinates)
+            valid = geom.get('type') == 'Point' and math.isfinite(lon) and math.isfinite(lat) and -180 <= lon <= 180 and -90 <= lat <= 90
+        except (ValueError, TypeError):
+            valid = False
+        if not valid:
+            raise ValueError(f'{gate_id}: ゲート座標が不正です。14_area_builder.batで修正してください。')
+        seen.add(gate_id)
+        gates.append({'gate_id': gate_id, 'name': str(props.get('name') or gate_id), 'lon': lon, 'lat': lat})
+    if not gates:
+        raise ValueError('指定ゲートがありません。14_area_builder.batでゲートを追加して保存してください。')
+    return sorted(gates, key=lambda g: (int(g['gate_id'][1:]), g['gate_id']))
+
+
+def assign_nearest_gates(rows, gates):
+    if not gates:
+        raise ValueError('14_area_builder.batでゲートを指定してください。')
+    for row in rows:
+        for side in ('start', 'end'):
+            if row[f'{side}_type'] != 'GATE':
+                row[f'{side}_gate_id'] = ''
+                continue
+            lon, lat = map(math.radians, (float(row[f'{side}_lon']), float(row[f'{side}_lat'])))
+            def distance(gate):
+                glon, glat = map(math.radians, (gate['lon'], gate['lat']))
+                # Haversine is monotonic in distance; no radius limit for manual gates.
+                return (math.sin((glat-lat)/2)**2 + math.cos(lat)*math.cos(glat)*math.sin((glon-lon)/2)**2,
+                        int(gate['gate_id'][1:]), gate['gate_id'])
+            row[f'{side}_gate_id'] = min(gates, key=distance)['gate_id']
+
+
+def gate_geojson(gates):
+    return {'type': 'FeatureCollection', 'features': [
+        {'type': 'Feature', 'properties': {'area14_role': 'gate', 'gate_id': g['gate_id'], 'name': g.get('name', g['gate_id'])},
+         'geometry': {'type': 'Point', 'coordinates': [g['lon'], g['lat']]}} for g in gates]}
+
+
+def write_gate_contract(folder, rows, info, gates):
     folder = Path(folder)
-    gates = cluster_gates(rows)
+    assign_nearest_gates(rows, gates)
     write_csv(folder / INDEX_FILE, INDEX_FIELDS, rows)
-    write_csv(folder / 'gate_master.csv', ['gate_id', 'lon', 'lat'], gates)
-    (folder / 'gate_master.geojson').write_text(json.dumps({'type': 'FeatureCollection', 'features': [
-        {'type': 'Feature', 'properties': {'gate_id': g['gate_id']},
-         'geometry': {'type': 'Point', 'coordinates': [g['lon'], g['lat']]}} for g in gates]}), encoding='utf-8')
-    write_info(folder, {**info, 'gate_cluster_m': 30, 'trip_count': len(rows), 'trip_index': INDEX_FILE,
+    write_csv(folder / 'gate_master.csv', ['gate_id', 'name', 'lon', 'lat'], gates)
+    (folder / 'gate_master.geojson').write_text(json.dumps(gate_geojson(gates), ensure_ascii=False), encoding='utf-8')
+    write_info(folder, {**info, 'gate_assignment': 'nearest_manual_gate', 'trip_count': len(rows), 'trip_index': INDEX_FILE,
                         'trip_index_sha256': digest(folder / INDEX_FILE),
                         'gate_master_sha256': digest(folder / 'gate_master.geojson')})

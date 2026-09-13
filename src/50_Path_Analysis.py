@@ -1,4 +1,4 @@
-"""50: route OD by 50m gates / named 12 zones, and intersection A/B heatmaps.
+"""50: route OD by manual 14 gates / named 12 zones, and intersection A/B heatmaps.
 
 The route workflow is implemented in common.route_path and common.route_od.
 It checks project polygon CSVs before analysis and writes a complete OD matrix.

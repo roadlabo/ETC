@@ -10,10 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from common.screening import (AREA_FOLDER, AREA_FILE, ROUTE_FOLDER, SECOND_FOLDER, INDEX_FILE,
-                              read_info, read_index, read_lon_lat, digest, write_csv, cluster_gates, area_role)
+                              read_info, read_index, read_lon_lat, digest, write_csv, area_role,
+                              read_manual_gates, assign_nearest_gates, gate_geojson)
 from common.route_od import load_zones, endpoint_label, matrix_data, matrix_html
-
-GATE_RADIUS_M = 50
 
 LABELS = {'ALL': '全交通', 'THROUGH': '通過交通',
           'EXTERNAL_TO_INTERNAL': '外内交通', 'INTERNAL_TO_EXTERNAL': '内外交通',
@@ -61,6 +60,7 @@ def scan_project(project):
                                    '第1.5スクリーニング由来を確認できません。正式通過交通率は無効です'))
     if not targets:
         raise ValueError('第2スクリーニングの路線データがありません')
+    read_manual_gates(area)
     load_zones(project)
     return {'type': 'FeatureCollection', 'features': features}, targets
 
@@ -106,8 +106,8 @@ def analyze(project, target, engine, progress=None):
     gates_path = target.folder / 'gate_master.geojson'
     gates = json.loads(gates_path.read_text(encoding='utf-8-sig')) if gates_path.exists() else {'type': 'FeatureCollection', 'features': []}
     gate_ids = {f['properties']['gate_id'] for f in gates['features']}
-    # Rebuild from actual boundary endpoints, not the old 30m representatives.
-    # Source screening contracts remain unchanged; IDs belong to this 50 report.
+    manual_gates = read_manual_gates(json.loads((project / AREA_FOLDER / AREA_FILE).read_text(encoding='utf-8-sig')))
+    # Use the operator's 14 gate positions and IDs for every route.
     regrouped = {}
     selected_names = {p.name for p in target.files}
     for name, source in records.items():
@@ -124,10 +124,8 @@ def analyze(project, target, engine, progress=None):
         except (KeyError, ValueError, TypeError):
             continue
         regrouped[name] = row
-    representatives = cluster_gates(list(regrouped.values()), radius_m=GATE_RADIUS_M)
-    gates = {'type': 'FeatureCollection', 'features': [
-        {'type': 'Feature', 'properties': {'gate_id': g['gate_id']},
-         'geometry': {'type': 'Point', 'coordinates': [g['lon'], g['lat']]}} for g in representatives]}
+    assign_nearest_gates(list(regrouped.values()), manual_gates)
+    gates = gate_geojson(manual_gates)
     first_geom = area['features'][0]['geometry']
     ring = first_geom['coordinates'][0] if first_geom['type'] == 'Polygon' else first_geom['coordinates'][0][0]
     lon0, lat0 = ring[0][:2]
@@ -237,7 +235,7 @@ def render_report(out, target, area, gates, counts, meshes, ranking, warnings, o
                         tooltip=html.escape(target.name)).add_to(route_layer)
         route_layer.add_to(m)
     if gates['features']:
-        gate_layer = folium.FeatureGroup(name='ゲート番号（半径50m集約）')
+        gate_layer = folium.FeatureGroup(name='14で指定したゲート')
         for gate in gates['features']:
             lon, lat = gate['geometry']['coordinates']
             folium.CircleMarker([lat, lon], radius=5, color='#111', fill=True, fill_opacity=1,
@@ -276,8 +274,8 @@ def render_report(out, target, area, gates, counts, meshes, ranking, warnings, o
     <p>行がO（出発）、列がD（到着）、単位はトリップです。「内：エリア名」は12_polygon_builderで作成したエリアです。
     エリアに含まれない内の端点は「内：エリア外」、複数エリアに含まれる端点は「内：エリア重複」として別集計します。
     分類不明 {counts['UNKNOWN']:,} 件はマトリクスから除外しています。</p>
-    <p>50では境界端点を経度・緯度順に処理し、代表点から半径{GATE_RADIUS_M}m以内を最寄りのゲートへ集約します。
-    範囲内に代表点がなければ新設します。番号はこの路線の50出力内で共通です。近接点を鎖状には結合しません。</p>
+    <p>分析区域の境界上の起終点は、14で指定したゲートのうち直線距離が最も近いゲートへ割り当てます。
+    ゲートの自動追加・集約は行いません。番号と位置は14の設定を使用し、同距離なら番号の小さいゲートを選びます。</p>
     <p>使用ゾーニングCSV：{escape('、'.join(sorted({Path(z['source']).name for z in zones})))}</p>
     {matrix_html(labels, full_od)}
     <p><a href="50_od_matrix.csv">ODマトリクスCSV</a></p>

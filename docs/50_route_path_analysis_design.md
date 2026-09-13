@@ -28,7 +28,7 @@ Gateは境界起終点を30m以内で決定的に統合。分類と経路訪問�
 4. **変更ファイル**：README、docs/05_trip_viewer.md・15_area_screening.md・20_route_trip_extractor.md・50_Path_Analysis.md・本書、src/05_trip_viewer.py・15_area_screening.py・20_route_trip_extractor.py・20_UI_route_trip_extractor.py・30_route_performance.py・offline_leaflet.py、src/unreleased/06_route_mapper_kp.py・10_route_sampler.py・20_route_trip_extractor.py・50_Path_Analysis.py。新設はsrc/common/screening.py・route_path.py・route_path_ui.py、bat/50_UI_route_path_analysis.bat、tests/test_route_path_analysis.py。tests/test_offline_map.pyに描画回帰テストを追加。
 5. **フォルダ**：下記構成。15の正式名称と既存サブトリップCSVフォルダを維持し、sidecar CSVは15の親フォルダに分離する。20は1路線1フォルダ、50は選択路線のフォルダへ出力する。
 6. **由来仕様**：screening_info.json schema_version=1。15はscreening_stage=1.5、20は2_route＋source_screening_stage。作成日時（UTC）、元データ、パラメータ、区域の相対パスとSHA-256、プログラム名、完了状態、CSV/sidecar/Gateのハッシュを記録。20は元CSVとの照合と全サブトリップ保持を確認し、50も実ファイルと照合する。ハッシュは誤混在検知であり電子署名ではない。
-7. **Gate管理**：15で切り出した境界起終点を対象とし、経度・緯度順に走査して30m以内の既存代表点へ統合する。全メンバーが代表点から30m以内となり、長い連鎖による巨大Gate化を避ける。同じ入力なら入力順に依存せず同じ番号。入力集合が増減すると番号は変わり得るため、20は15のマスターを引き継ぐ。50では半径50mで再集約し、路線内の共通番号で地図とODを表示する。
+7. **Gate管理**：14で手動指定したゲートを使用する。15・50は分析区域境界上の起終点を最寄りゲートへ割り当て、20は位置・番号・由来情報を引き継ぐ。自動生成や半径による再集約は行わない。
 8. **20出力**：ルート名は10のCSV stem。各該当路線へ全トリップを保存し、選択CSVのsidecarを添付する。第1直接入力も維持。再実行は既存CSVとの混在防止のため空の対象フォルダを要求する（前回結果を別の場所へ移動）。
 9. **50 UI**：BAT起動→プロジェクト選択→区域などの確認→路線選択→分析実行→結果・主要OD→HTMLを開く。PyQtワーカースレッドで解析し、実行中のUI変更を抑止。路線ごとの件数・由来を表示する。
 10. **通過交通率**：Gate→Gate / 選択路線の区域内サブトリップ総数。残りは外内・内外・内内。由来不明はUNKNOWNで保持し、正式率を無効化する。区域不一致、sidecar不一致、異常座標、0件でも正式率は無効。再流入の単位は15の既存統合設定に依存し、車両実台数や母集団全交通量ではない。

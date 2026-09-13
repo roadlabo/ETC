@@ -20,7 +20,7 @@ from typing import Callable, Iterator, Sequence
 
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common.screening import digest, relative, write_gate_contract, write_info, read_info, area_role, project_area_path
+from common.screening import digest, relative, write_gate_contract, write_info, read_info, area_role, project_area_path, read_manual_gates
 
 FOLDER_OUT = "15_エリア第1.5スクリーニング"
 
@@ -60,6 +60,7 @@ class TripPoint:
 class AreaDefinition:
     official_polygons: list[list[Point]]
     analysis_polygons: list[list[Point]]
+    gates: list[dict]
 
 
 @dataclass
@@ -290,6 +291,10 @@ def _polygon_from_ring(ring: Sequence[Sequence[float]], role: str, name: str) ->
 
 def load_area_definition(path: Path) -> AreaDefinition:
     data = json.loads(path.read_text(encoding="utf-8-sig"))
+    return parse_area_definition(data)
+
+
+def parse_area_definition(data: dict) -> AreaDefinition:
     official: list[list[Point]] = []
     analysis: list[list[Point]] = []
 
@@ -312,7 +317,7 @@ def load_area_definition(path: Path) -> AreaDefinition:
         raise ValueError("GeoJSONに official_area ポリゴンがありません")
     if not analysis:
         raise ValueError("GeoJSONに analysis_area ポリゴンがありません")
-    return AreaDefinition(official, analysis)
+    return AreaDefinition(official, analysis, read_manual_gates(data))
 
 
 def extract_subtrips(points: Sequence[TripPoint], area: AreaDefinition, config: ScreeningConfig, original_id: str) -> tuple[list[list[TripPoint]], list[str]]:
@@ -623,7 +628,7 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
             'source_data': relative(config.input_path, project),
             'parameters': {k: v for k, v in settings.items() if k not in ('input_path', 'area_geojson')}}
     subtrip_csv_dir.mkdir(parents=True, exist_ok=True)
-    write_gate_contract(config.output_dir, trip_index, {**info, 'trip_data_dir': '15_area_subtrip_csv'})
+    write_gate_contract(config.output_dir, trip_index, {**info, 'trip_data_dir': '15_area_subtrip_csv'}, area.gates)
     contract = read_info(config.output_dir)
     contract.pop('trip_data_dir')
     write_info(subtrip_csv_dir, {**contract, 'contract_parent': True})
