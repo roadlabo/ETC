@@ -22,6 +22,29 @@ APP.setFont(QFont('Yu Gothic UI', 9))
 
 
 class LauncherTests(unittest.TestCase):
+    def test_immediate_feedback_and_repeat_click_suppression(self):
+        from unittest.mock import Mock, patch
+        from PyQt6.QtTest import QTest
+        window = launcher.Launcher()
+        card = window.cards[0]
+        process = Mock()
+        process.poll.return_value = 0
+        with patch.object(launcher, 'launch_tool', return_value=(process, ROOT / 'logs/test.log')) as start:
+            window.launch(card)
+            self.assertTrue(card.running)
+            start.assert_not_called()
+            window.launch(card)
+            QTest.qWait(100)
+            start.assert_called_once()
+            window.poll()
+            self.assertTrue(card.running)
+            window.launch(card)
+            start.assert_called_once()
+            card.started_at -= 9
+            window.poll()
+            self.assertFalse(card.running)
+        window.close()
+
     def test_catalog_covers_all_tools(self):
         batches = {p.name for p in (ROOT / 'bat').glob('*.bat') if not p.name.startswith('00_')}
         self.assertEqual(batches, {t.batch for t in launcher.TOOLS})
@@ -61,6 +84,14 @@ class LauncherTests(unittest.TestCase):
                 launcher.launch_tool(launcher.TOOLS[0], Path(tmp))
         with self.assertRaises(ValueError):
             launcher.launch_tool(None)
+
+    def test_area_builder_direct_entrypoint(self):
+        # Do not inject src into this child: reproduce the bundled runtime launch.
+        import subprocess
+        result = subprocess.run([sys.executable, str(ROOT / 'src/14_area_builder.py'), '--help'],
+                                capture_output=True, timeout=20,
+                                creationflags=subprocess.CREATE_NO_WINDOW)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == '__main__':

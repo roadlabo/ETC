@@ -306,9 +306,16 @@ function nativeCall(method, ...args) {
     if (result.ok) resolve(result); else reject(new Error(result.error));
   }));
 }
+let projectSelected = false;
 function applyProject(result) {
   if (result.cancelled) return;
   document.getElementById('saveGeojson').disabled = true;
+  projectSelected = Boolean(result.project);
+  if (!projectSelected) {
+    document.getElementById('projectStatus').textContent = 'プロジェクト未選択';
+    setStatus('「プロジェクトを選択」から作業するフォルダを指定してください。');
+    return;
+  }
   document.getElementById('projectStatus').textContent = result.path;
   loadFeatureCollection(result.data || {features:[]});
   state.history = []; state.dirty = false;
@@ -338,7 +345,7 @@ document.getElementById('fileInput').onchange = ev => {
   reader.onload = () => {
     try {
       loadFeatureCollection(JSON.parse(reader.result));
-      document.getElementById('saveGeojson').disabled = !nativeBridge;
+      document.getElementById('saveGeojson').disabled = !nativeBridge || !projectSelected;
       setStatus('GeoJSONを読み込みました。保存すると選択中のプロジェクトへ反映します。');
     }
     catch (err) { setStatus('GeoJSON読込エラー: ' + err.message); }

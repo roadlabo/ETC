@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from datetime import datetime
 
 # The bundled Windows Python uses an isolated ._pth configuration.
@@ -34,6 +35,7 @@ def launch_tool(tool, root=ROOT):
     log = logs / f'launcher_{tool.number.replace("/", "_")}_{datetime.now():%Y%m%d_%H%M%S_%f}.log'
     env = os.environ.copy()
     env['ETC_LAUNCH_TARGET'] = str(target.resolve())
+    env['ETC_LAUNCHER'] = '1'
     command = f'"{env.get("COMSPEC", "C:/Windows/System32/cmd.exe")}" /d /s /c ""%ETC_LAUNCH_TARGET%""'
     with log.open('wb') as output:
         process = subprocess.Popen(command, cwd=root, env=env, shell=False,
@@ -95,6 +97,8 @@ class ToolCard(QAbstractButton):
         self.setMinimumSize(0, 0)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.missing = not (ROOT / 'bat' / tool.batch).is_file()
+        self.running = False
+        self.started_at = 0.0
 
     def sizeHint(self):
         return QSize(280, 180)
@@ -149,6 +153,24 @@ class ToolCard(QAbstractButton):
         self.text_pixel_size = size
         p.setPen(QColor('#53606c'))
         p.drawText(text_rect, flags, text)
+        if self.running:
+            elapsed = time.monotonic() - self.started_at
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor('#e1f2ee'))
+            p.drawRoundedRect(QRect(margin, 34, w-2*margin, h-44), 6, 6)
+            font.setPixelSize(16 if compact else 20)
+            font.setBold(True)
+            p.setFont(font)
+            p.setPen(QColor('#176c60'))
+            message = ('起動中' + '・' * (int(elapsed * 3) % 4)) if elapsed < 8 else '起動要求を送信済み'
+            p.drawText(QRect(margin, 38, w-2*margin, (h-44)//2), Qt.AlignmentFlag.AlignCenter, message)
+            font.setPixelSize(11 if compact else 13)
+            font.setBold(False)
+            p.setFont(font)
+            p.drawText(QRect(margin+5, 38+(h-44)//2, w-2*margin-10, (h-44)//2),
+                       Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
+                       'クリックは受け付けました。\n追加のクリックは不要です。' if elapsed < 8 else
+                       'ツールのウィンドウをご確認ください。\n重複起動を抑止しています。')
         if self.missing:
             p.fillRect(self.rect().adjusted(2, 2, -2, -2), QColor(255, 255, 255, 210))
             p.setPen(QColor('#a13d36'))
@@ -181,7 +203,7 @@ class Launcher(QMainWindow):
             button.clicked.connect(action)
             header.addWidget(button)
         layout.addLayout(header)
-        layout.addWidget(QLabel('アイコン・カードをクリックして起動  •  準備 → 抽出 → 分析の順に番号で整理しています'))
+        layout.addWidget(QLabel('1回クリックで起動（ダブルクリック不要）  •  準備 → 抽出 → 分析の順に番号で整理しています'))
         self.grid = QGridLayout()
         self.grid.setSpacing(10)
         layout.addLayout(self.grid, 1)
@@ -198,7 +220,7 @@ class Launcher(QMainWindow):
         layout.addWidget(self.status)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
-        self.timer.start(500)
+        self.timer.start(100)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -223,23 +245,46 @@ class Launcher(QMainWindow):
             self.grid.setRowStretch(row, 1)
 
     def launch(self, card):
+        if card.running:
+            self.status.setText(f'{card.tool.number} のクリックは受け付け済みです。追加クリックは不要です。')
+            return
+        card.running = True
+        card.started_at = time.monotonic()
+        card.setCursor(Qt.CursorShape.BusyCursor)
+        self.status.setText(f'{card.tool.number} {card.tool.title} を起動中です。追加クリックせず、そのままお待ちください。')
+        card.update()
+        # Return to Qt first so feedback is painted before creating the process.
+        QTimer.singleShot(50, lambda: self.dispatch(card))
+
+    def dispatch(self, card):
         try:
             process, log = launch_tool(card.tool)
-            self.processes.append((process, card.tool, log))
-            self.status.setText(f'{card.tool.number} {card.tool.title} を起動しました。')
-            card.setEnabled(False)
-            QTimer.singleShot(1500, lambda: card.setEnabled(True))
+            self.processes.append((process, card, log))
         except Exception as exc:
+            self.release_card(card)
             QMessageBox.warning(self, '起動できません', str(exc))
+
+    def release_card(self, card):
+        card.running = False
+        card.setCursor(Qt.CursorShape.PointingHandCursor)
+        card.update()
 
     def poll(self):
         for item in self.processes[:]:
-            process, tool, log = item
+            process, card, log = item
+            tool = card.tool
             code = process.poll()
-            if code is not None:
+            card.update()
+            # Browser-launching batches exit immediately; still debounce double clicks.
+            if code is not None and (code or time.monotonic() - card.started_at >= 8):
                 self.processes.remove(item)
+                self.release_card(card)
+                self.status.setText(f'{tool.number} の起動処理が終了しました。')
                 if code:
                     self.status.setText(f'{tool.number} のバッチが終了コード {code} で終了しました。ログ: {log}')
+                    detail = log.read_bytes()[-3000:].decode('utf-8', errors='replace')
+                    QMessageBox.warning(self, 'ツールを起動できませんでした',
+                                        f'{tool.number} {tool.title}\n\n{detail}\n\nログ: {log}')
 
     def shortcut(self):
         try:

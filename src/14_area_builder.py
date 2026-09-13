@@ -6,6 +6,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Embeddable Python does not add the script directory to sys.path.
+SRC_DIR = Path(__file__).resolve().parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 from PyQt6.QtCore import QObject, QUrl, pyqtSlot
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMainWindow
 from PyQt6.QtWebChannel import QWebChannel
@@ -13,7 +18,6 @@ from PyQt6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from common.screening import project_area_path
 
-SRC_DIR = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('builder14_area_validation', SRC_DIR / '15_area_screening.py')
 validator = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = validator
@@ -58,7 +62,7 @@ def save_project(project, data):
 class Bridge(QObject):
     def __init__(self, window, project):
         super().__init__(window)
-        self.window, self.project = window, Path(project)
+        self.window, self.project = window, Path(project) if project else None
 
     def result(self, action):
         try:
@@ -68,12 +72,13 @@ class Bridge(QObject):
 
     @pyqtSlot(result=str)
     def getProject(self):
-        return self.result(lambda: read_project(self.project))
+        return self.result(lambda: read_project(self.project) if self.project else
+                           {'project': None, 'path': None, 'data': None})
 
     @pyqtSlot(result=str)
     def chooseProject(self):
         def choose():
-            selected = QFileDialog.getExistingDirectory(self.window, 'プロジェクトフォルダを選択', str(self.project))
+            selected = QFileDialog.getExistingDirectory(self.window, 'プロジェクトフォルダを選択', str(self.project) if self.project else '')
             if not selected:
                 return {'cancelled': True}
             result = read_project(selected)
@@ -83,6 +88,8 @@ class Bridge(QObject):
 
     @pyqtSlot(str, result=str)
     def saveArea(self, text):
+        if self.project is None:
+            return json.dumps({'ok': False, 'error': '先にプロジェクトフォルダを選択してください。'}, ensure_ascii=False)
         return self.result(lambda: {'path': save_project(self.project, json.loads(text))})
 
 
@@ -94,7 +101,7 @@ class EditorPage(QWebEnginePage):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, project):
+    def __init__(self, project=None):
         super().__init__()
         self.setWindowTitle('14 エリアビルダー・ゲート設定')
         self.resize(1280, 850)
@@ -115,10 +122,8 @@ def main():
     parser.add_argument('--project-dir', '--project_dir', type=Path)
     args = parser.parse_args()
     app = QApplication(sys.argv[:1])
-    project = args.project_dir or QFileDialog.getExistingDirectory(None, 'プロジェクトフォルダを選択')
-    if not project:
-        return 0
-    if not Path(project).is_dir():
+    project = args.project_dir
+    if project is not None and not project.is_dir():
         parser.error('プロジェクトフォルダがありません')
     window = MainWindow(project)
     window.show()

@@ -21,8 +21,41 @@ builder = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = builder
 spec.loader.exec_module(builder)
 
+# Keep one QApplication alive across all WebEngine windows in this process.
+from PyQt6.QtWidgets import QApplication
+TEST_APP = QApplication.instance() or QApplication(['test_manual_gates'])
+
 
 class ManualGateTests(unittest.TestCase):
+    def test_start_without_project_shows_editor_without_dialog(self):
+        from unittest.mock import patch
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtCore import QEventLoop, QTimer
+        app = QApplication.instance() or QApplication(['test_manual_gates'])
+        with patch.object(builder.QFileDialog, 'getExistingDirectory') as choose:
+            window = builder.MainWindow()
+            window.show()
+            loop = QEventLoop()
+            state = []
+            timer = QTimer()
+            def receive(value):
+                if value and value.get('ready'):
+                    state.append(value)
+                    loop.quit()
+            def poll():
+                window.web.page().runJavaScript("({ready:document.getElementById('projectStatus')?.textContent === 'プロジェクト未選択', disabled:document.getElementById('saveGeojson')?.disabled})", receive)
+            timer.timeout.connect(poll)
+            timer.start(100)
+            QTimer.singleShot(15000, loop.quit)
+            loop.exec()
+            timer.stop()
+            self.assertTrue(window.isVisible())
+            window.close()
+            choose.assert_not_called()
+            self.assertTrue(state, 'Editor did not initialize without a project')
+            self.assertTrue(state[0]['disabled'])
+            self.assertFalse(json.loads(window.bridge.saveArea('{}'))['ok'])
+
     def test_nearest_gate_without_radius_limit_and_inside_unchanged(self):
         gates = [{'gate_id': 'G02', 'lon': 1, 'lat': 0}, {'gate_id': 'G01', 'lon': -1, 'lat': 0}]
         rows = [dict(start_type='GATE', start_lon=x, start_lat=0, end_type='INSIDE', end_gate_id='stale') for x in (-.1, .1, 0)]
