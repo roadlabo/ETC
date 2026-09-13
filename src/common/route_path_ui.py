@@ -268,7 +268,7 @@ class RouteWindow(QWidget):
         try:
             _, self.targets = scan_project(project)
             self.project = Path(project)
-            self.checks.setText(f'{self.project.name}\n✓ 12_エリアデータ\n✓ 15_area.geojson\n✓ analysis_area\n✓ 20_第２スクリーニング(ルート)')
+            self.checks.setText(f'{self.project.name}\n✓ 12_エリアデータ\n✓ 15_area.geojson\n✓ analysis_area\n✓ 12のゾーニングCSV\n✓ 20_第２スクリーニング(ルート)\n✓ 50のゲート集約：半径50m')
             self.checks.setToolTip(str(project))
             self.choose.setToolTip(str(project))
             self.routes.addItems([t.name for t in self.targets])

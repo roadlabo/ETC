@@ -1,4 +1,8 @@
-"""Path analysis script for inflow-side (A/B) mesh counting and in/out heatmaps toward a center point."""
+"""50: route OD by 50m gates / named 12 zones, and intersection A/B heatmaps.
+
+The route workflow is implemented in common.route_path and common.route_od.
+It checks project polygon CSVs before analysis and writes a complete OD matrix.
+"""
 from __future__ import annotations
 
 import argparse

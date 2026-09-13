@@ -30,15 +30,18 @@ route20 = load('path_route20', '20_route_trip_extractor.py')
 path50 = load('path_engine50', '50_Path_Analysis.py')
 viewer05 = load('path_viewer05', '05_trip_viewer.py')
 
-def fixture(project, multiple=False):
+def fixture(project, multiple=False, spread=False):
     source = project / 'first'
     source.mkdir()
     area_dir = project / '12_エリアデータ'
     area_dir.mkdir()
     write_area(area_dir / '15_area.geojson')
+    (area_dir / 'zones.csv').write_text('テスト内,135,35,135.01,35,135.01,35.01,135,35.01\n', encoding='utf-8')
     # All paths share the target street but have four different endpoint classes.
     paths = [(-.002, .012, .005), (-.002, .006, .005), (.004, .012, .005),
              (.004, .006, .005), (-.002, .012, .0051), (.012, -.002, .005)]
+    if spread:
+        paths[4] = (-.002, .012, .00536)  # 40m: distinct at 15's 30m, merged by 50.
     for i, (start, end, lat) in enumerate(paths):
         middle = [.004, .005, .006] if start < end else [.006, .005, .004]
         points = [start] + middle + [end]
@@ -54,11 +57,26 @@ def fixture(project, multiple=False):
     write_trip_file(route_dir / '対象路線.csv', rows)
     if multiple:
         write_trip_file(route_dir / '第二路線.csv', rows)
-    result = route20.run_second_screening(out15, route_dir, project / SECOND_FOLDER, 30, 3, False, False)
+    result = route20.run_second_screening(out15, route_dir, project / SECOND_FOLDER, 60 if spread else 30, 3, False, False)
     assert result == 0
     return out15
 
 class RoutePathTest(unittest.TestCase):
+    def test_50_reclusters_40m_endpoints_without_editing_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            fixture(project, spread=True)
+            _, targets = scan_project(project)
+            target = targets[0]
+            before = {p: digest(p) for p in target.folder.iterdir() if p.is_file()}
+            original_gates = json.loads((target.folder / 'gate_master.geojson').read_text(encoding='utf-8'))
+            result = analyze(project, target, path50)
+            gates = json.loads((Path(result['output_dir']) / '50_gate_master.geojson').read_text(encoding='utf-8'))
+            self.assertGreater(len(original_gates['features']), len(gates['features']))
+            self.assertEqual(len(gates['features']), 2)
+            self.assertEqual([r['trip_count'] for r in result['ranking']], [2, 1])
+            self.assertEqual(before, {p: digest(p) for p in before})
+
     def test_pipeline_counts_full_trip_and_single_read(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
@@ -97,6 +115,23 @@ class RoutePathTest(unittest.TestCase):
             self.assertTrue(cells)
             self.assertTrue(all(0 < float(r['share']) <= 1 for r in cells))
             self.assertIn('通過交通率', Path(result['report']).read_text(encoding='utf-8'))
+            report = Path(result['report']).read_text(encoding='utf-8')
+            self.assertIn('ODマトリクス', report)
+            self.assertIn('内：テスト内', report)
+            with (Path(result['output_dir']) / '50_od_matrix.csv').open(encoding='utf-8-sig') as stream:
+                matrix = list(csv.reader(stream))
+            self.assertEqual(int(matrix[-1][-1]), 6)
+            self.assertEqual(int(matrix[-2][-2]), 1)
+            map_html = (Path(result['output_dir']) / '50_map.html').read_text(encoding='utf-8')
+            self.assertIn('"permanent": true', map_html)
+
+    def test_missing_zone_preflight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            fixture(project)
+            (project / '12_エリアデータ/zones.csv').unlink()
+            with self.assertRaisesRegex(ValueError, '12_polygon_builder.bat'):
+                scan_project(project)
 
     def test_missing_project_parts(self):
         with tempfile.TemporaryDirectory() as tmp:
