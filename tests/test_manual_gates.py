@@ -43,7 +43,14 @@ class ManualGateTests(unittest.TestCase):
                     state.append(value)
                     loop.quit()
             def poll():
-                window.web.page().runJavaScript("({ready:document.getElementById('projectStatus')?.textContent === 'プロジェクト未選択', disabled:document.getElementById('saveGeojson')?.disabled})", receive)
+                window.web.page().runJavaScript("""(() => {
+                    map.fire('click', {latlng:L.latLng(35, 135)});
+                    document.getElementById('loadGeojson').click();
+                    return {ready:document.getElementById('projectStatus')?.textContent === 'プロジェクト未選択',
+                            disabled:document.getElementById('saveGeojson')?.disabled,
+                            locked:document.getElementById('editingControls').disabled && document.getElementById('map').inert,
+                            points:state.official.length, dirty:state.dirty};
+                })()""", receive)
             timer.timeout.connect(poll)
             timer.start(100)
             QTimer.singleShot(15000, loop.quit)
@@ -54,6 +61,9 @@ class ManualGateTests(unittest.TestCase):
             choose.assert_not_called()
             self.assertTrue(state, 'Editor did not initialize without a project')
             self.assertTrue(state[0]['disabled'])
+            self.assertTrue(state[0]['locked'])
+            self.assertEqual(state[0]['points'], 0)
+            self.assertFalse(state[0]['dirty'])
             self.assertFalse(json.loads(window.bridge.saveArea('{}'))['ok'])
 
     def test_nearest_gate_without_radius_limit_and_inside_unchanged(self):
@@ -116,6 +126,18 @@ class ManualGateTests(unittest.TestCase):
                     phase['started'] = True
                     window.web.page().runJavaScript("""
                         document.getElementById('mode').value = 'gates';
+                        document.getElementById('mode').onchange();
+                        if (layers.analysis.getLayers().some(layer => layer instanceof L.Marker)) throw Error('Editable area nodes remain in gate mode');
+                        const previousAnalysis = state.analysis;
+                        state.analysis = [];
+                        const previousCount = state.gates.length;
+                        map.fire('click', {latlng:L.latLng(35.0051, 135)});
+                        if (state.gates.length !== previousCount || !document.getElementById('status').textContent.includes('分析エリアを先に設定してください')) throw Error('Missing-area guard failed');
+                        state.analysis = previousAnalysis;
+                        const previousGates = state.gates;
+                        state.gates = [];
+                        if (validate() !== 'ゲートを設定してください。') throw Error('Missing-gate guard failed');
+                        state.gates = previousGates;
                         map.fire('click', {latlng:L.latLng(35.0051, 135)});
                         const list = document.getElementById('gateList');
                         list.value = 'G03'; list.onchange({target:list});
@@ -153,7 +175,8 @@ class ManualGateTests(unittest.TestCase):
             saved = builder.read_project(project)['data']
             gates = read_manual_gates(saved)
             self.assertEqual([g['gate_id'] for g in gates], ['G01', 'G02', 'G03'])
-            self.assertEqual((gates[2]['lat'], gates[2]['lon']), (35.0052, 135.0001))
+            self.assertAlmostEqual(gates[2]['lat'], 35.0052)
+            self.assertAlmostEqual(gates[2]['lon'], 135.0)
             self.assertEqual(saved['metadata']['next_gate_number'], 4)
 
 

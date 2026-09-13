@@ -20,6 +20,10 @@
       font:inherit; border:1px solid #9eb2c2; border-radius:4px; background:#fff; padding:5px 7px;
     }
     button { cursor:pointer; }
+    fieldset { border:0; margin:0; padding:0; min-width:0; }
+    fieldset:disabled { opacity:.45; }
+    fieldset:disabled button { cursor:not-allowed; }
+    #map[inert] { opacity:.55; pointer-events:none; }
     button.primary { background:#0d6efd; color:white; border-color:#0d6efd; }
     button.warn { background:#fff4df; border-color:#d79d2f; }
     input[type="number"] { width:72px; }
@@ -34,12 +38,13 @@
   </style>
 </head>
 <body>
-<div id="map"></div>
+<div id="map" inert></div>
 <div class="panel">
   <h1>14 エリアビルダー・ゲート設定</h1>
   <p class="hint">クリックで頂点追加。頂点はドラッグで移動、クリックで選択して削除できます。</p>
   <div class="row"><button id="chooseProject">プロジェクトを選択</button></div>
   <p class="hint" id="projectStatus">保存先：プロジェクト内の14_エリアデータ/14_area.geojson</p>
+  <fieldset id="editingControls" disabled>
   <div class="row">
     <select id="mode">
       <option value="official">正式区域を編集</option>
@@ -57,7 +62,7 @@
     <button id="bufferBuild" class="primary">正式区域から分析区域生成</button>
   </div>
   <p class="hint">正式区域の外側へ指定距離だけ広げた分析区域の下書きを作ります。生成後、外周道路を含むように頂点を動かして調整してください。</p>
-  <p class="hint">「ゲートを追加」で地図をクリックして出入口を指定します。ドラッグで移動できます。境界上の起終点は最も近い指定ゲートへ割り当てます。</p>
+  <p class="hint">分析区域を作成後、「ゲートを追加」で辺付近をクリックしてください。ゲートは最寄りの辺上に配置され、ドラッグ時も辺上に移動します。</p>
   <div class="row"><select id="gateList" size="4" style="width:100%"></select></div>
   <div class="row"><button id="renameGate">選択ゲートの名前変更</button></div>
   <div class="row">
@@ -65,7 +70,8 @@
     <button id="loadGeojson">GeoJSON読込</button>
     <input id="fileInput" type="file" accept=".geojson,.json" style="display:none">
   </div>
-  <div class="status" id="status"></div>
+  </fieldset>
+  <div class="status" id="status">「プロジェクトを選択」からフォルダを指定すると作業できます。</div>
 </div>
 <script src="leaflet/leaflet.js"></script>
 <script src="offline_map.js"></script>
@@ -110,8 +116,10 @@ function redraw(mode) {
   if (mode === 'gates') return redrawGates();
   layers[mode].clearLayers();
   const points = state[mode];
-  if (points.length >= 2) L.polyline(points, style[mode]).addTo(layers[mode]);
-  if (points.length >= 3) L.polygon(points, style[mode]).addTo(layers[mode]);
+  const options = {...style[mode], interactive:activeMode() !== 'gates'};
+  if (points.length >= 2) L.polyline(points, options).addTo(layers[mode]);
+  if (points.length >= 3) L.polygon(points, options).addTo(layers[mode]);
+  if (activeMode() === 'gates') return; // No editable vertices in gate mode.
   points.forEach((p, idx) => {
     const marker = L.marker(p, {
       draggable:true,
@@ -142,7 +150,8 @@ function redrawGates() {
     });
     marker.on('dragstart', snapshot);
     marker.on('dragend', ev => {
-      const p = ev.target.getLatLng();
+      const p = snapToAnalysis(ev.target.getLatLng());
+      if (!p) { redrawGates(); return setStatus('分析エリアを先に設定してください。'); }
       gate.lat = p.lat; gate.lng = p.lng;
       redrawGates();
     });
@@ -167,11 +176,44 @@ function redrawAll() {
   redraw('official'); redraw('analysis'); redrawGates();
   setStatus('編集できます。');
 }
+function analysisReady() {
+  if (state.analysis.length < 3 || selfIntersects(state.analysis)) return false;
+  const points = state.analysis.map(mercator);
+  const area = points.reduce((sum, a, i) => {
+    const b = points[(i+1)%points.length];
+    return sum + a.x*b.y - b.x*a.y;
+  }, 0);
+  return Math.abs(area) > .01;
+}
+function snapToAnalysis(point) {
+  if (!analysisReady()) return null;
+  // Project onto each closed-ring segment in a local metre coordinate system.
+  const scaleX = Math.cos(point.lat*Math.PI/180)*111319.49, scaleY = 111319.49;
+  let best = null, distance = Infinity;
+  state.analysis.forEach((a, i) => {
+    const b = state.analysis[(i+1)%state.analysis.length];
+    const dx = (b.lng-a.lng)*scaleX, dy = (b.lat-a.lat)*scaleY;
+    const length2 = dx*dx+dy*dy;
+    const t = length2 ? Math.max(0, Math.min(1, ((point.lng-a.lng)*scaleX*dx+(point.lat-a.lat)*scaleY*dy)/length2)) : 0;
+    const candidate = L.latLng(a.lat+t*(b.lat-a.lat), a.lng+t*(b.lng-a.lng));
+    const d = Math.hypot((point.lng-candidate.lng)*scaleX, (point.lat-candidate.lat)*scaleY);
+    if (d < distance) { best = candidate; distance = d; }
+  });
+  return best;
+}
+document.getElementById('mode').onchange = () => {
+  state.selected = null;
+  redrawAll();
+  if (activeMode() === 'gates') setStatus(analysisReady() ? '分析エリアの辺付近をクリックしてゲートを追加してください。' : '分析エリアを先に設定してください。');
+};
 map.on('click', ev => {
+  if (!projectSelected) return;
+  if (activeMode() === 'gates' && !analysisReady()) return setStatus('分析エリアを先に設定してください。');
   snapshot();
   if (activeMode() === 'gates') {
     const id = 'G' + String(state.nextGateNumber++).padStart(2, '0');
-    state.gates.push({id, name:'', lat:ev.latlng.lat, lng:ev.latlng.lng});
+    const p = snapToAnalysis(ev.latlng);
+    state.gates.push({id, name:'', lat:p.lat, lng:p.lng});
   } else state[activeMode()].push(ev.latlng);
   state.selected = null;
   redraw(activeMode());
@@ -244,11 +286,14 @@ function selfIntersects(points) {
   return false;
 }
 function validate() {
+  if (!state.gates.length) return 'ゲートを設定してください。';
   if (state.official.length < 3) return '正式区域が3点未満です。';
   if (state.analysis.length < 3) return '分析区域が3点未満です。';
   if (selfIntersects(state.official)) return '正式区域が自己交差しています。';
   if (selfIntersects(state.analysis)) return '分析区域が自己交差しています。';
-  if (!state.gates.length) return 'ゲートを1箇所以上指定してください。';
+  if (!analysisReady()) return '分析エリアを先に設定してください。';
+  if (state.gates.some(g => L.latLng(g.lat, g.lng).distanceTo(snapToAnalysis(g)) > .01))
+    return '分析エリアの辺上にないゲートがあります。ゲートをドラッグして辺上に配置してください。';
   return '';
 }
 function ring(points) {
@@ -312,12 +357,16 @@ function applyProject(result) {
   document.getElementById('saveGeojson').disabled = true;
   projectSelected = Boolean(result.project);
   if (!projectSelected) {
+    document.getElementById('editingControls').disabled = true;
+    document.getElementById('map').inert = true;
     document.getElementById('projectStatus').textContent = 'プロジェクト未選択';
     setStatus('「プロジェクトを選択」から作業するフォルダを指定してください。');
     return;
   }
   document.getElementById('projectStatus').textContent = result.path;
   loadFeatureCollection(result.data || {features:[]});
+  document.getElementById('editingControls').disabled = false;
+  document.getElementById('map').inert = false;
   state.history = []; state.dirty = false;
   document.getElementById('saveGeojson').disabled = false;
   setStatus(result.data ? 'プロジェクトの区域・ゲートを読み込みました。' : '区域とゲートを作成してください。');

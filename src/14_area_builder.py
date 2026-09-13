@@ -42,7 +42,10 @@ def read_project(project):
 
 def save_project(project, data):
     # Validate before touching either the output directory or an existing file.
-    validator.parse_area_definition(data)
+    definition = validator.parse_area_definition(data)
+    for gate in definition.gates:
+        if not validator.point_on_any_boundary(validator.Point(gate['lon'], gate['lat']), definition.analysis_polygons, .01):
+            raise ValueError('分析エリアの辺上にゲートを設定してください。')
     target = area_path(project)
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(data, ensure_ascii=False, indent=2)
