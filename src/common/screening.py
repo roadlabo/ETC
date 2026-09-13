@@ -9,13 +9,24 @@ from pathlib import Path
 LON_INDEX, LAT_INDEX = 14, 15
 OP_DATE_INDEX, OP_ID_INDEX, VEHICLE_TYPE_INDEX, VEHICLE_USE_INDEX = 2, 3, 4, 5
 DATE_INDEX, TRIP_NO_INDEX = 6, 8
-AREA_FOLDER = '12_エリアデータ'
-AREA_FILE = '15_area.geojson'
+AREA_FOLDER = '14_エリアデータ'
+AREA_FILE = '14_area.geojson'
+ZONE_FOLDER = '12_ゾーニングデータ'
 ROUTE_FOLDER = '10_ルート(Route)データ'
 SECOND_FOLDER = '20_第２スクリーニング(ルート)'
 INFO_FILE = 'screening_info.json'
 INDEX_FILE = '15_trip_index.csv'
 INDEX_FIELDS = ['trip_id', 'source_file', 'start_type', 'start_gate_id', 'end_type', 'end_gate_id', 'start_lon', 'start_lat', 'end_lon', 'end_lat', 'sha256']
+
+
+def area_role(properties):
+    """14 writes area14_role; old GeoJSON can be moved without changing its hash."""
+    return (properties.get('area14_role') or properties.get('area15_role') or
+            properties.get('role') or properties.get('type') or '').lower()
+
+
+def project_area_path(project):
+    return Path(project) / AREA_FOLDER / AREA_FILE
 
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()

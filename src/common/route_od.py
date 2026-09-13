@@ -4,11 +4,12 @@ import html
 import math
 from pathlib import Path
 from collections import Counter
+from common.screening import ZONE_FOLDER
 
 
 def load_zones(project):
     project = Path(project)
-    paths = sorted(set(project.glob('*.csv')) | set((project / '12_エリアデータ').rglob('*.csv')))
+    paths = sorted((project / ZONE_FOLDER).rglob('*.csv'))
     zones = []
     for path in paths:
         parsed = []
@@ -42,7 +43,7 @@ def load_zones(project):
         zones.extend(parsed)
     if not zones:
         raise ValueError('12で作成したゾーニングCSVがありません（または形式が不正です）。'
-                         '12_polygon_builder.batでエリアを作成し、プロジェクト直下または12_エリアデータ内にCSVを保存してください。')
+                         f'12_polygon_builder.batでゾーニングを作成し、プロジェクト内の{ZONE_FOLDER}にCSVを保存してください。')
     return zones
 
 

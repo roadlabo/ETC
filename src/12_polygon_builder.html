@@ -3,10 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ゾーニングデータ編集</title>
+  <title>12 ポリゴンビルダー（ゾーニング）</title>
   <link rel="stylesheet" href="leaflet/leaflet.css"/>
   <script src="leaflet/leaflet.js"></script>
   <script src="offline_map.js"></script>
+  <script src="project_output.js"></script>
   <style>
     html, body, #map { height: 100%; margin: 0; }
     .toolbar {
@@ -61,7 +62,9 @@
 <body>
 <div id="map"></div>
 <div class="toolbar">
-  <div><strong>ゾーニングデータ編集（12_polygon_builder）</strong></div>
+  <div><strong>12 ポリゴンビルダー（ゾーニング）</strong></div>
+  <button id="chooseProject">プロジェクトを選択</button>
+  <div id="projectStatus">保存先：プロジェクト内の12_ゾーニングデータ</div>
   <button id="btnLoad">既存ゾーニングデータを読込</button>  
   <div class="hint">左クリック=点追加 / 右クリック=既存点へスナップ</div>
   <div class="hint">ESC：１点だけ戻る（UNDO）</div>  
@@ -80,26 +83,24 @@
 
   // ==== CSV 読み込みユーティリティ ====
   function parseCsvText(text) {
-    var lines = text.split('\n').map(function(line){
-      return line.replace('\r', '');
-    }).filter(function(line){
-      return line.trim() !== '';
-    });
-
-    var result = [];
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i];
-      if (!line) continue;
-
-      // BOM & CR 除去
-      line = line.replace(/^\uFEFF/, '');
-      line = line.replace(String.fromCharCode(13), '');
-      line = line.trim();
-      if (!line) continue;
-
-      var cols = line.split(',');
-      result.push(cols);
+    text = text.replace(/^\uFEFF/, '');
+    var result = [], row = [], field = '', quoted = false;
+    for (var i = 0; i < text.length; i++) {
+      var ch = text[i];
+      if (ch === '"') {
+        if (quoted && text[i + 1] === '"') { field += '"'; i++; }
+        else quoted = !quoted;
+      } else if (ch === ',' && !quoted) {
+        row.push(field); field = '';
+      } else if ((ch === '\n' || ch === '\r') && !quoted) {
+        row.push(field);
+        if (row.some(function(value) { return value.trim() !== ''; })) result.push(row);
+        row = []; field = '';
+        if (ch === '\r' && text[i + 1] === '\n') i++;
+      } else field += ch;
     }
+    if (quoted) throw new Error('CSVの引用符が閉じられていません。');
+    if (field || row.length) { row.push(field); result.push(row); }
     return result;
   }
 
@@ -507,7 +508,15 @@
     renderList();
   };
 
-  document.getElementById('btnSave').onclick = function () {
+  document.getElementById('chooseProject').onclick = async function () {
+    try {
+      var name = await ProjectOutput.choose();
+      document.getElementById('projectStatus').textContent = name + '/12_ゾーニングデータ';
+    } catch (err) {
+      if (err.name !== 'AbortError') alert(err.message);
+    }
+  };
+  document.getElementById('btnSave').onclick = async function () {
     if (polygons.length === 0) {
       alert('ポリゴンがありません。');
       return;
@@ -526,7 +535,10 @@
         var lon = poly.coords[j][1];
         row.push(lon.toString(), lat.toString());
       }
-      rows.push(row.join(','));
+      rows.push(row.map(function (value) {
+        var text = String(value);
+        return /[",\r\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+      }).join(','));
     }
     var csvText = rows.join('\r\n');
 
@@ -534,12 +546,12 @@
     var bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
     var blob = new Blob([bom, csvText], {type: 'text/csv'});
 
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      var saved = await ProjectOutput.save('12_ゾーニングデータ', filename, blob);
+      document.getElementById('projectStatus').textContent = '保存しました：' + saved;
+    } catch (err) {
+      if (err.name !== 'AbortError') alert(err.message);
+    }
   };
 
   function initMode() {

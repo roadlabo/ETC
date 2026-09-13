@@ -21,12 +21,12 @@
 
 分析区域は、正式区域から標準30m外側へ広げて作成できます。30mは初期値で、エリア設定画面で変更できます。生成後は地図上で手作業修正できます。
 
-## エリア設定
+## 14 エリアビルダーでのエリア設定
 
 起動:
 
 ```bat
-bat\15_area_builder.bat
+bat\14_area_builder.bat
 ```
 
 操作:
@@ -35,14 +35,14 @@ bat\15_area_builder.bat
 2. 必要に応じて頂点をドラッグして修正します。
 3. `バッファ` に距離を入力し、`正式区域から分析区域生成` を押します。
 4. `分析区域を編集` を選び、外周道路が入るように頂点を調整します。
-5. `GeoJSON保存` で `15_area.geojson` として保存します。保存時に自己交差などを確認します。
+5. `プロジェクトを選択` で保存先を選び、`GeoJSON保存` で `14_エリアデータ/14_area.geojson` に保存します。保存時に自己交差などを確認します。
 
 ## GeoJSON構造
 
 1つのFeatureCollectionに次のFeatureを保存します。
 
-- `properties.area15_role = official_area`: 正式区域のPolygon
-- `properties.area15_role = analysis_area`: 分析区域のPolygon
+- `properties.area14_role = official_area`: 正式区域のPolygon
+- `properties.area14_role = analysis_area`: 分析区域のPolygon
 
 古いGeoJSONに点や線の追加Featureが含まれていても、第1.5スクリーニングでは無視します。
 
@@ -57,7 +57,7 @@ bat\15_UI_area_screening.bat
 画面で指定するもの:
 
 - 第1スクリーニングCSVまたはフォルダ
-- エリアGeoJSON
+- エリアを保存したプロジェクト（`14_エリアデータ/14_area.geojson` を自動指定）
 - 出力フォルダ
 - サブフォルダも含めるか
 - 短距離サブトリップ除外しきい値
@@ -71,7 +71,7 @@ bat\15_UI_area_screening.bat
 UIを使わずに実行できます。
 
 ```bat
-runtime\python\python.exe src\15_area_screening.py --input "D:\_EtcData\out(1st)" --area "D:\_EtcData\15_area.geojson" --output "D:\_EtcData\15_result" --recursive
+runtime\python\python.exe src\15_area_screening.py --input "D:\_EtcData\out(1st)" --project-dir "D:\PROJECT" --output "D:\_EtcData\15_result" --recursive
 ```
 
 ## 入力データ
@@ -149,7 +149,7 @@ OD表を作る場合は、後段のOD系プログラムで処理します。境�
 
 正式座標列はO列=経度（0始まり14）、P列=緯度（15）。GeoJSONは `[lon, lat]`、Foliumは `[lat, lon]` です。
 
-`12_エリアデータ/15_area.geojson` の `area15_role=analysis_area` を基準に切り出します。`official_area` は別の役割として保持します。15の既存ローダーは両方の区域を要求します。
+`14_エリアデータ/14_area.geojson` の `area14_role=analysis_area` を基準に切り出します。`official_area` は別の役割として保持します。15の既存ローダーは両方の区域を要求します。
 
 `15_エリア第1.5スクリーニング` 直下へ、既存設定・summaryに加えて `screening_info.json`、`15_trip_index.csv`、`gate_master.csv`、`gate_master.geojson` を保存します。トリップCSVフォルダ内には列挙を妨げるsidecar CSVを置かず、親契約を指す `screening_info.json` のみ置きます。
 

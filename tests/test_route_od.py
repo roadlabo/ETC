@@ -8,10 +8,24 @@ from common.route_od import load_zones, endpoint_label, matrix_data, matrix_html
 
 
 class RouteODTest(unittest.TestCase):
+    def test_only_12_zoning_folder_is_used(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            content = '西,134,35,134.1,35,134.1,35.1,134,35.1\n'
+            (root / 'zones.csv').write_text(content, encoding='utf-8')
+            (root / '14_エリアデータ').mkdir()
+            (root / '14_エリアデータ/zones.csv').write_text(content, encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, '12_ゾーニングデータ'):
+                load_zones(root)
+            (root / '12_ゾーニングデータ').mkdir()
+            (root / '12_ゾーニングデータ/zones.csv').write_text(content, encoding='utf-8')
+            self.assertEqual(len(load_zones(root)), 1)
+
     def test_builder_names_with_commas_and_utf8_bom(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / 'zones.csv').write_text('河原町、伏見町,材木町,134,35,134.1,35,134.1,35.1,134,35.1\n', encoding='utf-8-sig')
+            (root / '12_ゾーニングデータ').mkdir()
+            (root / '12_ゾーニングデータ/zones.csv').write_text('河原町、伏見町,材木町,134,35,134.1,35,134.1,35.1,134,35.1\n', encoding='utf-8-sig')
             zones = load_zones(root)
             record = {'start_type': 'INSIDE', 'start_lon': 134.05, 'start_lat': 35.05}
             self.assertEqual(endpoint_label(record, 'start', zones), '内：河原町、伏見町,材木町')
@@ -26,8 +40,9 @@ class RouteODTest(unittest.TestCase):
     def test_invalid_or_missing_polygons_require_builder(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            (root / '12_ゾーニングデータ').mkdir()
             for content in ['', 'bad,134,35,134,35\n', 'bad,nan,35,134,35,135,36\n']:
-                (root / 'zones.csv').write_text(content, encoding='utf-8')
+                (root / '12_ゾーニングデータ/zones.csv').write_text(content, encoding='utf-8')
                 with self.assertRaisesRegex(ValueError, '12_polygon_builder.bat'):
                     load_zones(root)
 

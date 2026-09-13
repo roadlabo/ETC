@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from common.screening import (AREA_FOLDER, AREA_FILE, ROUTE_FOLDER, SECOND_FOLDER, INDEX_FILE,
-                              read_info, read_index, read_lon_lat, digest, write_csv, cluster_gates)
+                              read_info, read_index, read_lon_lat, digest, write_csv, cluster_gates, area_role)
 from common.route_od import load_zones, endpoint_label, matrix_data, matrix_html
 
 GATE_RADIUS_M = 50
@@ -31,15 +31,15 @@ def scan_project(project):
     project = Path(project)
     area_dir = project / AREA_FOLDER
     if not area_dir.is_dir():
-        raise ValueError(f'{AREA_FOLDER} がありません。プロジェクト内に作成し、15_area_builder.batで区域を保存してください。')
+        raise ValueError(f'{AREA_FOLDER} がありません。プロジェクト内に作成し、14_area_builder.batで区域を保存してください。')
     area_path = area_dir / AREA_FILE
     if not area_path.is_file():
-        raise ValueError(f'{AREA_FOLDER}/{AREA_FILE} がありません。15_area_builder.batで区域を作成・保存してください。')
+        raise ValueError(f'{AREA_FOLDER}/{AREA_FILE} がありません。14_area_builder.batで区域を作成・保存してください。')
     area = json.loads(area_path.read_text(encoding='utf-8-sig'))
     features = [f for f in area.get('features', [])
-                if (f.get('properties') or {}).get('area15_role') == 'analysis_area']
+                if area_role(f.get('properties') or {}) == 'analysis_area']
     if not features:
-        raise ValueError('15_area.geojson に analysis_area がありません。15_area_builder.batで分析区域を作成してください。')
+        raise ValueError('14_area.geojson に analysis_area がありません。14_area_builder.batで分析区域を作成してください。')
     for f in features:
         g = f.get('geometry') or {}
         if g.get('type') not in ('Polygon', 'MultiPolygon') or not g.get('coordinates'):

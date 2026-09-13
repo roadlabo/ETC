@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from common.ui.logo_link import ClickableLogoLabel
+from common.screening import AREA_FOLDER, AREA_FILE, project_area_path
 
 MODULE_PATH = SRC_DIR / "15_area_screening.py"
 spec = importlib.util.spec_from_file_location("area15", MODULE_PATH)
@@ -184,7 +185,8 @@ class MainWindow(QMainWindow):
         self.output_dir = QLineEdit()
         self.chk_recursive = QCheckBox("サブフォルダも含める")
         self._path_row(form, 0, "第1スクリーニングCSV/フォルダ", self.input_path, self._pick_input)
-        self._path_row(form, 1, "エリアGeoJSON", self.area_path, self._pick_area)
+        self._path_row(form, 1, "14 エリアデータ（プロジェクト選択）", self.area_path, self._pick_area)
+        self.area_path.setPlaceholderText(f'プロジェクト/{AREA_FOLDER}/{AREA_FILE}')
         self._path_row(form, 2, "出力フォルダ", self.output_dir, self._pick_output)
         form.addWidget(self.chk_recursive, 3, 1)
         main.addWidget(form_box)
@@ -280,9 +282,14 @@ class MainWindow(QMainWindow):
             self.input_path.setText(folder)
 
     def _pick_area(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "GeoJSONを選択", "", "GeoJSON (*.geojson *.json);;All files (*.*)")
-        if path:
-            self.area_path.setText(path)
+        folder = QFileDialog.getExistingDirectory(self, "14_エリアデータを含むプロジェクトフォルダを選択")
+        if folder:
+            path = project_area_path(folder)
+            self.area_path.setText(str(path))
+            self.output_dir.setText(str(Path(folder) / area15.FOLDER_OUT))
+            if not path.is_file():
+                QMessageBox.warning(self, "14 エリアデータが必要です",
+                                    f'{path} がありません。14_area_builder.batでエリアを作成し、このプロジェクトへ保存してください。')
 
     def _pick_output(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "出力フォルダを選択")
@@ -306,7 +313,9 @@ class MainWindow(QMainWindow):
         if not cfg.input_path.exists():
             return "第1スクリーニングCSV/フォルダが見つかりません。"
         if not cfg.area_geojson.is_file():
-            return "エリアGeoJSONが見つかりません。"
+            return f'{AREA_FOLDER}/{AREA_FILE} が見つかりません。14_area_builder.batで作成してください。'
+        if cfg.area_geojson.parent.name != AREA_FOLDER or cfg.area_geojson.name != AREA_FILE:
+            return f'エリアデータはプロジェクト内の{AREA_FOLDER}/{AREA_FILE}へ配置してください。'
         if cfg.input_path.is_dir() and not any(cfg.input_path.rglob("*.csv") if cfg.recursive else cfg.input_path.glob("*.csv")):
             return "入力フォルダにCSVがありません。"
         try:

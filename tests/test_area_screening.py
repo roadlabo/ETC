@@ -19,7 +19,7 @@ def write_area(path: Path) -> None:
     features = [
         {
             "type": "Feature",
-            "properties": {"area15_role": "official_area", "name": "正式区域"},
+            "properties": {"area14_role": "official_area", "name": "正式区域"},
             "geometry": {
                 "type": "Polygon",
                 "coordinates": [[[135.002, 35.002], [135.008, 35.002], [135.008, 35.008], [135.002, 35.008], [135.002, 35.002]]],
@@ -27,7 +27,7 @@ def write_area(path: Path) -> None:
         },
         {
             "type": "Feature",
-            "properties": {"area15_role": "analysis_area", "name": "分析区域"},
+            "properties": {"area14_role": "analysis_area", "name": "分析区域"},
             "geometry": {
                 "type": "Polygon",
                 "coordinates": [[[135.000, 35.000], [135.010, 35.000], [135.010, 35.010], [135.000, 35.010], [135.000, 35.000]]],
@@ -35,7 +35,7 @@ def write_area(path: Path) -> None:
         },
         {
             "type": "Feature",
-            "properties": {"area15_role": "gate", "gate_id": "ignored"},
+            "properties": {"area14_role": "gate", "gate_id": "ignored"},
             "geometry": {"type": "Point", "coordinates": [135.000, 35.005]},
         },
     ]
@@ -48,12 +48,12 @@ def write_invalid_area(path: Path) -> None:
         "features": [
             {
                 "type": "Feature",
-                "properties": {"area15_role": "official_area"},
+                "properties": {"area14_role": "official_area"},
                 "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 1], [1, 0], [0, 1], [0, 0]]]},
             },
             {
                 "type": "Feature",
-                "properties": {"area15_role": "analysis_area"},
+                "properties": {"area14_role": "analysis_area"},
                 "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 1], [1, 0], [0, 1], [0, 0]]]},
             },
         ],

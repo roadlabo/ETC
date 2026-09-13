@@ -20,7 +20,7 @@ from typing import Callable, Iterator, Sequence
 
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common.screening import digest, relative, write_gate_contract, write_info, read_info
+from common.screening import digest, relative, write_gate_contract, write_info, read_info, area_role, project_area_path
 
 FOLDER_OUT = "15_エリア第1.5スクリーニング"
 
@@ -295,7 +295,7 @@ def load_area_definition(path: Path) -> AreaDefinition:
 
     for feature in data.get("features", []):
         props = feature.get("properties") or {}
-        role = (props.get("area15_role") or props.get("role") or props.get("type") or "").lower()
+        role = area_role(props)
         geom = feature.get("geometry") or {}
         gtype = geom.get("type")
         coords = geom.get("coordinates") or []
@@ -661,7 +661,9 @@ def run_screening(config: ScreeningConfig, progress_cb: ProgressCB = None, cance
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="エリア第1.5スクリーニング")
     parser.add_argument("--input", required=True, help="第1スクリーニングCSVまたはフォルダ")
-    parser.add_argument("--area", required=True, help="エリア設定GeoJSON")
+    area_input = parser.add_mutually_exclusive_group(required=True)
+    area_input.add_argument("--project-dir", type=Path, help="14_エリアデータ/14_area.geojsonを読み込むプロジェクト")
+    area_input.add_argument("--area", help="14で作成したエリア設定GeoJSON（ファイル直接指定）")
     parser.add_argument("--output", required=True, help="出力フォルダ")
     parser.add_argument("--recursive", action="store_true")
     parser.add_argument("--encoding", default="utf-8-sig")
@@ -675,9 +677,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    area_path = project_area_path(args.project_dir) if args.project_dir else Path(args.area)
+    if not area_path.is_file():
+        print(f'{area_path} がありません。14_area_builder.batでエリアを作成し、プロジェクト内の14_エリアデータへ保存してください。', file=sys.stderr)
+        return 2
     config = ScreeningConfig(
         input_path=Path(args.input),
-        area_geojson=Path(args.area),
+        area_geojson=area_path,
         output_dir=Path(args.output),
         encoding=args.encoding,
         recursive=args.recursive,

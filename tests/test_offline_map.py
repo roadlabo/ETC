@@ -34,7 +34,7 @@ class OfflineMapTests(unittest.TestCase):
     def test_map_pages_use_local_leaflet_and_offline_layer(self):
         src = Path(__file__).parents[1] / "src"
         for name in ("10_route_sampler.html", "11_crossroad_sampler.html",
-                     "12_polygon_builder.html", "15_area_builder.html",
+                     "12_polygon_builder.html", "14_area_builder.html",
                      "unreleased/10_route_sampler.html"):
             html = (src / name).read_text(encoding="utf-8")
             self.assertIn("offline_map.js", html)

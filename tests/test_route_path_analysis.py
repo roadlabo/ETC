@@ -30,13 +30,18 @@ route20 = load('path_route20', '20_route_trip_extractor.py')
 path50 = load('path_engine50', '50_Path_Analysis.py')
 viewer05 = load('path_viewer05', '05_trip_viewer.py')
 
-def fixture(project, multiple=False, spread=False):
+def fixture(project, multiple=False, spread=False, legacy_area=False):
     source = project / 'first'
     source.mkdir()
-    area_dir = project / '12_エリアデータ'
+    area_dir = project / '14_エリアデータ'
     area_dir.mkdir()
-    write_area(area_dir / '15_area.geojson')
-    (area_dir / 'zones.csv').write_text('テスト内,135,35,135.01,35,135.01,35.01,135,35.01\n', encoding='utf-8')
+    write_area(area_dir / '14_area.geojson')
+    if legacy_area:
+        area_path = area_dir / '14_area.geojson'
+        area_path.write_text(area_path.read_text(encoding='utf-8').replace('area14_role', 'area15_role'), encoding='utf-8')
+    zone_dir = project / '12_ゾーニングデータ'
+    zone_dir.mkdir()
+    (zone_dir / 'zones.csv').write_text('テスト内,135,35,135.01,35,135.01,35.01,135,35.01\n', encoding='utf-8')
     # All paths share the target street but have four different endpoint classes.
     paths = [(-.002, .012, .005), (-.002, .006, .005), (.004, .012, .005),
              (.004, .006, .005), (-.002, .012, .0051), (.012, -.002, .005)]
@@ -50,7 +55,7 @@ def fixture(project, multiple=False, spread=False):
             row[18] = '30'
         write_trip_file(source / f'{i}.csv', rows)
     out15 = project / area15.FOLDER_OUT
-    area15.run_screening(area15.ScreeningConfig(source, area_dir / '15_area.geojson', out15))
+    area15.run_screening(area15.ScreeningConfig(source, area_dir / '14_area.geojson', out15))
     route_dir = project / route20.FOLDER_ROUTE
     route_dir.mkdir()
     rows = [row33('1', 1, '20250101090000', 135+x, 35.005) for x in [.004, .005, .006]]
@@ -62,6 +67,17 @@ def fixture(project, multiple=False, spread=False):
     return out15
 
 class RoutePathTest(unittest.TestCase):
+    def test_legacy_area_attributes_in_new_folder_keep_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            fixture(project, legacy_area=True)
+            _, targets = scan_project(project)
+            self.assertTrue(analyze(project, targets[0], path50)['official'])
+            args = area15.parse_args(['--input', str(project / 'first'), '--project-dir', str(project),
+                                      '--output', str(project / 'output')])
+            self.assertEqual(args.project_dir, project)
+            self.assertEqual(area15.project_area_path(args.project_dir), project / '14_エリアデータ/14_area.geojson')
+
     def test_50_reclusters_40m_endpoints_without_editing_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
@@ -129,23 +145,23 @@ class RoutePathTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
             fixture(project)
-            (project / '12_エリアデータ/zones.csv').unlink()
+            (project / '12_ゾーニングデータ/zones.csv').unlink()
             with self.assertRaisesRegex(ValueError, '12_polygon_builder.bat'):
                 scan_project(project)
 
     def test_missing_project_parts(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
-            with self.assertRaisesRegex(ValueError, '12_エリアデータ'):
+            with self.assertRaisesRegex(ValueError, '14_エリアデータ'):
                 scan_project(project)
-            area = project / '12_エリアデータ'
+            area = project / '14_エリアデータ'
             area.mkdir()
-            with self.assertRaisesRegex(ValueError, '15_area.geojson'):
+            with self.assertRaisesRegex(ValueError, '14_area.geojson'):
                 scan_project(project)
-            (area / '15_area.geojson').write_text('{"features": []}')
+            (area / '14_area.geojson').write_text('{"features": []}')
             with self.assertRaisesRegex(ValueError, 'analysis_area'):
                 scan_project(project)
-            write_area(area / '15_area.geojson')
+            write_area(area / '14_area.geojson')
             with self.assertRaisesRegex(ValueError, '20_第２'):
                 scan_project(project)
 
@@ -229,7 +245,7 @@ class RoutePathTest(unittest.TestCase):
             self.assertEqual(info['source_screening_stage'], '1st_screening')
             self.assertTrue(info['full_trip'])
             self.assertEqual(info['trip_count'], 6)
-            area = project / '12_エリアデータ/15_area.geojson'
+            area = project / '14_エリアデータ/14_area.geojson'
             area.write_bytes(area.read_bytes() + b'\n')
             _, targets = scan_project(project)
             self.assertIn('一致', targets[0].warning)
@@ -296,7 +312,7 @@ class RoutePathTest(unittest.TestCase):
             self.assertEqual(len(list((output / '15_area_subtrip_csv').glob('*.csv'))), 6)
             self.assertEqual(read_info(output)['trip_index_sha256'], digest(output / '15_trip_index.csv'))
             with self.assertRaisesRegex(ValueError, '空の出力先'):
-                area15.run_screening(area15.ScreeningConfig(project / 'first', project / '12_エリアデータ/15_area.geojson', output))
+                area15.run_screening(area15.ScreeningConfig(project / 'first', project / '14_エリアデータ/14_area.geojson', output))
 
     def test_20_cli_dry_run(self):
         with tempfile.TemporaryDirectory() as tmp:
