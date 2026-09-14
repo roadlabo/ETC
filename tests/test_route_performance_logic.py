@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "src" / "30_route_performance.py"
 if not MODULE_PATH.exists():
     MODULE_PATH = ROOT / "work" / "30_route_performance.py"

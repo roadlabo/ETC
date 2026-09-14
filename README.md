@@ -8,7 +8,11 @@
 
 共通設定は `userdata/project.json`、背景地図は `tiles/gsi_pale` に保存します。`src` をフォルダごと更新しても残ります。初めて旧版から更新する場合は、旧 `src/tiles` を直下の `tiles` に移動してから `src` を更新してください。
 
-配布フォルダの構成は `bat/`、`src/`、`runtime/`、`tiles/`、`docs/`、`README.md`、`requirements.txt` です。設定とログは使用時に作成されます。開発リポジトリでは旧版・テスト・開発資料を `unreleased/` に分離し、配布用コピーは `release/` に作成します。配布用コピーはフォルダの中身をまとめてコピーして使用できます。
+配布フォルダの構成は `bat/`、`src/`、`runtime/`、`tiles/`、利用者向けの`docs/`、`README.md`、`requirements.txt` です。設定とログは使用時に作成されます。配布用コピーはフォルダの中身をまとめてコピーして使用できます。
+
+開発時は`src/`・`bat/`を編集し、`tests/`で検証します。開発資料は`docs/development/`、サンプルは`samples/`、配布作成・検証ツールは`tools/`に置きます。旧版はGit履歴で管理します。
+
+プロジェクト直下で `runtime\python\python.exe -X utf8 tools\run_tests.py` を実行して検証し、配布時に `runtime\python\python.exe tools\build_release.py` を実行します。`release/ETC_日時`に新しい配布一式を作成し、既存版には上書きしません。`tests/`・`tools/`・`samples/`・`docs/development/`・個人設定・ログは配布に含めません。`release/`内を直接編集せず、開発側を直してから作り直してください。
 
 ETC2.0アナライザー Toolkit は、  
 ETC2.0プローブデータを行政の意思決定に活かすための  

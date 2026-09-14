@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
-sys.path.insert(0, str(ROOT / 'unreleased/tests'))
+sys.path.insert(0, str(ROOT / 'tests'))
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from test_area_screening import write_area, write_trip_file, row33
 from common.screening import project_area_path, read_info

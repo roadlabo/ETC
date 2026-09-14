@@ -1,13 +1,16 @@
 import importlib.util
+import subprocess
+import types
 import unittest
 from datetime import datetime
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-MODULE_PATH = ROOT / "unreleased" / "legacy" / "30_build_performance.py"
-spec = importlib.util.spec_from_file_location("build_performance", MODULE_PATH)
-build_performance = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(build_performance)
+ROOT = Path(__file__).resolve().parents[1]
+# Preserve the historical regression without keeping a duplicate legacy folder.
+BASELINE = '7cbbd5faf547c8fbce31c9e9be1324e8546a3a86:unreleased/legacy/30_build_performance.py'
+build_performance = types.ModuleType('build_performance')
+build_performance.__file__ = str(ROOT / 'src/30_build_performance.py')
+exec(compile(subprocess.check_output(['git', 'show', BASELINE], cwd=ROOT), BASELINE, 'exec'), build_performance.__dict__)
 
 
 def make_row(date_value: str, time_value: str) -> list[str]:

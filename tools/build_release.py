@@ -8,6 +8,13 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTENTS = ('bat', 'src', 'runtime', 'tiles', 'docs', 'README.md', 'requirements.txt')
 
 
+def ignore_release_files(directory, names):
+    ignored = set(shutil.ignore_patterns('__pycache__', '*.pyc', '*.tmp', '.gitkeep', '.keep')(directory, names))
+    if Path(directory).resolve() == (ROOT / 'docs').resolve():
+        ignored.add('development')
+    return ignored
+
+
 def build(destination):
     destination = Path(destination).resolve()
     if destination == ROOT or ROOT.is_relative_to(destination):
@@ -25,7 +32,7 @@ def build(destination):
         source = ROOT / name
         target = destination / name
         if source.is_dir():
-            shutil.copytree(source, target, ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '*.tmp', '.gitkeep', '.keep'))
+            shutil.copytree(source, target, ignore=ignore_release_files)
         else:
             shutil.copy2(source, target)
     (destination / '00_ETC_launcher.bat').write_bytes(

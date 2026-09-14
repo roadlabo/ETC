@@ -17,21 +17,23 @@ for name in CONTENTS:
     for path in files:
         if not path.is_file() or '__pycache__' in path.parts or path.suffix in ('.pyc', '.tmp') or path.name in ('.gitkeep', '.keep'):
             continue
+        if path.is_relative_to(ROOT / 'docs/development'):
+            continue
         target = destination / path.relative_to(ROOT)
         assert target.is_file(), target
         assert hashlib.sha256(path.read_bytes()).digest() == hashlib.sha256(target.read_bytes()).digest(), target
         checked += 1
-for name in ('unreleased', 'tests', '.git', 'userdata', 'logs', 'src/tiles', 'src/unreleased'):
+for name in ('unreleased', 'tests', 'tools', 'samples', 'docs/development', '.git', 'userdata', 'logs', 'src/tiles', 'src/unreleased'):
     assert not (destination / name).exists(), name
 for source in (destination / 'src').rglob('*.py'):
     ast.parse(source.read_text(encoding='utf-8-sig'), filename=str(source))
 tiles = 0
-for entry in subprocess.check_output(['git', 'ls-tree', '-rz', 'HEAD', 'src/tiles'], cwd=ROOT).split(b'\0'):
+for entry in subprocess.check_output(['git', 'ls-tree', '-rz', 'HEAD', 'tiles'], cwd=ROOT).split(b'\0'):
     if not entry:
         continue
     metadata, name = entry.split(b'\t', 1)
     original_hash = metadata.split()[2].decode()
-    target = ROOT / name.decode().removeprefix('src/')
+    target = ROOT / name.decode()
     content = target.read_bytes()
     actual_hash = hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest()
     assert actual_hash == original_hash, target

@@ -25,6 +25,6 @@ font.setPixelSize(83)
 p.setFont(font)
 p.drawText(QRect(8, 96, 240, 112), Qt.AlignmentFlag.AlignCenter, 'ETC')
 p.end()
-output = Path(__file__).resolve().parents[2] / 'src/assets/logos/logo_00_launcher.ico'
+output = Path(__file__).resolve().parents[1] / 'src/assets/logos/logo_00_launcher.ico'
 assert image.save(str(output), 'ICO')
 print(output)
