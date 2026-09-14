@@ -1795,10 +1795,12 @@ def main():
             busy.close()
             busy = None
 
+        from common.project_settings import get_project
+        project = get_project()
         csv_path, _ = QFileDialog.getOpenFileName(
             None,
             "交差点パフォーマンスCSV（*_performance.csv）を選択",
-            "",
+            str(project / '31_交差点パフォーマンス') if project else '',
             "CSV Files (*.csv);;All Files (*)",
         )
         if not csv_path:

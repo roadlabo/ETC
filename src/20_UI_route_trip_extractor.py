@@ -183,6 +183,8 @@ class MainWindow(QMainWindow):
         self._set_style()
         QTimer.singleShot(0, self._init_logo_overlay)
         self.log_info("プロジェクトフォルダと第1スクリーニングフォルダを選択してください。")
+        from common.project_settings import restore_project
+        restore_project(self.select_project)
 
     def _resolve_logo_path(self) -> Path | None:
         logo_path = SRC_DIR / "assets" / "logos" / UI_LOGO_FILENAME
@@ -464,11 +466,13 @@ class MainWindow(QMainWindow):
         iterator = self.input_dir.rglob("*.csv") if self.chk_recursive.isChecked() else self.input_dir.glob("*.csv")
         return sum(1 for p in iterator if p.name not in (INDEX_FILE, 'gate_master.csv'))
 
-    def select_project(self):
-        selected = QFileDialog.getExistingDirectory(self, "プロジェクトフォルダを選択")
+    def select_project(self, project=None):
+        selected = project if isinstance(project, str) else QFileDialog.getExistingDirectory(self, "プロジェクトフォルダを選択")
         if not selected:
             return
         self.project_dir = Path(selected).resolve()
+        from common.project_settings import set_project
+        set_project(self.project_dir)
         self.lbl_project.setText(str(self.project_dir))
         self.scan_routes()
 

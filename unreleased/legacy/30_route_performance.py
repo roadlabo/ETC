@@ -23,7 +23,7 @@ from typing import Callable, Iterable, Optional
 
 import pandas as pd
 
-SRC_DIR = Path(__file__).resolve().parent
+SRC_DIR = Path(__file__).resolve().parents[2] / "src"
 EARTH_R = 6_371_000.0
 
 ROUTE_DIR_CANDIDATES = [
@@ -745,7 +745,7 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
         if offline_map_path.exists()
         else ""
     )
-    local_tile_url = (offline_map_path.parent / "tiles" / "gsi_pale").as_uri() + "/{z}/{x}/{y}.png"
+    local_tile_url = (offline_map_path.parent.parent / "tiles" / "gsi_pale").as_uri() + "/{z}/{x}/{y}.png"
     html = f"""<!doctype html>
 <html lang="ja">
 <head>

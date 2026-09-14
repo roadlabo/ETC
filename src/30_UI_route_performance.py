@@ -47,15 +47,13 @@ except Exception:  # pragma: no cover
 PERF_PATH = SRC_DIR / "30_route_performance.py"
 if not PERF_PATH.exists():
     PERF_PATH = SRC_DIR.parent / "30_route_performance.py"
-if not PERF_PATH.exists():
-    PERF_PATH = SRC_DIR / "unreleased" / "30_route_performance.py"
 spec = importlib.util.spec_from_file_location("route_performance30", PERF_PATH)
 perf = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
 sys.modules[spec.name] = perf
 spec.loader.exec_module(perf)
 
-APP_ROOT = SRC_DIR.parent.parent if SRC_DIR.name.lower() == "unreleased" else SRC_DIR.parent
+APP_ROOT = SRC_DIR.parent
 LOG_DIR = APP_ROOT / "logs"
 RUNTIME_LOG = LOG_DIR / "30_UI_route_performance_runtime.log"
 UI_LOGO_FILENAME = "logo_30_route_performance.png"
@@ -282,6 +280,8 @@ class MainWindow(QMainWindow):
         self._logo_anim = None
         self._build_ui()
         QTimer.singleShot(0, self._init_logo_overlay)
+        from common.project_settings import restore_project
+        restore_project(self.choose_project)
 
     def _resolve_logo_path(self) -> Path | None:
         logo_path = SRC_DIR / "assets" / "logos" / UI_LOGO_FILENAME
@@ -490,11 +490,13 @@ class MainWindow(QMainWindow):
         box.layout().addWidget(self.log)
         return box
 
-    def choose_project(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "プロジェクトフォルダを選択")
+    def choose_project(self, project=None) -> None:
+        path = project if isinstance(project, str) else QFileDialog.getExistingDirectory(self, "プロジェクトフォルダを選択")
         if not path:
             return
         self.project_dir = path
+        from common.project_settings import set_project
+        set_project(self.project_dir)
         self.project_label.setText(f"Project folder: {path}")
         self.start_project_scan()
 

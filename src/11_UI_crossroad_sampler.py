@@ -247,6 +247,8 @@ class MainWindow(QMainWindow):
         self.LOGO_CORNER_DY = -4
         QTimer.singleShot(0, self._init_logo_overlay)
         self._setup_web_channel()
+        from common.project_settings import restore_project
+        restore_project(self.select_project)
 
     def _resolve_logo_path(self) -> Path | None:
         base = Path(__file__).resolve().parent
@@ -546,11 +548,13 @@ class MainWindow(QMainWindow):
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         self.table.setItem(row, col, item)
 
-    def select_project(self) -> None:
-        selected = QFileDialog.getExistingDirectory(self, "プロジェクトフォルダを選択", str(Path.cwd()))
+    def select_project(self, project=None) -> None:
+        selected = project if isinstance(project, str) else QFileDialog.getExistingDirectory(self, "プロジェクトフォルダを選択", str(Path.cwd()))
         if not selected:
             return
         self.project_dir = Path(selected).resolve()
+        from common.project_settings import set_project
+        set_project(self.project_dir)
         self.cross_dir = self.project_dir / FOLDER_CROSS
         self.cross_dir.mkdir(parents=True, exist_ok=True)
 

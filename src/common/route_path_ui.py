@@ -190,6 +190,8 @@ class RouteWindow(QWidget):
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.update_elapsed)
+        from common.project_settings import get_project
+        project = project or get_project()
         if project:
             self.load(project)
         if show_splash and not pixmap.isNull():
@@ -267,7 +269,8 @@ class RouteWindow(QWidget):
         self.result.clear()
         try:
             _, self.targets = scan_project(project)
-            self.project = Path(project)
+            from common.project_settings import set_project
+            self.project = set_project(project)
             self.checks.setText(f'{self.project.name}\n✓ 14_エリアデータ/14_area.geojson\n✓ analysis_area・指定ゲート\n✓ 12_ゾーニングデータのCSV\n✓ 20_第２スクリーニング(ルート)\n✓ 境界起終点は最寄りの指定ゲートへ割当')
             self.checks.setToolTip(str(project))
             self.choose.setToolTip(str(project))

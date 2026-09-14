@@ -12,7 +12,7 @@ from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
 
-SRC_DIR = Path(__file__).resolve().parent
+SRC_DIR = Path(__file__).resolve().parents[2] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
@@ -171,7 +171,7 @@ class MapPickDialog(QDialog):
             channel = QWebChannel(self.web.page())
             channel.registerObject("bridge", self.bridge)
             self.web.page().setWebChannel(channel)
-            self.web.setHtml(self._html(lon, lat), QUrl.fromLocalFile(str(SRC_DIR.parent) + "/"))
+            self.web.setHtml(self._html(lon, lat), QUrl.fromLocalFile(str(SRC_DIR) + "/"))
         else:
             v.addWidget(QLabel("QWebEngineが無効なため地図表示できません。既定値利用か手入力が必要です。"), 1)
 
@@ -612,7 +612,7 @@ class MainWindow(QMainWindow):
                 return
 
         py = sys.executable
-        script = Path(__file__).resolve().parent / "43_peak30min_od.py"
+        script = SRC_DIR / "43_peak30min_od.py"
         date_list = [d.strftime("%Y-%m-%d") for d in sorted(self.selected_dates)]
         compact_dates = self._compact_dates(sorted(self.selected_dates))
         args = [

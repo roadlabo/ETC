@@ -3,8 +3,8 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-MODULE_PATH = ROOT / "src" / "unreleased" / "30_build_performance.py"
+ROOT = Path(__file__).resolve().parents[2]
+MODULE_PATH = ROOT / "unreleased" / "legacy" / "30_build_performance.py"
 spec = importlib.util.spec_from_file_location("build_performance", MODULE_PATH)
 build_performance = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build_performance)

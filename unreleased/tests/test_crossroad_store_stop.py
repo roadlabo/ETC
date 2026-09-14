@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "src" / "31_crossroad_trip_performance.py"
 spec = importlib.util.spec_from_file_location("crossroad_trip_performance31", MODULE_PATH)
 crossroad_perf = importlib.util.module_from_spec(spec)

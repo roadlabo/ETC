@@ -88,6 +88,8 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
         self.timer.start(1000)
+        from common.project_settings import restore_project
+        restore_project(self._pick_area)
 
     def _resolve_logo_path(self) -> Path | None:
         logo_path = SRC_DIR / "assets" / "logos" / UI_LOGO_FILENAME
@@ -281,9 +283,11 @@ class MainWindow(QMainWindow):
         if folder:
             self.input_path.setText(folder)
 
-    def _pick_area(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "14_エリアデータを含むプロジェクトフォルダを選択")
+    def _pick_area(self, project=None) -> None:
+        folder = project if isinstance(project, str) else QFileDialog.getExistingDirectory(self, "14_エリアデータを含むプロジェクトフォルダを選択")
         if folder:
+            from common.project_settings import set_project
+            set_project(folder)
             path = project_area_path(folder)
             self.area_path.setText(str(path))
             self.output_dir.setText(str(Path(folder) / area15.FOLDER_OUT))

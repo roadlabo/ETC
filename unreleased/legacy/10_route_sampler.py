@@ -162,7 +162,7 @@ DEFAULT_SPEED = 30.0  # km/h（ダミー）
 TIME_STEP_SEC = 10     # 各点を+10秒でダミー時刻生成
 
 app = Flask(__name__)
-SRC_DIR = Path(__file__).resolve().parent.parent
+SRC_DIR = (Path(__file__).resolve().parents[2] / "src")
 
 # Flaskのエンドポイントから参照する出力先ディレクトリ。
 # main() 実行時に上書きされるが、インポート時にも有効なパスを持たせておく。
@@ -302,7 +302,7 @@ def offline_map_asset():
 
 @app.route("/tiles/gsi_pale/<int:z>/<int:x>/<path:filename>")
 def offline_tile_asset(z, x, filename):
-    return send_from_directory(SRC_DIR / "tiles" / "gsi_pale" / str(z) / str(x), filename)
+    return send_from_directory(SRC_DIR.parent / "tiles" / "gsi_pale" / str(z) / str(x), filename)
 
 
 @app.route("/save", methods=["POST"])

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "src" / "30_route_performance.py"
 if not MODULE_PATH.exists():
     MODULE_PATH = ROOT / "work" / "30_route_performance.py"
@@ -77,7 +77,9 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             self.assertEqual(result["results"][0]["events_csv"], "")
             self.assertEqual(result["results"][0]["daily_hourly_csv"], "")
             viewer_json = Path(result["results"][0]["viewer_json"])
-            rows = json.loads(viewer_json.read_text(encoding="utf-8"))["summary"]
+            manifest = json.loads(viewer_json.read_text(encoding="utf-8"))
+            rows = [row for shard in manifest['summary_shards'].values()
+                    for row in json.loads((viewer_json.parent / shard).read_text(encoding='utf-8'))]
             bucket_one_rows = [row for row in rows if row["bucket_index"] == 1 and row["date"] == "20250102"]
             self.assertTrue(bucket_one_rows)
             self.assertTrue(all(row["trip_count"] == 1 for row in bucket_one_rows))
@@ -102,7 +104,9 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             self.assertEqual(result["results"][0]["xlsx"], "")
             self.assertEqual(result["results"][0]["daily_xlsx_files"], [])
             self.assertTrue(viewer_json.exists())
-            rows = json.loads(viewer_json.read_text(encoding="utf-8"))["summary"]
+            manifest = json.loads(viewer_json.read_text(encoding="utf-8"))
+            rows = [row for shard in manifest['summary_shards'].values()
+                    for row in json.loads((viewer_json.parent / shard).read_text(encoding='utf-8'))]
             self.assertTrue(rows)
             self.assertTrue(all(row["date"] == "20250102" for row in rows))
             self.assertIn("freeflow_speed_kmh", rows[0])
@@ -123,7 +127,7 @@ class RoutePerformanceLogicTest(unittest.TestCase):
             self.assertIn("ArrowDown", viewer_html)
             self.assertIn("HAS_LEAFLET", viewer_html)
             self.assertIn("initFallbackMap", viewer_html)
-            self.assertIn("背景地図なし / ルート形状のみ", viewer_html)
+            self.assertIn("addGsiOfflineLayer", viewer_html)
             self.assertIn("MANIFEST", viewer_html)
             self.assertIn("fetchJson", viewer_html)
             self.assertIn("periods:new Set", viewer_html)

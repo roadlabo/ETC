@@ -943,7 +943,8 @@ class RouteMapperWindow(QMainWindow):
             self.splash.move(x, y)
 
     def _pick_directory(self) -> None:
-        initial_dir = str(self.directory) if self.directory else str(Path.cwd())
+        from common.project_settings import get_project
+        initial_dir = str(self.directory) if self.directory else str(get_project() or Path.cwd())
         d = QFileDialog.getExistingDirectory(
             self,
             "第1・2スクリーニングデータ格納フォルダの選択",
@@ -1277,7 +1278,8 @@ def select_directory_with_qt() -> Optional[str]:
         return None
 
     app = QApplication.instance() or QApplication([])
-    selected = QFileDialog.getExistingDirectory(None, "CSVフォルダを選択してください", str(Path.cwd()))
+    from common.project_settings import get_project
+    selected = QFileDialog.getExistingDirectory(None, "CSVフォルダを選択してください", str(get_project() or Path.cwd()))
     return selected or None
 
 

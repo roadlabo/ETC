@@ -4,11 +4,11 @@ import importlib.util
 import sys
 from pathlib import Path
 
-SRC_DIR = Path(__file__).resolve().parent.parent
+SRC_DIR = (Path(__file__).resolve().parents[2] / "src")
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-VIEWER_PATH = SRC_DIR / "30_route_performance_viewer.py"
+VIEWER_PATH = SRC_DIR / "30-2_route_performance_viewer.py"
 spec = importlib.util.spec_from_file_location("route_performance_viewer30", VIEWER_PATH)
 viewer = importlib.util.module_from_spec(spec)
 assert spec and spec.loader

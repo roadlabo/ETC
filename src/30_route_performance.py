@@ -920,7 +920,7 @@ def build_viewer(output_dir: str | Path, results: list[dict[str, object]]) -> Pa
         if offline_map_path.exists()
         else ""
     )
-    local_tile_url = (SRC_DIR / "tiles" / "gsi_pale").as_uri() + "/{z}/{x}/{y}.png"
+    local_tile_url = (SRC_DIR.parent / "tiles" / "gsi_pale").as_uri() + "/{z}/{x}/{y}.png"
     html = f"""<!doctype html>
 <html lang="ja">
 <head>

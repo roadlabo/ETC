@@ -18,6 +18,8 @@ from PyQt6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPixma
 from PyQt6.QtWidgets import QApplication, QAbstractButton, QGridLayout, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QVBoxLayout, QWidget, QSizePolicy
 
 from common.launcher_catalog import TOOLS, OVERVIEW_URL
+from common.project_settings import get_project, set_project
+from PyQt6.QtWidgets import QFileDialog
 
 ROOT = Path(__file__).resolve().parents[1]
 ICON = ROOT / 'src/assets/logos/logo_00_launcher.ico'
@@ -203,6 +205,18 @@ class Launcher(QMainWindow):
             button.clicked.connect(action)
             header.addWidget(button)
         layout.addLayout(header)
+        project_row = QHBoxLayout()
+        self.project_label = QLabel()
+        self.project_label.setWordWrap(True)
+        project_row.addWidget(self.project_label, 1)
+        project_button = QPushButton('プロジェクトフォルダを選択・変更')
+        project_button.clicked.connect(self.choose_project)
+        project_row.addWidget(project_button)
+        layout.addLayout(project_row)
+        self.refresh_project()
+        self.project_timer = QTimer(self)
+        self.project_timer.timeout.connect(self.refresh_project)
+        self.project_timer.start(1500)
         layout.addWidget(QLabel('1回クリックで起動（ダブルクリック不要）  •  準備 → 抽出 → 分析の順に番号で整理しています'))
         self.grid = QGridLayout()
         self.grid.setSpacing(10)
@@ -221,6 +235,16 @@ class Launcher(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
         self.timer.start(100)
+
+    def refresh_project(self):
+        project = get_project()
+        self.project_label.setText(f'共通プロジェクト: {project}' if project else '共通プロジェクト: 未選択')
+
+    def choose_project(self):
+        project = QFileDialog.getExistingDirectory(self, 'プロジェクトフォルダを選択', str(get_project() or ROOT))
+        if project:
+            set_project(project)
+            self.refresh_project()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

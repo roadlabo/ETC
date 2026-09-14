@@ -5,11 +5,11 @@ import unittest
 from pathlib import Path
 
 
-MODULE_PATH = Path(__file__).parents[1] / "src" / "download_tsuyama_tiles.py"
+MODULE_PATH = Path(__file__).parents[2] / "src" / "download_tsuyama_tiles.py"
 SPEC = importlib.util.spec_from_file_location("download_tsuyama_tiles", MODULE_PATH)
 tiles = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(tiles)
-OFFLINE_LEAFLET_PATH = Path(__file__).parents[1] / "src" / "offline_leaflet.py"
+OFFLINE_LEAFLET_PATH = Path(__file__).parents[2] / "src" / "offline_leaflet.py"
 OFFLINE_SPEC = importlib.util.spec_from_file_location("offline_leaflet", OFFLINE_LEAFLET_PATH)
 offline_leaflet = importlib.util.module_from_spec(OFFLINE_SPEC)
 OFFLINE_SPEC.loader.exec_module(offline_leaflet)
@@ -32,17 +32,17 @@ class OfflineMapTests(unittest.TestCase):
             self.assertEqual(tiles.find_reusable(folder, 9, 12, 34), path)
 
     def test_map_pages_use_local_leaflet_and_offline_layer(self):
-        src = Path(__file__).parents[1] / "src"
+        src = Path(__file__).parents[2] / "src"
         for name in ("10_route_sampler.html", "11_crossroad_sampler.html",
                      "12_polygon_builder.html", "14_area_builder.html",
-                     "unreleased/10_route_sampler.html"):
+                     "../unreleased/legacy/10_route_sampler.html"):
             html = (src / name).read_text(encoding="utf-8")
             self.assertIn("offline_map.js", html)
             self.assertIn("addGsiOfflineLayer(map", html)
             self.assertNotIn("unpkg.com/leaflet", html)
 
     def test_crossroad_sampler_uses_visible_red_guides_and_online_tiles_first(self):
-        html = (Path(__file__).parents[1] / "src" / "11_crossroad_sampler.html").read_text(encoding="utf-8")
+        html = (Path(__file__).parents[2] / "src" / "11_crossroad_sampler.html").read_text(encoding="utf-8")
         self.assertIn('addGsiOfflineLayer(map);', html)
         self.assertNotIn("preferLocal: true", html)
         self.assertIn('var COLOR_LINE = "#D71920"', html)
@@ -53,7 +53,7 @@ class OfflineMapTests(unittest.TestCase):
         self.assertNotIn("cdn.jsdelivr.net", html)
 
     def test_python_map_builders_use_offline_support(self):
-        src = Path(__file__).parents[1] / "src"
+        src = Path(__file__).parents[2] / "src"
         for name in (
             "02_UI_existence_trip_counter.py",
             "03_UI_base_zone_estimator.py",
@@ -61,11 +61,11 @@ class OfflineMapTests(unittest.TestCase):
             "30_UI_route_performance.py",
             "30_route_performance.py",
             "33_branch_check.py",
-            "unreleased/06_route_mapper_kp.py",
-            "unreleased/10_route_sampler.py",
-            "unreleased/30_route_performance.py",
-            "unreleased/41_od_heatmap_viewer.py",
-            "unreleased/43_UI_peak30min_od.py",
+            "../unreleased/legacy/06_route_mapper_kp.py",
+            "../unreleased/legacy/10_route_sampler.py",
+            "../unreleased/legacy/30_route_performance.py",
+            "../unreleased/legacy/41_od_heatmap_viewer.py",
+            "../unreleased/legacy/43_UI_peak30min_od.py",
             "50_Path_Analysis.py",
         ):
             text = (src / name).read_text(encoding="utf-8")
@@ -92,7 +92,7 @@ var tile_layer_abc123 = L.tileLayer(
         patched = offline_leaflet.apply_offline_tile_support(html)
         self.assertIn("function addGsiOfflineLayer", patched)
         self.assertIn("addGsiOfflineLayer(map_abc123", patched)
-        self.assertIn("file:///D:/GitHub/ETC/src/tiles/gsi_pale/{z}/{x}/{y}.png", patched)
+        self.assertIn((Path(__file__).resolve().parents[2] / 'tiles/gsi_pale').as_uri() + '/{z}/{x}/{y}.png', patched)
         self.assertNotIn("unpkg.com/leaflet", patched)
 
     def test_separate_addto_preserves_analysis_layers_and_plugin_order(self):

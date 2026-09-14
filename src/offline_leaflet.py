@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 
 SRC_DIR = Path(__file__).resolve().parent
-LOCAL_GSI_TILE_TEMPLATE = (SRC_DIR / "tiles" / "gsi_pale").as_uri() + "/{z}/{x}/{y}.png"
+LOCAL_GSI_TILE_TEMPLATE = (SRC_DIR.parent / "tiles" / "gsi_pale").as_uri() + "/{z}/{x}/{y}.png"
 
 
 def offline_map_script_tag() -> str:

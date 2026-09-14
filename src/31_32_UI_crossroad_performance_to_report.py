@@ -576,6 +576,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._update_flow_spacer_for_logo)
         QTimer.singleShot(50, self._update_flow_spacer_for_logo)
         QTimer.singleShot(150, self._update_flow_spacer_for_logo)
+        from common.project_settings import restore_project
+        restore_project(self.select_project)
 
     def _get_root_dir(self) -> str:
         """
@@ -1268,11 +1270,13 @@ class MainWindow(QMainWindow):
         selected = self._selected_weekdays_for_cli()
         return " ".join(selected) if selected else "(none)"
 
-    def select_project(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "プロジェクトフォルダを選択", str(Path.cwd()))
+    def select_project(self, project=None) -> None:
+        d = project if isinstance(project, str) else QFileDialog.getExistingDirectory(self, "プロジェクトフォルダを選択", str(Path.cwd()))
         if not d:
             return
         self.project_dir = Path(d).resolve()
+        from common.project_settings import set_project
+        set_project(self.project_dir)
         name = self.project_dir.name
         fm = QFontMetrics(self.lbl_project.font())
         max_px = self.lbl_project.width() if self.lbl_project.width() > 20 else 360

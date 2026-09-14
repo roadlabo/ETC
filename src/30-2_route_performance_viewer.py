@@ -35,8 +35,6 @@ except Exception:  # pragma: no cover
     QWebEngineView = None
 
 PERF_PATH = SRC_DIR / "30_route_performance.py"
-if not PERF_PATH.exists():
-    PERF_PATH = SRC_DIR / "unreleased" / "30_route_performance.py"
 spec = importlib.util.spec_from_file_location("route_performance30", PERF_PATH)
 perf = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
@@ -164,6 +162,10 @@ class MainWindow(QMainWindow):
         self.build_worker: ViewerBuildWorker | None = None
         self.loading_dialog: QProgressDialog | None = None
         self._build_ui()
+        from common.project_settings import get_project
+        project = get_project()
+        if project:
+            self.output_edit.setText(str(project / '30_route_performance'))
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -219,6 +221,9 @@ class MainWindow(QMainWindow):
         if not path:
             return
         self.output_edit.setText(path)
+        if Path(path).name == '30_route_performance':
+            from common.project_settings import set_project
+            set_project(Path(path).parent)
         self.rebuild_viewer()
 
     def rebuild_viewer(self) -> None:

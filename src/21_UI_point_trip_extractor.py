@@ -455,6 +455,8 @@ class MainWindow(QMainWindow):
         self._pix_small = None
         QTimer.singleShot(0, self._init_logo_overlay)
         self.log_info("①プロジェクト選択 → ②第1スクリーニング選択 → 21【分析スタート】")
+        from common.project_settings import restore_project
+        restore_project(self.select_project)
 
     def _get_root_dir(self) -> str:
         """src配下からROOTを推定（…\src の1つ上）"""
@@ -882,8 +884,8 @@ class MainWindow(QMainWindow):
                 item.widget().deleteLater()
         self.cards.clear()
 
-    def select_project(self):
-        d = QFileDialog.getExistingDirectory(self, "プロジェクトフォルダを選択", str(Path.cwd()))
+    def select_project(self, project=None):
+        d = project if isinstance(project, str) else QFileDialog.getExistingDirectory(self, "プロジェクトフォルダを選択", str(Path.cwd()))
         if not d:
             return
         tmp_dir = Path(d).resolve()
@@ -897,6 +899,8 @@ class MainWindow(QMainWindow):
             return
 
         self.project_dir = tmp_dir
+        from common.project_settings import set_project
+        set_project(self.project_dir)
         self.lbl_project.setText(self.project_dir.name)
         self.log_info(f"project set: {self.project_dir}")
         self.scan_crossroads()

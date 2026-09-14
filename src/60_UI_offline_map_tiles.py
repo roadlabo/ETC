@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
 
 SRC_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SRC_DIR.parent
-TILE_DIR = SRC_DIR / "tiles" / "gsi_pale"
+TILE_DIR = SRC_DIR.parent / "tiles" / "gsi_pale"
 LOGO_FILENAME = "logo_60_offline_map_tiles.png"
 GSI_TEST_URL = "https://cyberjapandata.gsi.go.jp/xyz/pale/9/451/198.png"
 OFFLINE_MESSAGE = "現在、オフライン環境です。インターネット環境で立ち上げなおしてください。"
@@ -150,7 +150,7 @@ class MainWindow(QMainWindow):
         note = QLabel(
             "津山市街地用の地図データは同梱済みです。津山以外の地域や別の調査範囲を追加したい場合は、"
             "下の地図を移動・拡大し、範囲指定モードで必要な範囲をドラッグしてから作成開始してください。"
-            "保存先は固定で ETC\\src\\tiles\\gsi_pale です。"
+            "保存先は固定で ETC\\tiles\\gsi_pale です。"
         )
         note.setWordWrap(True)
         note.setObjectName("note")

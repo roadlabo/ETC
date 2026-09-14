@@ -8,7 +8,7 @@
 
   function addGsiOfflineLayer(map, options) {
     options = options || {};
-    var localTemplate = options.localUrl || "tiles/gsi_pale/{z}/{x}/{y}.png";
+    var localTemplate = options.localUrl || "../tiles/gsi_pale/{z}/{x}/{y}.png";
     var remoteTemplate = options.remoteUrl ||
       "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png";
     var preferLocal = !!options.preferLocal;

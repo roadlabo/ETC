@@ -132,7 +132,7 @@ def find_reusable(root, z, x, y):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Download GSI pale map tiles within a supplied boundary.")
     parser.add_argument("boundary", type=Path, help="Polygon/MultiPolygon GeoJSON boundary")
-    parser.add_argument("--output", type=Path, default=Path(__file__).parent / "tiles" / "gsi_pale")
+    parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parent.parent / "tiles" / "gsi_pale")
     parser.add_argument("--reuse", type=Path, help="folder to search for existing tiles first")
     parser.add_argument("--min-zoom", type=int, default=9)
     parser.add_argument("--max-zoom", type=int, default=18)

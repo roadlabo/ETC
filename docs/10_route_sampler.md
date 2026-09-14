@@ -29,7 +29,7 @@
 ## 実行方法
 - UI版: `python src/10_UI_route_sampler.py`
 - embedded配布環境では `bat/10_route_sampler.bat` から起動します。
-- 旧互換の簡易Flask版は `src/unreleased/10_route_sampler.py` に残していますが、通常運用では新しいPyQt6 UIを使います。
+- 通常運用ではランチャーまたは `bat/10_route_sampler.bat` からPyQt6 UIを使います。旧互換版は配布対象外です。
 
 ## UI操作
 1. **STEP1 プロジェクトフォルダ選択**

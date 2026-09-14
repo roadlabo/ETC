@@ -30,7 +30,7 @@ import tkinter as tk
 import webbrowser
 from tkinter import Tk, filedialog, messagebox, ttk
 
-SRC_DIR = Path(__file__).resolve().parent.parent
+SRC_DIR = (Path(__file__).resolve().parents[2] / "src")
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 

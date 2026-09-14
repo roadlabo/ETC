@@ -17,6 +17,7 @@ from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from common.screening import project_area_path
+from common.project_settings import get_project, set_project
 
 spec = importlib.util.spec_from_file_location('builder14_area_validation', SRC_DIR / '15_area_screening.py')
 validator = importlib.util.module_from_spec(spec)
@@ -85,7 +86,7 @@ class Bridge(QObject):
             if not selected:
                 return {'cancelled': True}
             result = read_project(selected)
-            self.project = Path(selected)
+            self.project = set_project(selected)
             return result
         return self.result(choose)
 
@@ -114,7 +115,7 @@ class MainWindow(QMainWindow):
         self.web.settings().setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
         self.setCentralWidget(self.web)
         self.channel = QWebChannel(self.web.page())
-        self.bridge = Bridge(self, project)
+        self.bridge = Bridge(self, project or get_project())
         self.channel.registerObject('areaBridge', self.bridge)
         self.web.page().setWebChannel(self.channel)
         self.web.setUrl(QUrl.fromLocalFile(str(SRC_DIR / '14_area_builder.html')))
