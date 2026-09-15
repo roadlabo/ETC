@@ -63,4 +63,4 @@ with tempfile.TemporaryDirectory() as tmp:
     web.close()
     window.close()
     assert loaded, 'Relocated local tile did not load'
-print('Copied runtime, 17 launcher targets and local tile loading: OK')
+print(f'Copied runtime, {len(TOOLS)} launcher targets and local tile loading: OK')
