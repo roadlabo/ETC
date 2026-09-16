@@ -2,11 +2,12 @@
 import json
 from collections import Counter
 from offline_leaflet import embedded_leaflet_assets, LOCAL_GSI_TILE_TEMPLATE
+from common.od_analysis import METHODS
 
 
 def map_html(result, zonal=False):
     points = result['points']
-    data = dict(days=result['days'], dates=result['dates'], zones=result['zones'],
+    data = dict(method=METHODS[result.get('method', 'style13')], days=result['days'], dates=result['dates'], zones=result['zones'],
                 origins=dict(result['origins']), destinations=dict(result['destinations']),
                 o=[[lat, lon, count] for (lon, lat), count in Counter((p[0], p[1]) for p in points).items()],
                 d=[[lat, lon, count] for (lon, lat), count in Counter((p[2], p[3]) for p in points).items()])
@@ -48,7 +49,8 @@ g.addColorStop(0,'rgba(0,0,0,'+alpha+')');g.addColorStop(1,'rgba(0,0,0,0)');f.fi
 const img=f.getImageData(0,0,size.x,size.y);for(let i=0;i<img.data.length;i+=4){const a=img.data[i+3]/255;if(!a)continue;const c=color(a);img.data[i]=c[0];img.data[i+1]=c[1];img.data[i+2]=c[2];img.data[i+3]=Math.round(Math.min(1,a*2)*settings.opacity*255);}ctx.putImageData(img,0,0);
 }
 const kind=settings.side==='o'?'起点・発生':'終点・集中';
-document.getElementById('legend').innerHTML='<strong>'+(zonal?'ゾーン別発生・集中マップ':'ODヒートマップ')+'</strong><br>'+kind+' ｜ '+data.days+'日平均<br>'+data.dates[0]+' – '+data.dates[data.dates.length-1]+'<div class="bar" style="background:linear-gradient(to right,'+palettes[settings.palette].join(',')+')"></div>'+(zonal?'0 → '+maximum.toFixed(2)+' トリップ/日'+(settings.log?'（対数配色）':''):'低密度 → 高密度（相対表示）')+'<br><small>'+(zonal?'区域外・重複ゾーンはOD表に別掲':'表示倍率・半径・ぼかしで濃淡が変わります')+'</small>';
+const methodLabel='【'+esc(data.method)+'】<br>';
+document.getElementById('legend').innerHTML=methodLabel+'<strong>'+(zonal?'ゾーン別発生・集中マップ':'ODヒートマップ')+'</strong><br>'+kind+' ｜ '+data.days+'日平均<br>'+data.dates[0]+' – '+data.dates[data.dates.length-1]+'<div class="bar" style="background:linear-gradient(to right,'+palettes[settings.palette].join(',')+')"></div>'+(zonal?'0 → '+maximum.toFixed(2)+' トリップ/日'+(settings.log?'（対数配色）':''):'低密度 → 高密度（相対表示）')+'<br><small>'+(zonal?'区域外・重複ゾーンはOD表に別掲':'表示倍率・半径・ぼかしで濃淡が変わります')+'</small>';
 window.odReady=true;
 }
 window.updateOD=function(s){Object.assign(settings,s);render();};

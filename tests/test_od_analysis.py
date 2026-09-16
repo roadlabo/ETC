@@ -50,10 +50,10 @@ class ODTests(unittest.TestCase):
         self.assertEqual(result['excluded'], {'座標不正':1, 'MISSING_OD':1})
         with tempfile.TemporaryDirectory() as temp:
             output = od.export(result, Path(temp) / 'out')
-            with (output / 'od_matrix(perday).csv').open(encoding='utf-8-sig') as stream:
+            with (output / od.result_name(result, 'od_matrix(perday).csv')).open(encoding='utf-8-sig') as stream:
                 rows = list(csv.reader(stream))
             self.assertAlmostEqual(float(rows[-1][-1]), 2/3)
-            self.assertEqual(json.loads((output / 'analysis.json').read_text(encoding='utf-8'))['target_days'], 3)
+            self.assertEqual(json.loads((output / od.result_name(result, 'analysis.json')).read_text(encoding='utf-8'))['target_days'], 3)
         self.assertIn('window.updateOD', map_html(result))
 
     def test_conflicting_input_and_cancel(self):
@@ -70,6 +70,35 @@ class ODTests(unittest.TestCase):
             self.assertEqual(len(od.load_zones(temp)),1)
         self.assertEqual(od.target_dates('20260901','20260907',{0}),['20260907'])
         with self.assertRaises(ValueError): od.target_dates('20260907','20260901',{0})
+
+    def test_trip_endpoints_multiple_trips_clipped_segments_and_duplicates(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); source = root/'input'; source.mkdir()
+            def row(trip, lon, lat):
+                r=['']*16; r[2:4]=['20260901','00001']; r[8]=trip; r[14:16]=[str(lon),str(lat)]; return r
+            part1=[row('1',133.9,35.01),row('1',133.95,35.02),row('2',134,35.03)]
+            part2=[row('1',134.1,35.1),row('1',134.2,35.2)]
+            od.write_csv(source/'first.csv',[],part1); od.write_csv(source/'copy.csv',[],part1)
+            od.write_csv(source/'subtrip_s02.csv',[],part2)
+            output=od.extract_trip(source,root/'trip.csv')
+            records,duplicates=od.read_od([output,output])
+            self.assertEqual(len(records),3); self.assertEqual(duplicates,3)
+            endpoints={od.coordinates(r) for r in records}
+            self.assertEqual(endpoints,{(133.9,35.01,133.95,35.02),(134,35.03,134,35.03),(134.1,35.1,134.2,35.2)})
+            self.assertEqual(od.method_of(records),'trip')
+            self.assertEqual(sum(r['src_files_count']=='2' for r in records),2)
+            self.assertEqual(len({r['trip_instance'] for r in records}),3)
+
+    def test_trip_invalid_first_row_is_not_replaced_and_modes_cannot_mix(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); source=root/'input'; source.mkdir()
+            r=['']*16; r[2:4]=['20260901','001']; r[8]='1'; r[14:16]=['','35']
+            end=r.copy(); end[14]='134'
+            od.write_csv(source/'a.csv',[],[r,end])
+            trip=od.extract_trip(source,root/'trip.csv'); records,_=od.read_od([trip])
+            self.assertEqual(records[0]['status'],'INVALID_COORDINATES'); self.assertEqual(records[0]['o_lon'],'')
+            style=root/'style.csv'; od.write_csv(style,od.FIELDS,[self.row().values()])
+            with self.assertRaisesRegex(ValueError,'異なるOD方式'): od.read_od([trip,style])
 
 
 if __name__ == '__main__': unittest.main()

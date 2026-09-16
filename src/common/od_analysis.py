@@ -215,10 +215,17 @@ def read_od(paths, progress=lambda s: None, cancel=lambda: False):
                 check_cancel(cancel)
                 progress(f'ODリスト読込 ・{len(records):,} 件')
             row = dict(zip(header, cells))
+            method = row.get('od_method') or 'style13'
+            if method not in METHODS:
+                raise ValueError(f'未対応のOD方式です: {method}')
+            row['od_method'] = method
             try:
                 k = key(row['operation_date'], row['opid'], row['trip_no'])
             except (ValueError, KeyError) as exc:
                 raise ValueError(f'ODリストのキーが不正です: {path} 行{n + 2}') from exc
+            if method == 'trip' and not row.get('trip_instance'):
+                raise ValueError('トリップODの区間識別子がありません。入力CSVから作り直してください。')
+            k = (method, *k, row.get('trip_instance', '') if method == 'trip' else '')
             signature = tuple(row.get(f, '') for f in FIELDS[5:10])
             if k in seen:
                 if seen[k] != signature:
@@ -229,6 +236,7 @@ def read_od(paths, progress=lambda s: None, cancel=lambda: False):
             records.append(row)
     if not records:
         raise ValueError('ODリストが空です。')
+    method_of(records)
     return records, duplicates
 
 
@@ -280,6 +288,7 @@ def assign(lon, lat, zones):
 
 
 def analyze(records, zones, dates, progress=lambda s: None, cancel=lambda: False):
+    method = method_of(records)
     zones = [dict(z, bbox=(min(p[0] for p in z['points']), min(p[1] for p in z['points']),
                           max(p[0] for p in z['points']), max(p[1] for p in z['points']))) for z in zones]
     wanted = set(dates)
@@ -308,19 +317,19 @@ def analyze(records, zones, dates, progress=lambda s: None, cancel=lambda: False
         destinations[destination] += 1
         points.append(coords)
     labels = sorted({z['name'] for z in zones} | set(origins) | set(destinations))
-    return dict(labels=labels, matrix=matrix, origins=origins, destinations=destinations,
+    return dict(method=method, labels=labels, matrix=matrix, origins=origins, destinations=destinations,
                 points=points, dates=sorted(wanted), days=len(wanted), excluded=dict(excluded), zones=zones)
 
 
 def export(result, output):
     output = Path(output)
-    output.mkdir(parents=True, exist_ok=False)
+    output.mkdir(parents=True, exist_ok=True)
     labels, matrix, days = result['labels'], result['matrix'], result['days']
     for name, divisor in [('od_matrix(all).csv', 1), ('od_matrix(perday).csv', days)]:
         values = [[a, *[matrix[a, b] / divisor for b in labels], result['origins'][a] / divisor] for a in labels]
         values.append(['合計', *[result['destinations'][b] / divisor for b in labels], len(result['points']) / divisor])
-        write_csv(output / name, ['O / D', *labels, '合計'], values)
-    write_csv(output / 'zone_production_attraction.csv', ['zone', 'production', 'attraction', 'production_perday', 'attraction_perday'],
+        write_csv(output / result_name(result, name), ['O / D', *labels, '合計'], values)
+    write_csv(output / result_name(result, 'zone_production_attraction.csv'), ['zone', 'production', 'attraction', 'production_perday', 'attraction_perday'],
               [[a, result['origins'][a], result['destinations'][a], result['origins'][a] / days, result['destinations'][a] / days] for a in labels])
-    (output / 'analysis.json').write_text(json.dumps(dict(target_dates=result['dates'], target_days=days, valid_trips=len(result['points']), excluded=result['excluded'], unit='トリップ/日', zone_rule='境界を含む。異なる名称の重複は別枠、区域外は別枠。'), ensure_ascii=False, indent=2), encoding='utf-8')
+    (output / result_name(result, 'analysis.json')).write_text(json.dumps(dict(od_method=result.get('method','style13'), target_dates=result['dates'], target_days=days, valid_trips=len(result['points']), excluded=result['excluded'], unit='トリップ/日', zone_rule='境界を含む。異なる名称の重複は別枠、区域外は別枠。'), ensure_ascii=False, indent=2), encoding='utf-8')
     return output
