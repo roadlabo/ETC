@@ -6,14 +6,77 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from openpyxl import load_workbook
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from common import od_analysis as od
 from common.od_map import map_html
+from od_fixtures import area_fixture
 
 
 class ODTests(unittest.TestCase):
+    def test_gate_contract_four_classes_and_portable_od(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); source, data, zones = area_fixture(root)
+            output = od.extract_trip(source, root / 'od.csv')
+            records, _ = od.read_od([output])
+            self.assertEqual(len(records), 4)
+            # Analysis does not depend on the screening folder after extraction.
+            source.rename(root / 'moved')
+            result = od.analyze(records, zones, ['20260901', '20260902'])
+            result['project_folder'] = '検証プロジェクト'
+            self.assertEqual({k:sum(v.values()) for k,v in result['traffic'].items()}, {k:1 for k in od.TRAFFIC_TYPES})
+            self.assertEqual(result['matrix'], {('A','B'):1})
+            self.assertEqual(result['origins'], {'A':2}); self.assertEqual(result['destinations'], {'B':2})
+            self.assertEqual(result['gate_origins'], {'G01':2}); self.assertEqual(result['gate_destinations'], {'G02':2})
+            self.assertEqual(result['heat_o'], [(134.0,35.07)]*2)
+            self.assertEqual(result['heat_d'], [(134.02,35.07)]*2)
+            self.assertEqual(len(result['boundaries']), 2)
+            out = od.export(result, root / 'out')
+            book = load_workbook(out / od.result_name(result, 'OD集計.xlsx'))
+            conditions = dict(book['集計条件'].values)
+            self.assertEqual(conditions['ODの由来'],'トリップOD（最初行・最終行）')
+            self.assertEqual(conditions['プロジェクトフォルダ名'],'検証プロジェクト')
+            self.assertEqual(conditions['スクリーニングフォルダ名'],str(source.resolve()))
+            for row in book['集計条件']:
+                for cell in row: self.assertEqual(cell.alignment.vertical,'center')
+            sheet = book['統合OD表（日平均）']
+            self.assertEqual(sheet.cell(sheet.max_row,sheet.max_column).value, 2)
+            self.assertEqual([sheet.cell(r,c).value for r,c in [(2,3),(2,5),(4,3),(4,5)]], [.5]*4)
+            self.assertEqual(sheet.freeze_panes,'B2'); self.assertEqual(sheet['B1'].alignment.textRotation,90)
+            self.assertEqual(len(sheet.conditional_formatting),1)
+            self.assertEqual(book['ゲートOD明細'].max_row,4)
+            self.assertEqual(book['統合OD表（全期間）']['F6'].value,4)
+            self.assertFalse(list(out.glob('*.csv')))
+            book.close()
+            for zonal in (False, True):
+                html = map_html(result, zonal)
+                self.assertIn('L.circleMarker', html); self.assertIn('official_area', html)
+            output.with_suffix('.context.json').unlink()
+            records, _ = od.read_od([output])
+            with self.assertRaisesRegex(ValueError, 'ゲートの位置情報'): od.analyze(records,zones,['20260901'])
+            cells=list(od.rows(output)); cells[1][cells[0].index('o_type')]='UNKNOWN'
+            od.write_csv(output,cells[0],cells[1:])
+            with self.assertRaisesRegex(ValueError,'端点種別'): od.read_od([output])
+
+    def test_gate_contract_changed_input_rejected_and_style13_keeps_real_endpoints(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); source, data, zones=area_fixture(root)
+            zips=root/'zips'; zips.mkdir()
+            stream=io.StringIO(); writer=csv.writer(stream)
+            for i in range(4):
+                row=['']*15; row[:2]=['20260901',str(i)]; row[7]='1'; row[11:15]=['134','35.07','134.02','35.07']; writer.writerow(row)
+            with zipfile.ZipFile(zips/'20260901.zip','w') as archive: archive.writestr('data.csv',stream.getvalue())
+            output=od.extract(source,zips,root/'style.csv')
+            records,_=od.read_od([output]); result=od.analyze(records,zones,['20260901'])
+            self.assertEqual(sum(result['matrix'].values()),4)
+            self.assertEqual(sum(result['gate_origins'].values()),0)
+            self.assertEqual(len(result['boundaries']),2)
+            self.assertEqual(od.screening_dates(source),('20260901','20260901'))
+            path=data/'trip0.csv'; path.write_bytes(path.read_bytes()+b'\n')
+            with self.assertRaisesRegex(ValueError,'一致しません'): od.extract_trip(data,root/'bad.csv')
+
     def row(self, date='20260901', opid='001', trip='1', status='OK', coords=(133.9, 35.05, 134, 35.1)):
         return dict(zip(od.FIELDS, ['fixture', date, '火', opid, trip, *coords, status, 1]))
 
@@ -50,9 +113,13 @@ class ODTests(unittest.TestCase):
         self.assertEqual(result['excluded'], {'座標不正':1, 'MISSING_OD':1})
         with tempfile.TemporaryDirectory() as temp:
             output = od.export(result, Path(temp) / 'out')
-            with (output / od.result_name(result, 'od_matrix(perday).csv')).open(encoding='utf-8-sig') as stream:
-                rows = list(csv.reader(stream))
-            self.assertAlmostEqual(float(rows[-1][-1]), 2/3)
+            book=load_workbook(output / od.result_name(result,'OD集計.xlsx'))
+            conditions=dict(book['集計条件'].values)
+            self.assertEqual(conditions['ODの由来'],'様式1-3由来')
+            self.assertEqual(conditions['スクリーニングフォルダ名'],'フルパス未記録（旧リスト：fixture）')
+            sheet=book['統合OD表（日平均）']
+            self.assertAlmostEqual(sheet.cell(sheet.max_row,sheet.max_column).value,2/3)
+            book.close()
             self.assertEqual(json.loads((output / od.result_name(result, 'analysis.json')).read_text(encoding='utf-8'))['target_days'], 3)
         self.assertIn('window.updateOD', map_html(result))
 

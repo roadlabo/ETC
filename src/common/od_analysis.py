@@ -11,10 +11,31 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from common.route_od import covers
+from common.od_context import input_files, screening_context, write_context, read_context, merge_contexts
 
 FIELDS = ['dataset', 'operation_date', 'weekday', 'opid', 'trip_no', 'o_lon', 'o_lat', 'd_lon', 'd_lat', 'status', 'src_files_count']
 METHODS = {'style13': '様式1-3OD', 'trip': 'トリップOD'}
 EXTRA_FIELDS = ['od_method', 'trip_instance', 'source_file']
+ENDPOINT_FIELDS = ['o_type', 'o_gate_id', 'd_type', 'd_gate_id']
+TRAFFIC_TYPES = ['内々交通', '内外交通', '外内交通', '外外交通']
+
+
+def screening_dates(folder, progress=lambda s: None, cancel=lambda: False):
+    first = last = None
+    for i, path in enumerate(input_files(folder)):
+        for n, row in enumerate(rows(path, cancel)):
+            if n % 10000 == 0:
+                check_cancel(cancel)
+            try:
+                date = key(row[2], row[3], row[8])[0]
+            except (IndexError, ValueError):
+                continue
+            first = min(first, date) if first else date
+            last = max(last, date) if last else date
+        progress(f'対象日の確認: {i + 1:,} CSV')
+    if first is None:
+        raise ValueError('スクリーニングCSVの対象日を取得できません。')
+    return first, last
 
 
 def method_of(records):
@@ -29,7 +50,23 @@ def prefix(method):
 
 
 def result_name(result, name):
-    return prefix(result.get('method', 'style13')) + result.get('run_id', '') + name
+    return prefix(result.get('method', 'style13')) + name
+
+
+def combined_matrix(result):
+    matrix = Counter()
+    for counts in result['traffic'].values():
+        matrix.update(counts)
+    gates = ['【ゲート】' + g['gate_id'] + ' ' + g['name'] for g in result['gates']]
+    labels = list(result['labels']) + gates
+    return labels, matrix
+
+
+def display_label(label):
+    if label.startswith('【ゲート】'):
+        gate_id, _, name = label[len('【ゲート】'):].partition(' ')
+        return 'ゲート ' + gate_id + ((' ' + name) if name and name != gate_id else '')
+    return label
 
 
 def check_cancel(cancel):
@@ -85,7 +122,8 @@ def write_csv(path, fields, records):
 
 
 def extract(input_dir, zip_dir, output, progress=lambda s: None, cancel=lambda: False):
-    files = sorted(Path(input_dir).rglob('*.csv'))
+    files = input_files(input_dir)
+    _, context = screening_context(input_dir, files, cancel)
     zips = sorted(Path(zip_dir).rglob('*.zip'))
     if not files or not zips:
         raise ValueError('入力CSVまたは様式1-3 ZIPがありません。')
@@ -142,6 +180,7 @@ def extract(input_dir, zip_dir, output, progress=lambda s: None, cancel=lambda: 
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     write_csv(output, FIELDS + EXTRA_FIELDS, records)
+    write_context(output, context)
     return output
 
 
@@ -152,7 +191,8 @@ def extract_trip(input_dir, output, progress=lambda s: None, cancel=lambda: Fals
     Invalid endpoints are retained as invalid, never replaced by interior points.
     """
     input_dir = Path(input_dir)
-    files = sorted(input_dir.rglob('*.csv'))
+    files = input_files(input_dir)
+    annotations, context = screening_context(input_dir, files, cancel)
     records = {}
     for i, path in enumerate(files):
         check_cancel(cancel)
@@ -164,6 +204,11 @@ def extract_trip(input_dir, output, progress=lambda s: None, cancel=lambda: Fals
             instance = digest.hexdigest()
             identity = (*active, instance)
             if identity in records:
+                annotation = annotations.get(path, {})
+                expected = [annotation.get(s + suffix, default) for s in ('start', 'end')
+                            for suffix, default in [('_type', 'INSIDE'), ('_gate_id', '')]]
+                if [records[identity][f] for f in ENDPOINT_FIELDS] != expected:
+                    raise ValueError(f'同じトリップに異なるゲート判定があります: {path.name}')
                 records[identity]['src_files_count'] += 1
                 return
             date, opid, trip = active
@@ -173,6 +218,10 @@ def extract_trip(input_dir, output, progress=lambda s: None, cancel=lambda: Fals
                       opid, trip, *endpoint(first), *endpoint(last), 'OK', 1, 'trip', instance,
                       path.relative_to(input_dir).as_posix()]
             record = dict(zip(FIELDS + EXTRA_FIELDS, values))
+            annotation = annotations.get(path, {})
+            for side, source in [('o', 'start'), ('d', 'end')]:
+                record[side + '_type'] = annotation.get(source + '_type', 'INSIDE')
+                record[side + '_gate_id'] = annotation.get(source + '_gate_id', '')
             if coordinates(record) is None:
                 record['status'] = 'INVALID_COORDINATES'
             records[identity] = record
@@ -198,11 +247,15 @@ def extract_trip(input_dir, output, progress=lambda s: None, cancel=lambda: Fals
     check_cancel(cancel)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    write_csv(output, FIELDS + EXTRA_FIELDS, ([r[f] for f in FIELDS + EXTRA_FIELDS] for r in records.values()))
+    fields = FIELDS + EXTRA_FIELDS + ENDPOINT_FIELDS
+    write_csv(output, fields, ([r[f] for f in fields] for r in records.values()))
+    write_context(output, context)
     return output
 
 
 def read_od(paths, progress=lambda s: None, cancel=lambda: False):
+    paths = list(paths)
+    context = merge_contexts(read_context(path) for path in paths)
     records, seen = [], {}
     duplicates = 0
     for path in paths:
@@ -215,6 +268,7 @@ def read_od(paths, progress=lambda s: None, cancel=lambda: False):
                 check_cancel(cancel)
                 progress(f'ODリスト読込 ・{len(records):,} 件')
             row = dict(zip(header, cells))
+            row['_context'] = context
             method = row.get('od_method') or 'style13'
             if method not in METHODS:
                 raise ValueError(f'未対応のOD方式です: {method}')
@@ -225,8 +279,13 @@ def read_od(paths, progress=lambda s: None, cancel=lambda: False):
                 raise ValueError(f'ODリストのキーが不正です: {path} 行{n + 2}') from exc
             if method == 'trip' and not row.get('trip_instance'):
                 raise ValueError('トリップODの区間識別子がありません。入力CSVから作り直してください。')
+            if method == 'trip' and any(field in header for field in ENDPOINT_FIELDS):
+                for side in ('o', 'd'):
+                    kind, gate_id = row.get(side + '_type'), row.get(side + '_gate_id', '')
+                    if kind not in ('INSIDE', 'GATE') or (kind == 'GATE') != bool(gate_id):
+                        raise ValueError(f'ODリストの端点種別・ゲート番号が不正です: {path} 行{n + 2}')
             k = (method, *k, row.get('trip_instance', '') if method == 'trip' else '')
-            signature = tuple(row.get(f, '') for f in FIELDS[5:10])
+            signature = tuple(row.get(f, '') for f in FIELDS[5:10] + ENDPOINT_FIELDS)
             if k in seen:
                 if seen[k] != signature:
                     raise ValueError(f'同じトリップに異なるODがあります: {k}')
@@ -289,12 +348,20 @@ def assign(lon, lat, zones):
 
 def analyze(records, zones, dates, progress=lambda s: None, cancel=lambda: False):
     method = method_of(records)
+    contexts = {id(r.get('_context')): r.get('_context', {}) for r in records}
+    context = merge_contexts(contexts.values())
+    screening_folders = sorted(set(context['screening_folders']) |
+                              {r['dataset'] for r in records if r.get('dataset') and not r.get('_context', {}).get('screening_folders')})
+    gates = {g['gate_id']: g for g in context['gates']}
     zones = [dict(z, bbox=(min(p[0] for p in z['points']), min(p[1] for p in z['points']),
                           max(p[0] for p in z['points']), max(p[1] for p in z['points']))) for z in zones]
     wanted = set(dates)
     if not wanted:
         raise ValueError('対象日がありません。')
     matrix, origins, destinations, excluded = Counter(), Counter(), Counter(), Counter()
+    traffic = {name: Counter() for name in TRAFFIC_TYPES}
+    gate_origins, gate_destinations = Counter(), Counter()
+    heat_o, heat_d = [], []
     points = []
     for i, row in enumerate(records):
         if i % 1000 == 0:
@@ -311,25 +378,49 @@ def analyze(records, zones, dates, progress=lambda s: None, cancel=lambda: False
             excluded['座標不正'] += 1
             continue
         o_lon, o_lat, d_lon, d_lat = coords
-        origin, destination = assign(o_lon, o_lat, zones), assign(d_lon, d_lat, zones)
-        matrix[origin, destination] += 1
-        origins[origin] += 1
-        destinations[destination] += 1
+        endpoints = []
+        flags = []
+        for side, lon, lat, counts, gate_counts, heat in (
+                ('o', o_lon, o_lat, origins, gate_origins, heat_o),
+                ('d', d_lon, d_lat, destinations, gate_destinations, heat_d)):
+            is_gate = method == 'trip' and row.get(side + '_type') == 'GATE'
+            flags.append(is_gate)
+            if is_gate:
+                gate_id = row.get(side + '_gate_id')
+                if gate_id not in gates:
+                    raise ValueError('ゲートの位置情報がありません。ODリストと同名の.context.jsonを一緒に配置するか、ODリストを作り直してください。')
+                gate_counts[gate_id] += 1
+                endpoints.append('【ゲート】' + gate_id + ' ' + gates[gate_id]['name'])
+            else:
+                zone = assign(lon, lat, zones)
+                endpoints.append(zone)
+                counts[zone] += 1
+                heat.append((lon, lat))
+        origin, destination = endpoints
+        category = TRAFFIC_TYPES[int(flags[0]) * 2 + int(flags[1])]
+        traffic[category][origin, destination] += 1
+        if not any(flags):
+            matrix[origin, destination] += 1
         points.append(coords)
     labels = sorted({z['name'] for z in zones} | set(origins) | set(destinations))
     return dict(method=method, labels=labels, matrix=matrix, origins=origins, destinations=destinations,
-                points=points, dates=sorted(wanted), days=len(wanted), excluded=dict(excluded), zones=zones)
+                points=points, dates=sorted(wanted), days=len(wanted), excluded=dict(excluded), zones=zones,
+                traffic=traffic, heat_o=heat_o, heat_d=heat_d, gates=list(gates.values()),
+                gate_origins=gate_origins, gate_destinations=gate_destinations, boundaries=context['boundaries'],
+                screening_folders=screening_folders)
 
 
 def export(result, output):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    labels, matrix, days = result['labels'], result['matrix'], result['days']
-    for name, divisor in [('od_matrix(all).csv', 1), ('od_matrix(perday).csv', days)]:
-        values = [[a, *[matrix[a, b] / divisor for b in labels], result['origins'][a] / divisor] for a in labels]
-        values.append(['合計', *[result['destinations'][b] / divisor for b in labels], len(result['points']) / divisor])
-        write_csv(output / result_name(result, name), ['O / D', *labels, '合計'], values)
-    write_csv(output / result_name(result, 'zone_production_attraction.csv'), ['zone', 'production', 'attraction', 'production_perday', 'attraction_perday'],
-              [[a, result['origins'][a], result['destinations'][a], result['origins'][a] / days, result['destinations'][a] / days] for a in labels])
-    (output / result_name(result, 'analysis.json')).write_text(json.dumps(dict(od_method=result.get('method','style13'), target_dates=result['dates'], target_days=days, valid_trips=len(result['points']), excluded=result['excluded'], unit='トリップ/日', zone_rule='境界を含む。異なる名称の重複は別枠、区域外は別枠。'), ensure_ascii=False, indent=2), encoding='utf-8')
+    from common.od_workbook import write_workbook
+    days = result['days']
+    write_workbook(result, output / result_name(result, 'OD集計.xlsx'))
+    metadata = dict(od_method=result.get('method', 'style13'), target_dates=result['dates'], target_days=days,
+                    project_folder=result.get('project_folder', ''), screening_folders=result.get('screening_folders', []),
+                    valid_trips=len(result['points']), excluded=result['excluded'], unit='トリップ/日',
+                    traffic_counts={kind: sum(counts.values()) for kind, counts in result['traffic'].items()},
+                    zone_rule='境界を含む。異なる名称の重複は別枠、区域外は別枠。',
+                    gate_rule='ゲート判定は第1.5の端点情報。統合OD表は4区分すべて。分布は非ゲート端点のみ。')
+    (output / result_name(result, 'analysis.json')).write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')
     return output
