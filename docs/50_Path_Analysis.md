@@ -10,7 +10,7 @@
 - 地図にゲート番号を常時表示し、12の内部エリアも重ねます。
 - 開始前に`14_エリアデータ/14_area.geojson`と`12_ゾーニングデータ`内のポリゴンCSVを確認します。12のCSVがなければ`12_polygon_builder.bat`での作成・保存を案内して停止します。区域や第2スクリーニングの不足も作成案内を表示します。
 - HTMLに行O・列DのODマトリクスを追加します。両軸はゲート番号または「内：エリア名」で、内の区分は12のポリゴンと起終点座標で決めます。ポリゴン境界も含みます。どのエリアにも入らない場合は「内：エリア外」、複数の異なる名前のエリアに入る場合は「内：エリア重複」です。分類不明は除外件数を明示します。
-- `50_od_matrix.csv`（行列合計付き）、`50_gate_master.geojson`を追加し、`50_trip_classification.csv`に起終点座標とorigin/destinationを保存します。
+- `50_経路分析.xlsx`に日本語の集計条件・統合OD表・交通区分別集計・ゲートOD明細・トリップ分類・メッシュ集計をまとめて出力します。統合OD表の左上見出しは`O \ D`です。表形式のCSVは出力せず、`50_gate_master.geojson`とHTML地図は引き続き出力します。
 
 既存の出力HTMLへの変更反映には、元のプロジェクトを選んで50を再実行してください。
 
@@ -46,7 +46,9 @@ runtime\python\python.exe src\50_Path_Analysis.py --mode route --project_dir "D:
 
 `--dry_run` は走査のみです。`--route` を省略するとUIを起動します。
 
-出力先：`50_経路分析/対象路線/`。`50_report.html`、`50_map.html`、`50_trip_classification.csv`、`50_path_summary.csv`、`50_gate_od.csv`、`50_mesh.csv` を出力します。
+出力先：`50_経路分析/対象路線/`。`50_経路分析.xlsx`、`50_report.html`、`50_map.html`、`50_gate_master.geojson` を出力します。
+
+旧版の `50_trip_classification.csv`、`50_od_matrix.csv`、`50_path_summary.csv`、`50_gate_od.csv`、`50_mesh.csv` は、50を再実行すると同じ出力フォルダから削除されます。ユーザーが作成した別名CSVは対象にしません。
 
 通過交通率 = Gate→Gate数 ÷ 選択路線を通った全区域内サブトリップ数。Gate→Insideは外内、Inside→Gateは内外、Inside→Insideは内内です。Gate ODは方向別・件数降順で、通過交通内割合と全交通内割合を保存します。CSVの割合は0～1、UI・HTMLは%表示です。
 

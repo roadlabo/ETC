@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from openpyxl import load_workbook
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
@@ -125,19 +126,21 @@ class RoutePathTest(unittest.TestCase):
                 self.assertEqual(result['counts'][key], 1)
             self.assertEqual([r['trip_count'] for r in result['ranking']], [2, 1])
             self.assertTrue(Path(result['report']).exists())
-            mesh = Path(result['output_dir']) / '50_mesh.csv'
-            with mesh.open(encoding='utf-8-sig') as f:
-                cells = list(csv.DictReader(f))
-            self.assertTrue(cells)
-            self.assertTrue(all(0 < float(r['share']) <= 1 for r in cells))
             self.assertIn('通過交通率', Path(result['report']).read_text(encoding='utf-8'))
             report = Path(result['report']).read_text(encoding='utf-8')
             self.assertIn('ODマトリクス', report)
             self.assertIn('内：テスト内', report)
-            with (Path(result['output_dir']) / '50_od_matrix.csv').open(encoding='utf-8-sig') as stream:
-                matrix = list(csv.reader(stream))
-            self.assertEqual(int(matrix[-1][-1]), 6)
-            self.assertEqual(int(matrix[-2][-2]), 1)
+            workbook = load_workbook(result['workbook'], data_only=True)
+            self.assertEqual(workbook.sheetnames, ['集計条件', '統合OD表（全期間）', '交通区分別集計',
+                                                   'ゲートOD明細', 'トリップ分類一覧', 'メッシュ集計'])
+            self.assertEqual(workbook['統合OD表（全期間）']['A1'].value, 'O \\ D')
+            self.assertEqual(workbook['統合OD表（全期間）'].cell(workbook['統合OD表（全期間）'].max_row,
+                                                                  workbook['統合OD表（全期間）'].max_column).value, 6)
+            mesh = workbook['メッシュ集計']
+            self.assertGreater(mesh.max_row, 1)
+            self.assertTrue(all(0 < row[4].value <= 1 for row in mesh.iter_rows(min_row=2)))
+            self.assertFalse((Path(result['output_dir']) / '50_od_matrix.csv').exists())
+            self.assertFalse((Path(result['output_dir']) / '50_mesh.csv').exists())
             map_html = (Path(result['output_dir']) / '50_map.html').read_text(encoding='utf-8')
             self.assertIn('"permanent": true', map_html)
 

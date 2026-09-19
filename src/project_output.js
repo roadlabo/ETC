@@ -55,5 +55,9 @@ window.ProjectOutput = (() => {
     }
     return `${project.name}/${folder}/${filename}`;
   }
-  return {choose, save};
+  async function open(kind) {
+    if (!native) throw new Error('ネイティブ画面から起動してプロジェクトを選択してください。');
+    return call('openFile', kind);
+  }
+  return {choose, save, open, isNative: Boolean(native)};
 })();

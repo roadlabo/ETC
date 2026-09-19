@@ -66,19 +66,23 @@
   <button id="chooseProject">プロジェクトを選択</button>
   <div id="projectStatus">保存先：プロジェクト内の12_ゾーニングデータ</div>
   <button id="btnLoad">既存ゾーニングデータを読込</button>  
-  <div class="hint">左クリック=点追加 / 右クリック=既存点へスナップ</div>
+  <button id="btnLoadAreaReference">参考：14 エリア・ゲート設定を読込</button>
+  <div class="hint">左クリック=点追加 / 右クリック=既存点・参考区域の頂点へスナップ</div>
+  <div class="hint">参考データは灰色で表示され、編集・保存の対象にはなりません。</div>
   <div class="hint">ESC：１点だけ戻る（UNDO）</div>  
   <div class="hint">「ゾーン登録」で一覧に登録し、次のゾーンを指定</div>
   <button id="btnAdd">ゾーン登録</button>
   <button id="btnClearCurrent">編集中（赤）の点を全てクリア</button>
   <div class="list" id="polygonList"></div>
-  <button id="btnSave">CSVとして保存（ダウンロードフォルダへ）</button>
+  <button id="btnSave">保存（12_ゾーニングデータへ）</button>
   <input type="file" id="fileInput" accept=".csv" style="display:none" />
+  <input type="file" id="areaReferenceInput" accept=".geojson,.json" style="display:none" />
 </div>
 
 <script>
   // ==== 初期データ ====
   var polygons = [];
+  var referenceAreas = [];
   var SNAP_PX = 15;
 
   // ==== CSV 読み込みユーティリティ ====
@@ -134,6 +138,7 @@
   // ==== レイヤ & 状態管理 ====
   var polygonLayer = L.layerGroup().addTo(map);
   var polygonVertexLayer = L.layerGroup().addTo(map);
+  var referenceAreaLayer = L.layerGroup().addTo(map);
 
   var currentLayer = L.polygon([], {color:'red', weight:2, fill:false, dashArray:'4 4'}).addTo(map);
   var currentVertices = [];
@@ -314,6 +319,40 @@
     renderList();
   }
 
+  // 14 の保存データは参照専用で扱う。正式区域・分析区域だけを表示し、
+  // ゲートは表示・スナップ対象にしない。レイヤに編集イベントを登録せず、
+  // CSVの保存対象にも含めない。
+  function refreshReferenceAreas() {
+    referenceAreaLayer.clearLayers();
+    for (var i = 0; i < referenceAreas.length; i++) {
+      var area = referenceAreas[i];
+      L.polygon(area, { color:'#808080', weight:2, fillColor:'#a0a0a0', fillOpacity:.08, interactive:false }).addTo(referenceAreaLayer);
+      for (var j = 0; j < area.length; j++) {
+        L.circleMarker(area[j], { radius:5, color:'#808080', weight:2, fillColor:'#a0a0a0', fillOpacity:1, interactive:false }).addTo(referenceAreaLayer);
+      }
+    }
+  }
+
+  function geoJsonToReferenceAreas(data) {
+    var areas = [];
+    var features = data && Array.isArray(data.features) ? data.features : [];
+    for (var i = 0; i < features.length; i++) {
+      var feature = features[i] || {};
+      var props = feature.properties || {};
+      var role = (props.area14_role || props.area15_role || props.role || '').toLowerCase();
+      var geom = feature.geometry || {};
+      if (role !== 'official_area' && role !== 'analysis_area') continue;
+      if (geom.type !== 'Polygon' || !Array.isArray(geom.coordinates) || !Array.isArray(geom.coordinates[0])) continue;
+      var points = [];
+      for (var j = 0; j < geom.coordinates[0].length; j++) {
+        var c = geom.coordinates[0][j];
+        if (Array.isArray(c) && isFinite(Number(c[0])) && isFinite(Number(c[1]))) points.push([Number(c[1]), Number(c[0])]);
+      }
+      if (points.length >= 3) areas.push(points);
+    }
+    return areas;
+  }
+
   // ==== 交差判定（そのまま） ====
   function orientation(a, b, c) {
     var val = (b.lon - a.lon) * (c.lat - a.lat) - (b.lat - a.lat) * (c.lon - a.lon);
@@ -395,6 +434,11 @@
       var v = currentVertices[j];
       nodes.push(L.latLng(v.lat, v.lon));
     }
+    for (var k = 0; k < referenceAreas.length; k++) {
+      for (var m = 0; m < referenceAreas[k].length; m++) {
+        nodes.push(L.latLng(referenceAreas[k][m][0], referenceAreas[k][m][1]));
+      }
+    }
     return nodes;
   }
 
@@ -438,7 +482,26 @@
     resetCurrent();
   };
 
-  document.getElementById('btnLoad').onclick = function() {
+  function loadZoningText(text) {
+    try {
+      var rows = parseCsvText(text);
+      polygons = csvRowsToPolygons(rows);
+    } catch (err) {
+      console.error('CSV 読み込みエラー', err);
+      polygons = [];
+      throw err;
+    }
+    resetCurrent();
+    refreshPolygons();
+    renderList();
+  }
+
+  document.getElementById('btnLoad').onclick = async function() {
+    if (ProjectOutput.isNative) {
+      try { loadZoningText((await ProjectOutput.open('zoning')).text); }
+      catch (err) { if (err.name !== 'AbortError') alert('CSV 読み込みエラー: ' + err.message); }
+      return;
+    }
     var fileInput = document.getElementById('fileInput');
     if (!fileInput) {
       alert('fileInput 要素が見つかりません。');
@@ -451,20 +514,50 @@
       var reader = new FileReader();
       reader.onload = function(e) {
         try {
-          var text = e.target.result;
-          var rows = parseCsvText(text);
-          polygons = csvRowsToPolygons(rows);
+          loadZoningText(e.target.result);
         } catch (err) {
           console.error('CSV 読み込みエラー', err);
-          polygons = [];
+          alert('CSV 読み込みエラー: ' + err.message);
         }
-        resetCurrent();
-        refreshPolygons();
-        renderList();
       };
       reader.readAsText(file, 'utf-8');   // ツールが出したCSVはUTF-8(BOM)
     };
     fileInput.click();
+  };
+
+  function loadAreaReferenceText(text) {
+    var data = JSON.parse(text);
+    referenceAreas = geoJsonToReferenceAreas(data);
+    if (!referenceAreas.length) throw new Error('正式区域または分析区域のPolygonが見つかりません。');
+    refreshReferenceAreas();
+  }
+
+  document.getElementById('btnLoadAreaReference').onclick = async function() {
+    if (ProjectOutput.isNative) {
+      try {
+        loadAreaReferenceText((await ProjectOutput.open('area')).text);
+        alert('参考区域を読み込みました。右クリックで区域の頂点へスナップできます。');
+      } catch (err) { if (err.name !== 'AbortError') alert('参考データ読込エラー: ' + err.message); }
+      return;
+    }
+    var input = document.getElementById('areaReferenceInput');
+    input.value = '';
+    input.onchange = function(evt) {
+      var file = evt.target.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          loadAreaReferenceText(e.target.result);
+          alert('参考区域を読み込みました。右クリックで区域の頂点へスナップできます。');
+        } catch (err) {
+          console.error('参考エリア・ゲート読込エラー', err);
+          alert('参考データ読込エラー: ' + err.message);
+        }
+      };
+      reader.readAsText(file, 'utf-8');
+    };
+    input.click();
   };
 
   document.getElementById('btnAdd').onclick = function() {
@@ -556,8 +649,10 @@
 
   function initMode() {
     polygons = [];
+    referenceAreas = [];
     resetCurrent();
     refreshPolygons();
+    refreshReferenceAreas();
     renderList();
   }
 

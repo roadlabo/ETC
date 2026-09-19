@@ -96,6 +96,23 @@ class Bridge(QObject):
             return json.dumps({'ok': False, 'error': '先にプロジェクトフォルダを選択してください。'}, ensure_ascii=False)
         return self.result(lambda: {'path': save_project(self.project, json.loads(text))})
 
+    @pyqtSlot(str, result=str)
+    def openFile(self, kind):
+        def choose():
+            if self.project is None:
+                raise ValueError('先にプロジェクトフォルダを選択してください。')
+            if kind == 'area':
+                title, file_filter = 'エリア・ゲート設定を読み込む', 'GeoJSON ファイル (*.geojson *.json);;すべてのファイル (*)'
+            elif kind == 'zoning':
+                title, file_filter = 'ゾーニングCSVを読み込む', 'CSV ファイル (*.csv);;すべてのファイル (*)'
+            else:
+                raise ValueError('読込種別が不正です。')
+            filename, _ = QFileDialog.getOpenFileName(self.window, title, str(self.project), file_filter)
+            if not filename:
+                return {'cancelled': True}
+            return {'path': filename, 'text': Path(filename).read_text(encoding='utf-8-sig')}
+        return self.result(choose)
+
 
 class EditorPage(QWebEnginePage):
     def acceptNavigationRequest(self, url, navigation_type, is_main_frame):

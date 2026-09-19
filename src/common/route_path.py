@@ -10,9 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from common.screening import (AREA_FOLDER, AREA_FILE, ROUTE_FOLDER, SECOND_FOLDER, INDEX_FILE,
-                              read_info, read_index, read_lon_lat, digest, write_csv, area_role,
+                              read_info, read_index, read_lon_lat, digest, area_role,
                               read_manual_gates, assign_nearest_gates, gate_geojson)
 from common.route_od import load_zones, endpoint_label, matrix_data, matrix_html
+from common.route_workbook import write_route_workbook
 
 LABELS = {'ALL': '全交通', 'THROUGH': '通過交通',
           'EXTERNAL_TO_INTERNAL': '外内交通', 'INTERNAL_TO_EXTERNAL': '内外交通',
@@ -180,37 +181,34 @@ def analyze(project, target, engine, progress=None):
     if target.folder == project / SECOND_FOLDER:
         out = project / '50_経路分析' / 'legacy_flat'
     out.mkdir(parents=True, exist_ok=True)
-    write_csv(out / '50_trip_classification.csv', ['trip_id', 'source_file', 'route_name', 'start_type', 'start_gate_id', 'end_type', 'end_gate_id', 'start_lon', 'start_lat', 'end_lon', 'end_lat', 'origin', 'destination', 'od_class', 'destination_group'], classified)
+    # These tables are now consolidated in 50_経路分析.xlsx.  Remove only the
+    # former 50 outputs on a rerun; never touch user-created CSV files.
+    for filename in ('50_trip_classification.csv', '50_od_matrix.csv', '50_path_summary.csv',
+                     '50_gate_od.csv', '50_mesh.csv'):
+        legacy_csv = out / filename
+        if legacy_csv.is_file():
+            legacy_csv.unlink()
     labels, full_od = matrix_data(classified)
-    with (out / '50_od_matrix.csv').open('w', encoding='utf-8-sig', newline='') as stream:
-        writer = csv.writer(stream)
-        writer.writerow(['O / D', *labels, '合計'])
-        for a in labels:
-            writer.writerow([a, *(full_od[a, b] for b in labels), sum(full_od[a, b] for b in labels)])
-        writer.writerow(['合計', *(sum(full_od[a, b] for a in labels) for b in labels), sum(full_od.values())])
     (out / '50_gate_master.geojson').write_text(json.dumps(gates, ensure_ascii=False), encoding='utf-8')
     total = counts['ALL']
-    summary = [{'route_name': target.name, 'od_class': k, 'start_gate': '', 'end_gate': '',
-                'trip_count': counts[k], 'share_total': counts[k]/total if total else 0,
-                'share_within_class': 1 if counts[k] else 0, 'official': official} for k in LABELS]
     ranking = []
     for (a, b), n in sorted(od_counts.items(), key=lambda item: (-item[1], item[0])):
         ranking.append({'route_name': target.name, 'od_class': 'THROUGH', 'start_gate': a, 'end_gate': b,
                         'trip_count': n, 'share_total': n/total, 'share_within_class': n/counts['THROUGH'], 'official': official})
-    fields = ['route_name', 'od_class', 'start_gate', 'end_gate', 'trip_count', 'share_total', 'share_within_class', 'official']
-    write_csv(out / '50_path_summary.csv', fields, summary + ranking)
-    write_csv(out / '50_gate_od.csv', fields, ranking)
     mesh_rows = ({'group': g, 'cell_x': x, 'cell_y': y, 'trip_count': n, 'share': n/counts[g],
                   'origin_lon': lon0, 'origin_lat': lat0, 'cell_size_m': engine.CELL_SIZE_M}
                  for g, cells in meshes.items() for (x, y), n in sorted(cells.items()))
-    write_csv(out / '50_mesh.csv', ['group', 'cell_x', 'cell_y', 'trip_count', 'share', 'origin_lon', 'origin_lat', 'cell_size_m'], mesh_rows)
+    mesh_rows = list(mesh_rows)
+    workbook = out / '50_経路分析.xlsx'
+    write_route_workbook(workbook, project=project, target=target, counts=counts, labels=labels, matrix=full_od,
+                         ranking=ranking, classified=classified, mesh_rows=mesh_rows, official=official, warnings=warnings)
     route_points = []
     route_path = project / ROUTE_FOLDER / (target.name + '.csv')
     if route_path.parent == project / ROUTE_FOLDER and route_path.is_file():
         with route_path.open(encoding='utf-8-sig', newline='') as f:
             route_points = [p for row in csv.reader(f) if (p := read_lon_lat(row)) is not None]
     render_report(out, target, area, gates, counts, meshes, ranking, warnings, official, lon0, lat0, engine, route_points, zones, labels, full_od)
-    return {'output_dir': str(out), 'report': str(out / '50_report.html'), 'counts': dict(counts),
+    return {'output_dir': str(out), 'report': str(out / '50_report.html'), 'workbook': str(workbook), 'counts': dict(counts),
             'official': official, 'through_rate': counts['THROUGH']/total if official else None,
             'ranking': ranking, 'warnings': sorted(set(warnings))}
 
@@ -278,7 +276,7 @@ def render_report(out, target, area, gates, counts, meshes, ranking, warnings, o
     ゲートの自動追加・集約は行いません。番号と位置は14の設定を使用し、同距離なら番号の小さいゲートを選びます。</p>
     <p>使用ゾーニングCSV：{escape('、'.join(sorted({Path(z['source']).name for z in zones})))}</p>
     {matrix_html(labels, full_od)}
-    <p><a href="50_od_matrix.csv">ODマトリクスCSV</a></p>
+    <p><a href="50_経路分析.xlsx">Excel集計表</a></p>
     <h2>Gate間ODランキング</h2><table><tr><th>Gate OD</th><th>トリップ数</th><th>通過交通内割合</th><th>全交通内割合</th></tr>{od}</table>
     <h2>25mメッシュ経路地図</h2><p>右上で全交通・分類・指定Gate ODを選択。セルに触れると件数と割合を表示します。</p>
     <iframe src="50_map.html" title="経路地図"></iframe><p><a href="50_map.html">地図を開く</a></p></html>'''

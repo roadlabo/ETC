@@ -46,6 +46,11 @@
   <p class="hint" id="projectStatus">保存先：プロジェクト内の14_エリアデータ/14_area.geojson</p>
   <fieldset id="editingControls" disabled>
   <div class="row">
+    <button id="loadZoningReference">参考：12 ゾーニングデータを読込</button>
+    <input id="zoningReferenceInput" type="file" accept=".csv" style="display:none">
+  </div>
+  <p class="hint">参考ゾーンは灰色で表示され、編集・保存の対象にはなりません。正式・分析区域の頂点は参考ゾーンの頂点付近でスナップします。</p>
+  <div class="row">
     <select id="mode">
       <option value="official">正式区域を編集</option>
       <option value="analysis">分析区域を編集</option>
@@ -85,11 +90,14 @@ const style = {
   analysis: { color:'#0d6efd', weight:3, fillColor:'#0d6efd', fillOpacity:.13 }
 };
 const state = { official:[], analysis:[], gates:[], nextGateNumber:1, selected:null, history:[], dirty:false };
+let referenceZones = [];
+const REFERENCE_SNAP_PX = 15;
 let nativeBridge = null;
 const layers = {
   official: L.layerGroup().addTo(map),
   analysis: L.layerGroup().addTo(map),
-  gates: L.layerGroup().addTo(map)
+  gates: L.layerGroup().addTo(map),
+  referenceZones: L.layerGroup().addTo(map)
 };
 
 function activeMode() { return document.getElementById('mode').value; }
@@ -131,8 +139,57 @@ function redraw(mode) {
       redraw('official'); redraw('analysis');
     });
     marker.on('dragstart', snapshot);
-    marker.on('dragend', ev => { points[idx] = ev.target.getLatLng(); redraw(mode); });
+    marker.on('dragend', ev => { points[idx] = snapToReferenceZone(ev.target.getLatLng()); redraw(mode); });
   });
+}
+function redrawReferenceZones() {
+  layers.referenceZones.clearLayers();
+  referenceZones.forEach(zone => {
+    L.polygon(zone.coords, {
+      color:'#808080', weight:2, fillColor:'#a0a0a0', fillOpacity:.08, interactive:false
+    }).bindTooltip(zone.name, { permanent:true, direction:'center', className:'polygon-label' }).addTo(layers.referenceZones);
+    zone.coords.forEach(p => L.circleMarker(p, {
+      radius:5, color:'#808080', weight:2, fillColor:'#a0a0a0', fillOpacity:1, interactive:false
+    }).addTo(layers.referenceZones));
+  });
+}
+function parseCsvRows(text) {
+  text = text.replace(/^\uFEFF/, '');
+  const rows = [], row = []; let field = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') { if (quoted && text[i + 1] === '"') { field += '"'; i++; } else quoted = !quoted; }
+    else if (ch === ',' && !quoted) { row.push(field); field = ''; }
+    else if ((ch === '\n' || ch === '\r') && !quoted) {
+      row.push(field); if (row.some(value => value.trim() !== '')) rows.push(row.slice());
+      row.length = 0; field = ''; if (ch === '\r' && text[i + 1] === '\n') i++;
+    } else field += ch;
+  }
+  if (quoted) throw new Error('CSVの引用符が閉じられていません。');
+  if (field || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+function csvToReferenceZones(text) {
+  const zones = [];
+  parseCsvRows(text).forEach(cols => {
+    const coords = [];
+    for (let i = 1; i + 1 < cols.length; i += 2) {
+      const lng = Number(cols[i]), lat = Number(cols[i + 1]);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) coords.push(L.latLng(lat, lng));
+    }
+    if (coords.length >= 3) zones.push({name:(cols[0] || 'zone').trim(), coords});
+  });
+  if (!zones.length) throw new Error('3点以上のゾーンを含むCSVを指定してください。');
+  return zones;
+}
+function snapToReferenceZone(point) {
+  let nearest = null, distance = Infinity;
+  const p = map.latLngToLayerPoint(point);
+  referenceZones.forEach(zone => zone.coords.forEach(vertex => {
+    const d = p.distanceTo(map.latLngToLayerPoint(vertex));
+    if (d <= REFERENCE_SNAP_PX && d < distance) { nearest = vertex; distance = d; }
+  }));
+  return nearest || point;
 }
 function redrawGates() {
   layers.gates.clearLayers();
@@ -214,7 +271,7 @@ map.on('click', ev => {
     const id = 'G' + String(state.nextGateNumber++).padStart(2, '0');
     const p = snapToAnalysis(ev.latlng);
     state.gates.push({id, name:'', lat:p.lat, lng:p.lng});
-  } else state[activeMode()].push(ev.latlng);
+  } else state[activeMode()].push(snapToReferenceZone(ev.latlng));
   state.selected = null;
   redraw(activeMode());
   setStatus(activeMode() === 'gates' ? 'ゲートを追加しました。' : '頂点を追加しました。');
@@ -386,16 +443,55 @@ document.getElementById('saveGeojson').onclick = async () => {
     if (err.name !== 'AbortError') setStatus(err.message);
   }
 };
-document.getElementById('loadGeojson').onclick = () => document.getElementById('fileInput').click();
+function loadZoningReferenceText(text) {
+  referenceZones = csvToReferenceZones(text);
+  redrawReferenceZones();
+  const allPoints = referenceZones.flatMap(zone => zone.coords);
+  if (allPoints.length) map.fitBounds(L.latLngBounds(allPoints).pad(.15));
+  setStatus(`参考ゾーンを${referenceZones.length}件読み込みました。頂点付近でスナップします。`);
+}
+document.getElementById('loadZoningReference').onclick = async () => {
+  if (nativeBridge) {
+    try {
+      const result = await nativeCall('openFile', 'zoning');
+      if (!result.cancelled) loadZoningReferenceText(result.text);
+    } catch (err) { setStatus('参考ゾーニング読込エラー: ' + err.message); }
+    return;
+  }
+  document.getElementById('zoningReferenceInput').click();
+};
+document.getElementById('zoningReferenceInput').onchange = ev => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try { loadZoningReferenceText(reader.result); }
+    catch (err) { setStatus('参考ゾーニング読込エラー: ' + err.message); }
+  };
+  reader.readAsText(file, 'utf-8');
+};
+function loadAreaGeoJsonText(text) {
+  loadFeatureCollection(JSON.parse(text));
+  document.getElementById('saveGeojson').disabled = !nativeBridge || !projectSelected;
+  setStatus('GeoJSONを読み込みました。保存すると選択中のプロジェクトへ反映します。');
+}
+document.getElementById('loadGeojson').onclick = async () => {
+  if (nativeBridge) {
+    try {
+      const result = await nativeCall('openFile', 'area');
+      if (!result.cancelled) loadAreaGeoJsonText(result.text);
+    } catch (err) { setStatus('GeoJSON読込エラー: ' + err.message); }
+    return;
+  }
+  document.getElementById('fileInput').click();
+};
 document.getElementById('fileInput').onchange = ev => {
   const file = ev.target.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      loadFeatureCollection(JSON.parse(reader.result));
-      document.getElementById('saveGeojson').disabled = !nativeBridge || !projectSelected;
-      setStatus('GeoJSONを読み込みました。保存すると選択中のプロジェクトへ反映します。');
+      loadAreaGeoJsonText(reader.result);
     }
     catch (err) { setStatus('GeoJSON読込エラー: ' + err.message); }
   };

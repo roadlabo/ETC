@@ -66,6 +66,25 @@ class Bridge(QObject):
         except Exception as error:
             return json.dumps({'ok': False, 'error': str(error)}, ensure_ascii=False)
 
+    @pyqtSlot(str, result=str)
+    def openFile(self, kind):
+        """Open an import file, beginning in the selected project folder."""
+        try:
+            if kind == 'zoning':
+                title, file_filter = 'ゾーニングCSVを読み込む', 'CSV ファイル (*.csv);;すべてのファイル (*)'
+            elif kind == 'area':
+                title, file_filter = 'エリア・ゲート設定を読み込む', 'GeoJSON ファイル (*.geojson *.json);;すべてのファイル (*)'
+            else:
+                raise ValueError('読込種別が不正です。')
+            filename, _ = QFileDialog.getOpenFileName(
+                self.window, title, str(self.project or ''), file_filter)
+            if not filename:
+                return json.dumps({'ok': True, 'cancelled': True})
+            return json.dumps({'ok': True, 'path': filename,
+                               'text': Path(filename).read_text(encoding='utf-8-sig')}, ensure_ascii=False)
+        except Exception as error:
+            return json.dumps({'ok': False, 'error': str(error)}, ensure_ascii=False)
+
 
 class Page(QWebEnginePage):
     def acceptNavigationRequest(self, url, kind, main):
